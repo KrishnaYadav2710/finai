@@ -1105,14 +1105,6 @@ app.get(
 // OPTIONAL DATABASE SUPPORT
 // ============================================================
 
-let Pool;
-
-try {
-  Pool = require("pg").Pool;
-} catch {
-  Pool = null;
-}
-
 let pool = null;
 
 if (
