@@ -1,9 +1,17 @@
-require("dotenv").config();
+import "dotenv/config";
 
-const express = require("express");
-const path = require("path");
-const fs = require("fs");
-const multer = require("multer");
+import express from "express";
+import path from "path";
+import fs from "fs";
+import multer from "multer";
+import pg from "pg";
+
+import { fileURLToPath } from "url";
+
+const { Pool } = pg;
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 
