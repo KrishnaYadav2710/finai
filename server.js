@@ -1,287 +1,1606 @@
-import 'dotenv/config';
-import express from 'express';
-import multer from 'multer';
-import path from 'node:path';
-import crypto from 'node:crypto';
-import { databaseEnabled, initDatabase, dbQuery, upsertCompany } from './db.js';
-import { runDCF, reverseDCF } from './valuation.js';
-import { fileURLToPath } from 'node:url';
+require("dotenv").config();
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const express = require("express");
+const path = require("path");
+const fs = require("fs");
+const multer = require("multer");
+
 const app = express();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 45 * 1024 * 1024 } });
-const port = Number(process.env.PORT || 3000);
-const model = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
-const geminiKey = process.env.GEMINI_API_KEY || '';
-const marketProvider = 'alphavantage';
-const alphaKey = process.env.ALPHA_VANTAGE_API_KEY || '';
-const basicUser = process.env.FINSIGHT_USERNAME || '';
-const basicPass = process.env.FINSIGHT_PASSWORD || '';
 
-async function fetchJSON(url, options={}) {
-  const response = await fetch(url, options);
-  const body = await response.json().catch(()=>({}));
-  if (!response.ok) throw new Error(body?.message || body?.error || `Market provider returned HTTP ${response.status}`);
-  return body;
-}
+const PORT = process.env.PORT || 3000;
 
-async function getMarketQuote({ticker, exchange='NSE'}) {
-  if (!alphaKey) throw new Error('Alpha Vantage is not configured. Add ALPHA_VANTAGE_API_KEY to .env.');
-  const symbol = exchange.toUpperCase()==='BSE' ? `${ticker.toUpperCase()}.BSE` : ticker.toUpperCase();
-  const url = new URL('https://www.alphavantage.co/query');
-  url.searchParams.set('function','GLOBAL_QUOTE');
-  url.searchParams.set('symbol',symbol);
-  url.searchParams.set('apikey',alphaKey);
-  const j = await fetchJSON(url);
-  const q=j['Global Quote'] || {};
-  const price=Number(q['05. price']);
-  if (!Number.isFinite(price)) throw new Error(j.Note || j.Information || 'Alpha Vantage response did not contain a usable end-of-day quote for this symbol.');
-  const latestDay=q['07. latest trading day'] || null;
-  return {
-    provider:'Alpha Vantage Free', ticker:ticker.toUpperCase(), exchange:exchange.toUpperCase(), price,
-    open:Number(q['02. open'])||null, high:Number(q['03. high'])||null, low:Number(q['04. low'])||null,
-    previousClose:Number(q['08. previous close'])||null, volume:Number(q['06. volume'])||null,
-    asOf:latestDay, freshness:'end-of-day / last available trading session; not live'
-  };
-}
+// ============================================================
+// BASIC CONFIGURATION
+// ============================================================
 
-async function getMarketHistory({ticker, exchange='NSE'}) {
-  if (!alphaKey) throw new Error('Historical price adapter requires ALPHA_VANTAGE_API_KEY.');
-  const symbol = exchange.toUpperCase()==='BSE' ? `${ticker.toUpperCase()}.BSE` : ticker.toUpperCase();
-  const url = new URL('https://www.alphavantage.co/query');
-  url.searchParams.set('function','TIME_SERIES_DAILY'); url.searchParams.set('symbol',symbol); url.searchParams.set('outputsize','full'); url.searchParams.set('apikey',alphaKey);
-  const j=await fetchJSON(url); const ts=j['Time Series (Daily)'];
-  if(!ts) throw new Error(j.Note || j.Information || 'Historical series unavailable for this symbol.');
-  return Object.entries(ts).map(([date,v])=>({date,open:Number(v['1. open']),high:Number(v['2. high']),low:Number(v['3. low']),close:Number(v['4. close']),volume:Number(v['5. volume'])})).filter(x=>Number.isFinite(x.close));
-}
+app.use(express.json({ limit: "25mb" }));
+app.use(express.urlencoded({ extended: true, limit: "25mb" }));
 
-function extractGeminiText(payload) {
-  const parts = payload?.candidates?.[0]?.content?.parts || [];
-  return parts.map(p => p.text || '').join('\n').trim();
-}
-
-async function geminiGenerate(parts, {json=false}={}) {
-  if (!geminiKey) throw new Error('Gemini AI is not configured. Add GEMINI_API_KEY to .env.');
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-  const body = {
-    system_instruction:{parts:[{text:analystInstructions}]},
-    contents:[{role:'user',parts}],
-    generationConfig: json ? {responseMimeType:'application/json'} : {}
-  };
-  const payload = await fetchJSON(url, {
-    method:'POST',
-    headers:{'Content-Type':'application/json','x-goog-api-key':geminiKey},
-    body:JSON.stringify(body)
-  });
-  const text = extractGeminiText(payload);
-  if (!text) throw new Error(payload?.promptFeedback?.blockReason || 'Gemini returned no usable response.');
-  return text;
-}
-
-function basicAuth(req,res,next){
-  if (!basicUser || !basicPass) return next();
-  const raw = req.headers.authorization || '';
-  const [kind, encoded] = raw.split(' ');
-  if (kind === 'Basic' && encoded) {
-    const decoded = Buffer.from(encoded, 'base64').toString('utf8');
-    const i = decoded.indexOf(':');
-    const user = i >= 0 ? decoded.slice(0,i) : decoded;
-    const pass = i >= 0 ? decoded.slice(i+1) : '';
-    const userOk = user.length === basicUser.length && crypto.timingSafeEqual(Buffer.from(user), Buffer.from(basicUser));
-    const passOk = pass.length === basicPass.length && crypto.timingSafeEqual(Buffer.from(pass), Buffer.from(basicPass));
-    if (userOk && passOk) return next();
-  }
-  res.set('WWW-Authenticate', 'Basic realm="FinSight"');
-  return res.status(401).send('Authentication required.');
-}
-
-app.get('/healthz',(req,res)=>res.status(200).send('ok'));
-
-app.use(basicAuth);
-app.use(express.json({ limit: '4mb' }));
+// Serve FinSight files such as CSS, JS, XLSX samples, etc.
 app.use(express.static(__dirname));
 
-const analystInstructions = `You are FinSight AI, an evidence-first equity research copilot for educational investor due diligence.
-Separate reported facts, calculations, management claims, and your interpretations. Never invent financial values, citations, page numbers, live prices, market shares, or management statements. If evidence is missing, say so. Treat forensic signals as investigation prompts, not accusations. Do not issue personalized buy/sell instructions. You may assess business quality, risks, and valuation as Attractive/Fair/Premium/Expensive only when supplied data supports it. Be concise but analytical.`;
+// Temporary PDF uploads
+const upload = multer({
+  dest: path.join(__dirname, "uploads"),
+  limits: {
+    fileSize: 50 * 1024 * 1024
+  }
+});
 
-const analysisSchema = {
-  type: 'object', additionalProperties: false,
-  properties: {
-    company: {type:'string'}, overall_view:{type:'string'}, confidence:{type:'string', enum:['High','Medium','Low']},
-    good:{type:'array',items:{$ref:'#/$defs/finding'}}, bad:{type:'array',items:{$ref:'#/$defs/finding'}}, watch:{type:'array',items:{$ref:'#/$defs/finding'}},
-    red_flags:{type:'array',items:{$ref:'#/$defs/finding'}}, growth_drivers:{type:'array',items:{$ref:'#/$defs/finding'}},
-    management_assessment:{type:'string'}, governance_assessment:{type:'string'}, auditor_assessment:{type:'string'}, cash_quality_assessment:{type:'string'},
-    investor_questions:{type:'array',items:{type:'string'}}, missing_information:{type:'array',items:{type:'string'}}
+// Make sure upload folder exists
+const uploadDirectory = path.join(__dirname, "uploads");
+
+if (!fs.existsSync(uploadDirectory)) {
+  fs.mkdirSync(uploadDirectory, { recursive: true });
+}
+
+
+// ============================================================
+// OPTIONAL BASIC PASSWORD PROTECTION
+// ============================================================
+
+const FINSIGHT_USERNAME = process.env.FINSIGHT_USERNAME;
+const FINSIGHT_PASSWORD = process.env.FINSIGHT_PASSWORD;
+
+function basicAuth(req, res, next) {
+  // If username/password aren't configured,
+  // allow access without authentication.
+  if (!FINSIGHT_USERNAME || !FINSIGHT_PASSWORD) {
+    return next();
+  }
+
+  // Keep health endpoint public for Render.
+  if (req.path === "/healthz") {
+    return next();
+  }
+
+  const auth = req.headers.authorization;
+
+  if (!auth || !auth.startsWith("Basic ")) {
+    res.setHeader(
+      "WWW-Authenticate",
+      'Basic realm="FinSight Investor Research"'
+    );
+
+    return res.status(401).send("Authentication required.");
+  }
+
+  try {
+    const encoded = auth.split(" ")[1];
+
+    const decoded = Buffer.from(encoded, "base64").toString("utf8");
+
+    const separator = decoded.indexOf(":");
+
+    const username = decoded.substring(0, separator);
+    const password = decoded.substring(separator + 1);
+
+    if (
+      username === FINSIGHT_USERNAME &&
+      password === FINSIGHT_PASSWORD
+    ) {
+      return next();
+    }
+
+    res.setHeader(
+      "WWW-Authenticate",
+      'Basic realm="FinSight Investor Research"'
+    );
+
+    return res.status(401).send("Invalid username or password.");
+  } catch (error) {
+    return res.status(401).send("Authentication failed.");
+  }
+}
+
+app.use(basicAuth);
+
+
+// ============================================================
+// HOMEPAGE FIX
+// ============================================================
+
+// This fixes:
+//
+// Cannot GET /
+//
+// Visiting your Render URL now opens FinSight automatically.
+
+app.get("/", (req, res) => {
+  res.sendFile(
+    path.join(__dirname, "finsight-investor.html")
+  );
+});
+
+
+// ============================================================
+// HEALTH CHECK
+// ============================================================
+
+app.get("/healthz", (req, res) => {
+  res.status(200).json({
+    ok: true,
+    service: "FinSight AI",
+    status: "running",
+    timestamp: new Date().toISOString(),
+
+    aiConfigured: Boolean(process.env.GEMINI_API_KEY),
+
+    marketDataConfigured: Boolean(
+      process.env.ALPHA_VANTAGE_API_KEY
+    ),
+
+    databaseConfigured: Boolean(
+      process.env.DATABASE_URL
+    )
+  });
+});
+
+
+// ============================================================
+// CONFIGURATION STATUS
+// ============================================================
+
+app.get("/api/status", (req, res) => {
+  res.json({
+    ok: true,
+
+    ai: {
+      provider: "gemini",
+      configured: Boolean(process.env.GEMINI_API_KEY),
+      model:
+        process.env.GEMINI_MODEL ||
+        "gemini-2.5-flash-lite"
+    },
+
+    marketData: {
+      provider: "alpha_vantage",
+      configured: Boolean(
+        process.env.ALPHA_VANTAGE_API_KEY
+      ),
+      type: "last-available / delayed / end-of-day"
+    },
+
+    database: {
+      configured: Boolean(process.env.DATABASE_URL)
+    }
+  });
+});
+
+
+// ============================================================
+// GEMINI HELPER
+// ============================================================
+
+async function callGemini({
+  prompt,
+  pdfBuffer = null,
+  mimeType = "application/pdf"
+}) {
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+    throw new Error(
+      "GEMINI_API_KEY is not configured on the server."
+    );
+  }
+
+  const model =
+    process.env.GEMINI_MODEL ||
+    "gemini-2.5-flash-lite";
+
+  const parts = [];
+
+  if (pdfBuffer) {
+    parts.push({
+      inline_data: {
+        mime_type: mimeType,
+        data: pdfBuffer.toString("base64")
+      }
+    });
+  }
+
+  parts.push({
+    text: prompt
+  });
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+      model
+    )}:generateContent?key=${encodeURIComponent(apiKey)}`,
+    {
+      method: "POST",
+
+      headers: {
+        "Content-Type": "application/json"
+      },
+
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts
+          }
+        ],
+
+        generationConfig: {
+          temperature: 0.2,
+          responseMimeType: "application/json"
+        }
+      })
+    }
+  );
+
+  const text = await response.text();
+
+  if (!response.ok) {
+    throw new Error(
+      `Gemini API error ${response.status}: ${text}`
+    );
+  }
+
+  const data = JSON.parse(text);
+
+  const output =
+    data?.candidates?.[0]?.content?.parts
+      ?.map(part => part.text || "")
+      .join("") || "";
+
+  if (!output) {
+    throw new Error(
+      "Gemini returned an empty response."
+    );
+  }
+
+  try {
+    return JSON.parse(output);
+  } catch {
+    return {
+      raw: output
+    };
+  }
+}
+
+
+// ============================================================
+// ANNUAL REPORT AI
+// ============================================================
+
+app.post(
+  "/api/analyze-report",
+  upload.single("report"),
+  async (req, res) => {
+    let uploadedPath;
+
+    try {
+      if (!req.file) {
+        return res.status(400).json({
+          error: "Please upload an annual-report PDF."
+        });
+      }
+
+      uploadedPath = req.file.path;
+
+      const pdfBuffer = fs.readFileSync(uploadedPath);
+
+      const prompt = `
+You are FinSight AI, an evidence-first investment research analyst.
+
+Analyze the attached company annual report.
+
+Your job is NOT to tell the investor to buy or sell the stock.
+
+Your job is to help the investor understand the company before making their own decision.
+
+Return VALID JSON ONLY.
+
+Use this structure:
+
+{
+  "company": "",
+  "financial_year": "",
+  "overall_view": "",
+
+  "business_summary": {
+    "what_company_does": "",
+    "how_it_makes_money": "",
+    "major_products_services": [],
+    "major_segments": [],
+    "geographic_exposure": [],
+    "key_cost_drivers": []
   },
-  required:['company','overall_view','confidence','good','bad','watch','red_flags','growth_drivers','management_assessment','governance_assessment','auditor_assessment','cash_quality_assessment','investor_questions','missing_information'],
-  $defs:{finding:{type:'object',additionalProperties:false,properties:{title:{type:'string'},explanation:{type:'string'},evidence:{type:'array',items:{type:'string'}},priority:{type:'string',enum:['High','Medium','Low']}},required:['title','explanation','evidence','priority']}}
-};
 
-function requireAI(res){ if(!geminiKey){res.status(503).json({error:'AI is not configured. Copy .env.example to .env and add GEMINI_API_KEY.'}); return false;} return true; }
-function safeJSON(text){ try{return JSON.parse(text)}catch{return null} }
+  "good": [
+    {
+      "title": "",
+      "explanation": "",
+      "evidence": ""
+    }
+  ],
 
-app.get('/api/health', async (req,res)=>{
-  let databaseReady=false;
-  if(databaseEnabled){ try{ await dbQuery('SELECT 1'); databaseReady=true; }catch{} }
-  res.json({ok:true, aiConfigured:Boolean(geminiKey), model, marketProvider, marketConfigured:Boolean(alphaKey), historyConfigured:Boolean(alphaKey), databaseConfigured:databaseEnabled, databaseReady, protected:Boolean(basicUser&&basicPass)});
+  "bad": [
+    {
+      "title": "",
+      "explanation": "",
+      "evidence": ""
+    }
+  ],
+
+  "watch": [
+    {
+      "title": "",
+      "explanation": "",
+      "evidence": ""
+    }
+  ],
+
+  "red_flags": [
+    {
+      "severity": "low|medium|high",
+      "title": "",
+      "explanation": "",
+      "evidence": ""
+    }
+  ],
+
+  "growth_drivers": [],
+
+  "risks": [],
+
+  "management": {
+    "strategy": "",
+    "guidance": [],
+    "capital_allocation": "",
+    "execution_observations": []
+  },
+
+  "governance": {
+    "assessment": "",
+    "observations": []
+  },
+
+  "auditor": {
+    "opinion": "",
+    "key_audit_matters": [],
+    "qualifications": [],
+    "concerns": []
+  },
+
+  "segments": [],
+
+  "capital_allocation": {
+    "capex": "",
+    "dividends": "",
+    "debt": "",
+    "acquisitions": "",
+    "buybacks": ""
+  },
+
+  "contingent_liabilities": [],
+
+  "related_party_observations": [],
+
+  "investor_questions": [],
+
+  "confidence": "low|medium|high"
+}
+
+RULES:
+
+1. Do not invent financial numbers.
+
+2. Do not invent page numbers.
+
+3. If something cannot be found, say "Not found in supplied report".
+
+4. Separate company/management claims from your interpretation.
+
+5. A financial anomaly is not proof of fraud.
+
+6. Red flags should be described as items requiring investigation.
+
+7. Focus on information useful to a long-term investor.
+
+8. Be especially alert to:
+   - cash flow versus profit
+   - receivables
+   - inventory
+   - leverage
+   - interest cost
+   - related-party transactions
+   - contingent liabilities
+   - auditor observations
+   - promoter/governance issues
+   - acquisitions
+   - capex
+   - segment concentration
+   - management guidance
+
+9. Return JSON only.
+`;
+
+      const analysis = await callGemini({
+        prompt,
+        pdfBuffer
+      });
+
+      return res.json({
+        ok: true,
+        fileName: req.file.originalname,
+        analysis
+      });
+
+    } catch (error) {
+      console.error(
+        "Annual report analysis error:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          error.message ||
+          "Annual report analysis failed."
+      });
+
+    } finally {
+      if (
+        uploadedPath &&
+        fs.existsSync(uploadedPath)
+      ) {
+        try {
+          fs.unlinkSync(uploadedPath);
+        } catch {}
+      }
+    }
+  }
+);
+
+
+// ============================================================
+// ASK FINSIGHT AI
+// ============================================================
+
+app.post("/api/ask", async (req, res) => {
+  try {
+    const {
+      question,
+      company,
+      financialContext,
+      reportAnalysis,
+      valuationContext
+    } = req.body || {};
+
+    if (!question) {
+      return res.status(400).json({
+        error: "Question is required."
+      });
+    }
+
+    const prompt = `
+You are FinSight AI, an investor research copilot.
+
+Answer the investor's question using ONLY the supplied company context.
+
+Do not invent missing financial information.
+
+Do not provide an unconditional buy/sell instruction.
+
+Clearly distinguish:
+- reported fact
+- calculated metric
+- management claim
+- AI interpretation
+
+COMPANY:
+${company || "Unknown"}
+
+FINANCIAL CONTEXT:
+${JSON.stringify(financialContext || {}, null, 2)}
+
+ANNUAL REPORT ANALYSIS:
+${JSON.stringify(reportAnalysis || {}, null, 2)}
+
+VALUATION CONTEXT:
+${JSON.stringify(valuationContext || {}, null, 2)}
+
+INVESTOR QUESTION:
+${question}
+
+Return valid JSON:
+
+{
+  "answer": "",
+  "key_points": [],
+  "risks": [],
+  "evidence": [],
+  "what_to_investigate_next": []
+}
+`;
+
+    const answer = await callGemini({
+      prompt
+    });
+
+    return res.json({
+      ok: true,
+      answer
+    });
+
+  } catch (error) {
+    console.error("Ask FinSight error:", error);
+
+    return res.status(500).json({
+      ok: false,
+      error:
+        error.message ||
+        "FinSight AI could not answer the question."
+    });
+  }
 });
 
-app.post('/api/ai/analyze-report', upload.single('report'), async (req,res)=>{
-  try {
-    if(!requireAI(res)) return;
-    if(!req.file) return res.status(400).json({error:'Upload an annual-report PDF.'});
-    if(req.file.mimetype !== 'application/pdf' && !req.file.originalname.toLowerCase().endsWith('.pdf')) return res.status(400).json({error:'Annual-report AI currently accepts PDF files.'});
-    const metrics = req.body.metrics ? safeJSON(req.body.metrics) : null;
-    const prompt = `Analyze the attached annual report as an investor due-diligence document. Find business model, segments, financial trajectory, cash quality, debt, working capital, management strategy/guidance, risks, auditor/key audit matters, contingent liabilities, related parties, governance, capital allocation and growth plans. Use page references only when visible/reliable. Here are deterministic FinSight metrics if available; treat them as CALCULATED evidence, not report quotes:\n${JSON.stringify(metrics || {}, null, 2)}`;
-    const text = await geminiGenerate([{text: prompt + `\n\nReturn ONLY valid JSON with these top-level keys: company, overall_view, confidence, good, bad, watch, red_flags, growth_drivers, management_assessment, governance_assessment, auditor_assessment, cash_quality_assessment, investor_questions, missing_information. Each finding in good/bad/watch/red_flags/growth_drivers must contain title, explanation, evidence (array), priority (High/Medium/Low).`}, {inlineData:{mimeType:'application/pdf',data:req.file.buffer.toString('base64')}}], {json:true});
-    const parsed = safeJSON(text);
-    if(!parsed) throw new Error('The AI returned an unreadable structured response.');
-    let persisted = null;
-    if (databaseEnabled) {
+
+// ============================================================
+// COMPARE TWO ANNUAL REPORTS
+// ============================================================
+
+app.post(
+  "/api/compare-reports",
+  upload.fields([
+    {
+      name: "reportA",
+      maxCount: 1
+    },
+    {
+      name: "reportB",
+      maxCount: 1
+    }
+  ]),
+  async (req, res) => {
+    const temporaryFiles = [];
+
+    try {
+      const reportA =
+        req.files?.reportA?.[0];
+
+      const reportB =
+        req.files?.reportB?.[0];
+
+      if (!reportA || !reportB) {
+        return res.status(400).json({
+          error:
+            "Please upload both company annual reports."
+        });
+      }
+
+      temporaryFiles.push(
+        reportA.path,
+        reportB.path
+      );
+
+      const bufferA =
+        fs.readFileSync(reportA.path);
+
+      const bufferB =
+        fs.readFileSync(reportB.path);
+
+      const apiKey =
+        process.env.GEMINI_API_KEY;
+
+      if (!apiKey) {
+        throw new Error(
+          "GEMINI_API_KEY is not configured."
+        );
+      }
+
+      const model =
+        process.env.GEMINI_MODEL ||
+        "gemini-2.5-flash-lite";
+
+      const prompt = `
+You are FinSight AI.
+
+Compare the two supplied annual reports from an investor's perspective.
+
+Do NOT simply declare one company the winner.
+
+Explain trade-offs.
+
+Compare:
+
+- business model
+- revenue growth
+- profitability
+- margins
+- cash generation
+- earnings quality
+- leverage
+- liquidity
+- ROE / ROCE where available
+- working capital
+- management
+- capital allocation
+- governance
+- auditor observations
+- risks
+- red flags
+- growth opportunities
+
+Do not invent missing figures.
+
+Return valid JSON:
+
+{
+  "company_a": "",
+  "company_b": "",
+
+  "summary": "",
+
+  "business_quality": {
+    "company_a": "",
+    "company_b": "",
+    "edge": ""
+  },
+
+  "growth": {
+    "company_a": "",
+    "company_b": "",
+    "edge": ""
+  },
+
+  "profitability": {
+    "company_a": "",
+    "company_b": "",
+    "edge": ""
+  },
+
+  "cash_generation": {
+    "company_a": "",
+    "company_b": "",
+    "edge": ""
+  },
+
+  "balance_sheet": {
+    "company_a": "",
+    "company_b": "",
+    "edge": ""
+  },
+
+  "management": {
+    "company_a": "",
+    "company_b": "",
+    "edge": ""
+  },
+
+  "governance": {
+    "company_a": "",
+    "company_b": "",
+    "edge": ""
+  },
+
+  "risk": {
+    "company_a": "",
+    "company_b": "",
+    "edge": ""
+  },
+
+  "company_a_strengths": [],
+  "company_a_weaknesses": [],
+
+  "company_b_strengths": [],
+  "company_b_weaknesses": [],
+
+  "important_tradeoffs": [],
+
+  "questions_before_choosing_a": [],
+  "questions_before_choosing_b": []
+}
+`;
+
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
+          model
+        )}:generateContent?key=${encodeURIComponent(
+          apiKey
+        )}`,
+        {
+          method: "POST",
+
+          headers: {
+            "Content-Type": "application/json"
+          },
+
+          body: JSON.stringify({
+            contents: [
+              {
+                role: "user",
+
+                parts: [
+                  {
+                    text:
+                      "REPORT A: " +
+                      reportA.originalname
+                  },
+
+                  {
+                    inline_data: {
+                      mime_type:
+                        "application/pdf",
+
+                      data:
+                        bufferA.toString(
+                          "base64"
+                        )
+                    }
+                  },
+
+                  {
+                    text:
+                      "REPORT B: " +
+                      reportB.originalname
+                  },
+
+                  {
+                    inline_data: {
+                      mime_type:
+                        "application/pdf",
+
+                      data:
+                        bufferB.toString(
+                          "base64"
+                        )
+                    }
+                  },
+
+                  {
+                    text: prompt
+                  }
+                ]
+              }
+            ],
+
+            generationConfig: {
+              temperature: 0.2,
+              responseMimeType:
+                "application/json"
+            }
+          })
+        }
+      );
+
+      const responseText =
+        await response.text();
+
+      if (!response.ok) {
+        throw new Error(
+          `Gemini comparison failed: ${responseText}`
+        );
+      }
+
+      const data =
+        JSON.parse(responseText);
+
+      const output =
+        data?.candidates?.[0]?.content
+          ?.parts?.map(
+            part => part.text || ""
+          )
+          .join("") || "";
+
+      let comparison;
+
       try {
-        const company = await upsertCompany({name:parsed.company || req.body.company || 'Unknown company',ticker:req.body.ticker || null,exchange:req.body.exchange || 'NSE'});
-        const hash = crypto.createHash('sha256').update(req.file.buffer).digest('hex');
-        const q = await dbQuery(`INSERT INTO reports(company_id,filename,report_year,metrics,analysis,source_hash) VALUES($1,$2,$3,$4,$5,$6) RETURNING id,created_at`, [company.id,req.file.originalname,req.body.reportYear ? Number(req.body.reportYear) : null,metrics || {},parsed,hash]);
-        persisted = {companyId:company.id,reportId:q.rows[0].id,createdAt:q.rows[0].created_at};
-      } catch (e) { console.error('Persistence warning:', e.message); }
+        comparison =
+          JSON.parse(output);
+      } catch {
+        comparison = {
+          raw: output
+        };
+      }
+
+      return res.json({
+        ok: true,
+        comparison
+      });
+
+    } catch (error) {
+      console.error(
+        "Comparison error:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error:
+          error.message ||
+          "Company comparison failed."
+      });
+
+    } finally {
+      for (
+        const filePath of temporaryFiles
+      ) {
+        if (
+          filePath &&
+          fs.existsSync(filePath)
+        ) {
+          try {
+            fs.unlinkSync(filePath);
+          } catch {}
+        }
+      }
     }
-    res.json({analysis:parsed, model, persisted});
-  } catch(err){ console.error(err); res.status(500).json({error:err.message || 'AI analysis failed.'}); }
-});
+  }
+);
 
-app.post('/api/ai/compare', upload.fields([{name:'companyA',maxCount:1},{name:'companyB',maxCount:1}]), async (req,res)=>{
+
+// ============================================================
+// ALPHA VANTAGE - DELAYED / LAST AVAILABLE PRICE
+// ============================================================
+
+app.get("/api/market/quote", async (req, res) => {
   try {
-    if(!requireAI(res)) return;
-    const a=req.files?.companyA?.[0], b=req.files?.companyB?.[0];
-    if(!a||!b) return res.status(400).json({error:'Upload both company annual reports.'});
-    const prompt=`Compare these two annual reports for an investor. Normalize differences in reporting terminology and periods where possible. Compare business model, growth, profitability, ROCE/ROE, cash conversion, leverage, working capital, segments, management execution, governance, auditor issues, capital allocation, risks and disclosed competitive strengths. Explicitly state when a comparison is not like-for-like. Do not choose a stock solely from the reports; explain trade-offs and what an investor must investigate.`;
-    const text=await geminiGenerate([{text:prompt},{inlineData:{mimeType:'application/pdf',data:a.buffer.toString('base64')}},{inlineData:{mimeType:'application/pdf',data:b.buffer.toString('base64')}}]);
-    res.json({comparison:text,model});
-  } catch(err){console.error(err);res.status(500).json({error:err.message||'Comparison failed.'})}
+    const symbol =
+      String(req.query.symbol || "")
+        .trim()
+        .toUpperCase();
+
+    if (!symbol) {
+      return res.status(400).json({
+        error: "Ticker symbol is required."
+      });
+    }
+
+    const apiKey =
+      process.env.ALPHA_VANTAGE_API_KEY;
+
+    if (!apiKey) {
+      return res.status(503).json({
+        ok: false,
+        error:
+          "ALPHA_VANTAGE_API_KEY is not configured.",
+        manualPriceAllowed: true
+      });
+    }
+
+    const url =
+      "https://www.alphavantage.co/query" +
+      "?function=GLOBAL_QUOTE" +
+      `&symbol=${encodeURIComponent(symbol)}` +
+      `&apikey=${encodeURIComponent(apiKey)}`;
+
+    const response =
+      await fetch(url);
+
+    const data =
+      await response.json();
+
+    if (data.Note || data.Information) {
+      return res.status(429).json({
+        ok: false,
+        error:
+          data.Note ||
+          data.Information,
+        manualPriceAllowed: true
+      });
+    }
+
+    const quote =
+      data["Global Quote"];
+
+    if (
+      !quote ||
+      !quote["05. price"]
+    ) {
+      return res.status(404).json({
+        ok: false,
+        error:
+          "No quote was returned for this ticker. Try another symbol or enter the share price manually.",
+        manualPriceAllowed: true
+      });
+    }
+
+    const price =
+      Number(quote["05. price"]);
+
+    const previousClose =
+      Number(
+        quote["08. previous close"]
+      );
+
+    const change =
+      Number(quote["09. change"]);
+
+    const changePercent =
+      quote["10. change percent"];
+
+    const latestTradingDay =
+      quote["07. latest trading day"];
+
+    return res.json({
+      ok: true,
+
+      symbol,
+
+      price,
+
+      previousClose,
+
+      change,
+
+      changePercent,
+
+      latestTradingDay,
+
+      source: "Alpha Vantage",
+
+      freshness:
+        "last-available / delayed / end-of-day",
+
+      live: false
+    });
+
+  } catch (error) {
+    console.error(
+      "Market quote error:",
+      error
+    );
+
+    return res.status(500).json({
+      ok: false,
+
+      error:
+        error.message ||
+        "Market quote failed.",
+
+      manualPriceAllowed: true
+    });
+  }
 });
 
-app.post('/api/ai/ask', async (req,res)=>{
-  try {
-    if(!requireAI(res)) return;
-    const {question, context, priorAnalysis} = req.body || {};
-    if(!question?.trim()) return res.status(400).json({error:'Question is required.'});
-    const text=await geminiGenerate([{text:`Investor question: ${question}\n\nFinSight calculated/context data:\n${JSON.stringify(context||{},null,2)}\n\nPrior annual-report AI analysis:\n${JSON.stringify(priorAnalysis||{},null,2)}\n\nAnswer only from supplied evidence. Clearly say when the uploaded evidence cannot answer the question.`}]);
-    res.json({answer:text,model});
-  } catch(err){console.error(err);res.status(500).json({error:err.message||'Question failed.'})}
-});
 
-app.get('/api/market/:ticker', async (req,res)=>{
-  try { res.json(await getMarketQuote({ticker:req.params.ticker,exchange:req.query.exchange||'NSE'})); }
-  catch(err){ res.status(503).json({error:err.message,ticker:req.params.ticker,provider:marketProvider}); }
-});
+// ============================================================
+// ALPHA VANTAGE HISTORICAL PRICES
+// ============================================================
 
-app.get('/api/market/:ticker/history', async (req,res)=>{
-  try { const rows=await getMarketHistory({ticker:req.params.ticker,exchange:req.query.exchange||'NSE'}); res.json({ticker:req.params.ticker.toUpperCase(),exchange:(req.query.exchange||'NSE').toUpperCase(),provider:'Alpha Vantage',rows}); }
-  catch(err){ res.status(503).json({error:err.message}); }
-});
+app.get(
+  "/api/market/history",
+  async (req, res) => {
+    try {
+      const symbol =
+        String(req.query.symbol || "")
+          .trim()
+          .toUpperCase();
 
-app.post('/api/ai/valuation', async (req,res)=>{
-  try {
-    if(!requireAI(res)) return;
-    const {company, market, fundamentals, valuation} = req.body || {};
-    const text=await geminiGenerate([{text:`Assess valuation for educational investor research. Do not invent missing values. Distinguish company quality from valuation. Use labels Attractive, Fair, Premium, or Expensive only if supplied evidence supports them. Explain what assumptions could make the conclusion wrong.\nCompany: ${company||'Unknown'}\nMarket data: ${JSON.stringify(market||{},null,2)}\nFundamentals: ${JSON.stringify(fundamentals||{},null,2)}\nCalculated valuation scenarios/peer or historical inputs: ${JSON.stringify(valuation||{},null,2)}`}]);
-    res.json({assessment:text,model});
-  } catch(err){console.error(err);res.status(500).json({error:err.message||'Valuation analysis failed.'})}
-});
+      if (!symbol) {
+        return res.status(400).json({
+          error:
+            "Ticker symbol is required."
+        });
+      }
+
+      const apiKey =
+        process.env
+          .ALPHA_VANTAGE_API_KEY;
+
+      if (!apiKey) {
+        return res.status(503).json({
+          error:
+            "ALPHA_VANTAGE_API_KEY is not configured."
+        });
+      }
+
+      const url =
+        "https://www.alphavantage.co/query" +
+        "?function=TIME_SERIES_DAILY" +
+        `&symbol=${encodeURIComponent(symbol)}` +
+        "&outputsize=compact" +
+        `&apikey=${encodeURIComponent(apiKey)}`;
+
+      const response =
+        await fetch(url);
+
+      const data =
+        await response.json();
+
+      if (
+        data.Note ||
+        data.Information
+      ) {
+        return res.status(429).json({
+          error:
+            data.Note ||
+            data.Information
+        });
+      }
+
+      const series =
+        data[
+          "Time Series (Daily)"
+        ];
+
+      if (!series) {
+        return res.status(404).json({
+          error:
+            "Historical price data was not returned."
+        });
+      }
+
+      const history =
+        Object.entries(series)
+          .map(([date, values]) => ({
+            date,
+
+            open:
+              Number(
+                values["1. open"]
+              ),
+
+            high:
+              Number(
+                values["2. high"]
+              ),
+
+            low:
+              Number(
+                values["3. low"]
+              ),
+
+            close:
+              Number(
+                values["4. close"]
+              ),
+
+            volume:
+              Number(
+                values["5. volume"]
+              )
+          }))
+          .sort(
+            (a, b) =>
+              a.date.localeCompare(
+                b.date
+              )
+          );
+
+      return res.json({
+        ok: true,
+
+        symbol,
+
+        source: "Alpha Vantage",
+
+        live: false,
+
+        history
+      });
+
+    } catch (error) {
+      console.error(
+        "Historical price error:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+
+        error:
+          error.message ||
+          "Historical prices failed."
+      });
+    }
+  }
+);
 
 
-app.post('/api/valuation/dcf', (req,res)=>{
-  try { res.json(runDCF(req.body || {})); }
-  catch(err){ res.status(400).json({error:err.message}); }
-});
+// ============================================================
+// OPTIONAL DATABASE SUPPORT
+// ============================================================
 
-app.post('/api/valuation/reverse-dcf', (req,res)=>{
-  try { res.json(reverseDCF(req.body || {})); }
-  catch(err){ res.status(400).json({error:err.message}); }
-});
+let Pool;
 
-app.post('/api/research/save', async (req,res)=>{
-  try {
-    if(!databaseEnabled) return res.status(503).json({error:'Database is not configured. Add DATABASE_URL.'});
-    const {company,ticker,exchange='NSE',sector,filename='manual research',reportYear,metrics={},analysis={}}=req.body||{};
-    const c=await upsertCompany({name:company||ticker||'Unknown company',ticker,exchange,sector});
-    const q=await dbQuery(`INSERT INTO reports(company_id,filename,report_year,metrics,analysis) VALUES($1,$2,$3,$4,$5) RETURNING *`,[c.id,filename,reportYear||null,metrics,analysis]);
-    res.json({company:c,report:q.rows[0]});
-  }catch(err){res.status(500).json({error:err.message});}
-});
-
-app.get('/api/research/:ticker', async (req,res)=>{
-  try {
-    if(!databaseEnabled) return res.status(503).json({error:'Database is not configured.'});
-    const exchange=(req.query.exchange||'NSE').toUpperCase();
-    const cq=await dbQuery(`SELECT * FROM companies WHERE ticker=$1 AND exchange=$2 LIMIT 1`,[req.params.ticker.toUpperCase(),exchange]);
-    if(!cq.rows[0]) return res.status(404).json({error:'Company not found in FinSight research memory.'});
-    const c=cq.rows[0];
-    const [reports,theses,valuations,promises,events]=await Promise.all([
-      dbQuery(`SELECT * FROM reports WHERE company_id=$1 ORDER BY created_at DESC LIMIT 20`,[c.id]),
-      dbQuery(`SELECT * FROM research_theses WHERE company_id=$1 ORDER BY updated_at DESC LIMIT 10`,[c.id]),
-      dbQuery(`SELECT * FROM valuation_snapshots WHERE company_id=$1 ORDER BY created_at DESC LIMIT 20`,[c.id]),
-      dbQuery(`SELECT * FROM management_promises WHERE company_id=$1 ORDER BY updated_at DESC LIMIT 50`,[c.id]),
-      dbQuery(`SELECT * FROM monitoring_events WHERE company_id=$1 ORDER BY created_at DESC LIMIT 100`,[c.id])
-    ]);
-    res.json({company:c,reports:reports.rows,theses:theses.rows,valuations:valuations.rows,promises:promises.rows,events:events.rows});
-  }catch(err){res.status(500).json({error:err.message});}
-});
-
-app.post('/api/thesis', async (req,res)=>{
-  try {
-    if(!databaseEnabled) return res.status(503).json({error:'Database is not configured.'});
-    const {company,ticker,exchange='NSE',thesis,bullCase,bearCase,thesisBreakers=[]}=req.body||{};
-    if(!thesis?.trim()) return res.status(400).json({error:'thesis is required.'});
-    const c=await upsertCompany({name:company||ticker||'Unknown company',ticker,exchange});
-    const q=await dbQuery(`INSERT INTO research_theses(company_id,thesis,bull_case,bear_case,thesis_breakers) VALUES($1,$2,$3,$4,$5) RETURNING *`,[c.id,thesis,bullCase||null,bearCase||null,thesisBreakers]);
-    res.json({company:c,thesis:q.rows[0]});
-  }catch(err){res.status(500).json({error:err.message});}
-});
-
-app.post('/api/management-promises', async (req,res)=>{
-  try {
-    if(!databaseEnabled) return res.status(503).json({error:'Database is not configured.'});
-    const {company,ticker,exchange='NSE',promise,targetDate,status='open',evidence=[]}=req.body||{};
-    if(!promise?.trim()) return res.status(400).json({error:'promise is required.'});
-    const c=await upsertCompany({name:company||ticker||'Unknown company',ticker,exchange});
-    const q=await dbQuery(`INSERT INTO management_promises(company_id,promise,target_date,status,evidence) VALUES($1,$2,$3,$4,$5) RETURNING *`,[c.id,promise,targetDate||null,status,evidence]);
-    res.json({company:c,promise:q.rows[0]});
-  }catch(err){res.status(500).json({error:err.message});}
-});
-
-app.post('/api/valuation/snapshot', async (req,res)=>{
-  try {
-    if(!databaseEnabled) return res.status(503).json({error:'Database is not configured.'});
-    const {company,ticker,exchange='NSE',market={},fundamentals={},valuation={},aiAssessment=null}=req.body||{};
-    const c=await upsertCompany({name:company||ticker||'Unknown company',ticker,exchange});
-    const q=await dbQuery(`INSERT INTO valuation_snapshots(company_id,market,fundamentals,valuation,ai_assessment) VALUES($1,$2,$3,$4,$5) RETURNING *`,[c.id,market,fundamentals,valuation,aiAssessment]);
-    res.json({company:c,snapshot:q.rows[0]});
-  }catch(err){res.status(500).json({error:err.message});}
-});
-
-function compareRule(actual,operator,target){
-  if(!Number.isFinite(Number(actual))||!Number.isFinite(Number(target))) return false;
-  const a=Number(actual),t=Number(target);
-  return operator==='<'?a<t:operator==='<='?a<=t:operator==='>'?a>t:operator==='>='?a>=t:operator==='=='?a===t:false;
+try {
+  Pool = require("pg").Pool;
+} catch {
+  Pool = null;
 }
-app.post('/api/monitor/evaluate', async (req,res)=>{
-  try {
-    const {company,ticker,exchange='NSE',metrics={},rules=[]}=req.body||{};
-    const breaches=[];
-    for(const rule of rules){
-      if(compareRule(metrics[rule.metric],rule.operator,rule.value)) breaches.push({...rule,actual:metrics[rule.metric]});
+
+let pool = null;
+
+if (
+  Pool &&
+  process.env.DATABASE_URL
+) {
+  pool = new Pool({
+    connectionString:
+      process.env.DATABASE_URL,
+
+    ssl:
+      process.env.DATABASE_SSL ===
+      "false"
+        ? false
+        : {
+            rejectUnauthorized: false
+          },
+
+    max:
+      Number(
+        process.env
+          .DATABASE_POOL_MAX || 5
+      )
+  });
+
+  pool.on("error", error => {
+    console.error(
+      "PostgreSQL pool error:",
+      error
+    );
+  });
+}
+
+
+// ============================================================
+// DATABASE STATUS
+// ============================================================
+
+app.get(
+  "/api/database/status",
+  async (req, res) => {
+    if (!pool) {
+      return res.json({
+        ok: true,
+        configured: false,
+        message:
+          "Database-backed memory is inactive until DATABASE_URL is configured."
+      });
     }
-    if(databaseEnabled && breaches.length){
-      const c=await upsertCompany({name:company||ticker||'Unknown company',ticker,exchange});
-      for(const b of breaches) await dbQuery(`INSERT INTO monitoring_events(company_id,event_type,title,severity,payload) VALUES($1,'thesis_breaker',$2,$3,$4)`,[c.id,b.title||`${b.metric} ${b.operator} ${b.value}`,b.severity||'warning',b]);
+
+    try {
+      const result =
+        await pool.query(
+          "select now() as server_time"
+        );
+
+      return res.json({
+        ok: true,
+        configured: true,
+        connected: true,
+        serverTime:
+          result.rows[0]
+            .server_time
+      });
+
+    } catch (error) {
+      return res.status(500).json({
+        ok: false,
+        configured: true,
+        connected: false,
+        error: error.message
+      });
     }
-    res.json({breaches,count:breaches.length,persisted:databaseEnabled});
-  }catch(err){res.status(500).json({error:err.message});}
+  }
+);
+
+
+// ============================================================
+// COMPANY HELPER
+// ============================================================
+
+async function getOrCreateCompany({
+  name,
+  ticker = null,
+  exchange = null
+}) {
+  if (!pool) {
+    throw new Error(
+      "DATABASE_URL is not configured."
+    );
+  }
+
+  if (ticker) {
+    const existing =
+      await pool.query(
+        `
+        select *
+        from companies
+        where ticker = $1
+        and coalesce(exchange, '') =
+            coalesce($2, '')
+        limit 1
+        `,
+        [ticker, exchange]
+      );
+
+    if (existing.rows[0]) {
+      return existing.rows[0];
+    }
+  }
+
+  const byName =
+    await pool.query(
+      `
+      select *
+      from companies
+      where lower(name) =
+            lower($1)
+      limit 1
+      `,
+      [name]
+    );
+
+  if (byName.rows[0]) {
+    return byName.rows[0];
+  }
+
+  const created =
+    await pool.query(
+      `
+      insert into companies
+      (
+        name,
+        ticker,
+        exchange
+      )
+      values ($1, $2, $3)
+      returning *
+      `,
+      [
+        name,
+        ticker,
+        exchange
+      ]
+    );
+
+  return created.rows[0];
+}
+
+
+// ============================================================
+// SAVE INVESTMENT THESIS
+// ============================================================
+
+app.post(
+  "/api/research/thesis",
+  async (req, res) => {
+    try {
+      if (!pool) {
+        return res.status(503).json({
+          ok: false,
+          error:
+            "Database-backed memory is inactive until DATABASE_URL is configured."
+        });
+      }
+
+      const {
+        company,
+        ticker,
+        exchange,
+        thesis,
+        bullCase,
+        bearCase
+      } = req.body || {};
+
+      if (!company) {
+        return res.status(400).json({
+          error:
+            "Company name is required."
+        });
+      }
+
+      const companyRow =
+        await getOrCreateCompany({
+          name: company,
+          ticker,
+          exchange
+        });
+
+      const existing =
+        await pool.query(
+          `
+          select id
+          from investment_theses
+          where company_id = $1
+          and status = 'active'
+          order by updated_at desc
+          limit 1
+          `,
+          [companyRow.id]
+        );
+
+      let saved;
+
+      if (existing.rows[0]) {
+        saved =
+          await pool.query(
+            `
+            update investment_theses
+            set
+              thesis = $1,
+              bull_case = $2,
+              bear_case = $3,
+              updated_at = now()
+            where id = $4
+            returning *
+            `,
+            [
+              thesis || "",
+              bullCase || "",
+              bearCase || "",
+              existing.rows[0].id
+            ]
+          );
+      } else {
+        saved =
+          await pool.query(
+            `
+            insert into investment_theses
+            (
+              company_id,
+              thesis,
+              bull_case,
+              bear_case
+            )
+            values ($1, $2, $3, $4)
+            returning *
+            `,
+            [
+              companyRow.id,
+              thesis || "",
+              bullCase || "",
+              bearCase || ""
+            ]
+          );
+      }
+
+      return res.json({
+        ok: true,
+        company: companyRow,
+        thesis: saved.rows[0]
+      });
+
+    } catch (error) {
+      console.error(
+        "Save thesis error:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+);
+
+
+// ============================================================
+// LOAD RESEARCH MEMORY
+// ============================================================
+
+app.get(
+  "/api/research/memory",
+  async (req, res) => {
+    try {
+      if (!pool) {
+        return res.status(503).json({
+          ok: false,
+          error:
+            "Database-backed memory is inactive until DATABASE_URL is configured."
+        });
+      }
+
+      const company =
+        String(
+          req.query.company || ""
+        ).trim();
+
+      const ticker =
+        String(
+          req.query.ticker || ""
+        ).trim();
+
+      if (!company && !ticker) {
+        return res.status(400).json({
+          error:
+            "Company name or ticker is required."
+        });
+      }
+
+      let companyResult;
+
+      if (ticker) {
+        companyResult =
+          await pool.query(
+            `
+            select *
+            from companies
+            where ticker = $1
+            order by updated_at desc
+            limit 1
+            `,
+            [ticker]
+          );
+      } else {
+        companyResult =
+          await pool.query(
+            `
+            select *
+            from companies
+            where lower(name) =
+                  lower($1)
+            order by updated_at desc
+            limit 1
+            `,
+            [company]
+          );
+      }
+
+      const companyRow =
+        companyResult.rows[0];
+
+      if (!companyRow) {
+        return res.json({
+          ok: true,
+          found: false,
+          message:
+            "No saved research was found for this company."
+        });
+      }
+
+      const thesisResult =
+        await pool.query(
+          `
+          select *
+          from investment_theses
+          where company_id = $1
+          order by updated_at desc
+          limit 1
+          `,
+          [companyRow.id]
+        );
+
+      const promises =
+        await pool.query(
+          `
+          select *
+          from management_promises
+          where company_id = $1
+          order by created_at desc
+          `,
+          [companyRow.id]
+        );
+
+      const valuations =
+        await pool.query(
+          `
+          select *
+          from valuation_snapshots
+          where company_id = $1
+          order by created_at desc
+          limit 10
+          `,
+          [companyRow.id]
+        );
+
+      const events =
+        await pool.query(
+          `
+          select *
+          from monitoring_events
+          where company_id = $1
+          order by created_at desc
+          limit 20
+          `,
+          [companyRow.id]
+        );
+
+      return res.json({
+        ok: true,
+        found: true,
+        company: companyRow,
+        thesis:
+          thesisResult.rows[0] ||
+          null,
+        managementPromises:
+          promises.rows,
+        valuationSnapshots:
+          valuations.rows,
+        monitoringEvents:
+          events.rows
+      });
+
+    } catch (error) {
+      console.error(
+        "Load research error:",
+        error
+      );
+
+      return res.status(500).json({
+        ok: false,
+        error: error.message
+      });
+    }
+  }
+);
+
+
+// ============================================================
+// 404 HANDLER
+// ============================================================
+
+app.use((req, res) => {
+  res.status(404).json({
+    ok: false,
+    error: "Route not found",
+    path: req.path
+  });
 });
 
-async function boot(){
-  try{ if(databaseEnabled) await initDatabase(); }catch(err){ console.error('Database initialization failed:',err.message); }
-  app.listen(port,'0.0.0.0',()=>console.log(`FinSight AI running on port ${port}`));
-}
-boot();
+
+// ============================================================
+// ERROR HANDLER
+// ============================================================
+
+app.use(
+  (error, req, res, next) => {
+    console.error(
+      "Unhandled server error:",
+      error
+    );
+
+    if (
+      error instanceof
+      multer.MulterError
+    ) {
+      return res.status(400).json({
+        ok: false,
+        error:
+          "File upload error: " +
+          error.message
+      });
+    }
+
+    return res.status(500).json({
+      ok: false,
+      error:
+        error.message ||
+        "Unexpected server error."
+    });
+  }
+);
+
+
+// ============================================================
+// START SERVER
+// ============================================================
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(
+    `FinSight AI running on port ${PORT}`
+  );
+
+  console.log(
+    `Gemini configured: ${
+      process.env.GEMINI_API_KEY
+        ? "YES"
+        : "NO"
+    }`
+  );
+
+  console.log(
+    `Alpha Vantage configured: ${
+      process.env
+        .ALPHA_VANTAGE_API_KEY
+        ? "YES"
+        : "NO"
+    }`
+  );
+
+  console.log(
+    `Database configured: ${
+      process.env.DATABASE_URL
+        ? "YES"
+        : "NO"
+    }`
+  );
+});
