@@ -1,3 +1,12 @@
+/* ============================================================
+   FINSIGHT AI — SERVER
+   Gemini AI
+   Alpha Vantage
+   Supabase / PostgreSQL
+   DCF + Reverse DCF
+   Multi-Annual-Report Intelligence
+   ============================================================ */
+
 import "dotenv/config";
 
 import express from "express";
@@ -5,7 +14,10 @@ import multer from "multer";
 import path from "node:path";
 import crypto from "node:crypto";
 import pg from "pg";
-import { fileURLToPath } from "node:url";
+
+import {
+  fileURLToPath
+} from "node:url";
 
 import {
   runDCF,
@@ -14,44 +26,62 @@ import {
 
 
 /* ============================================================
-   BASIC SETUP
+   1. BASIC SETUP
    ============================================================ */
 
 const { Pool } = pg;
 
+
 const __filename =
-  fileURLToPath(import.meta.url);
+  fileURLToPath(
+    import.meta.url
+  );
+
 
 const __dirname =
-  path.dirname(__filename);
+  path.dirname(
+    __filename
+  );
+
 
 const app =
   express();
 
+
 const PORT =
   Number(
-    process.env.PORT || 3000
+    process.env.PORT ||
+    3000
   );
+
 
 const GEMINI_MODEL =
   process.env.GEMINI_MODEL ||
   "gemini-2.5-flash-lite";
 
+
 const GEMINI_API_KEY =
-  process.env.GEMINI_API_KEY || "";
+  process.env.GEMINI_API_KEY ||
+  "";
+
 
 const ALPHA_VANTAGE_API_KEY =
-  process.env.ALPHA_VANTAGE_API_KEY || "";
+  process.env.ALPHA_VANTAGE_API_KEY ||
+  "";
+
 
 const FINSIGHT_USERNAME =
-  process.env.FINSIGHT_USERNAME || "";
+  process.env.FINSIGHT_USERNAME ||
+  "";
+
 
 const FINSIGHT_PASSWORD =
-  process.env.FINSIGHT_PASSWORD || "";
+  process.env.FINSIGHT_PASSWORD ||
+  "";
 
 
 /* ============================================================
-   DATABASE
+   2. DATABASE
    ============================================================ */
 
 const databaseEnabled =
@@ -59,7 +89,9 @@ const databaseEnabled =
     process.env.DATABASE_URL
   );
 
+
 const pool =
+
   databaseEnabled
 
     ? new Pool({
@@ -68,6 +100,7 @@ const pool =
           process.env.DATABASE_URL,
 
         ssl:
+
           process.env.DATABASE_SSL ===
           "false"
 
@@ -81,7 +114,8 @@ const pool =
         max:
           Number(
             process.env
-              .DATABASE_POOL_MAX || 5
+              .DATABASE_POOL_MAX ||
+            5
           )
 
       })
@@ -106,6 +140,10 @@ if (pool) {
 }
 
 
+/* ============================================================
+   3. DATABASE QUERY HELPER
+   ============================================================ */
+
 async function dbQuery(
   text,
   params = []
@@ -119,6 +157,7 @@ async function dbQuery(
 
   }
 
+
   return pool.query(
     text,
     params
@@ -128,29 +167,45 @@ async function dbQuery(
 
 
 /* ============================================================
-   DATABASE INITIALIZATION
+   4. DATABASE INITIALIZATION
    ============================================================ */
 
 async function initDatabase() {
 
   if (!pool) {
-
     return;
-
   }
 
+
+  /*
+   * IMPORTANT:
+   *
+   * These CREATE statements are deliberately defensive.
+   * They do not delete existing tables.
+   */
 
   const statements = [
 
     `
     CREATE TABLE IF NOT EXISTS companies (
       id BIGSERIAL PRIMARY KEY,
+
       name TEXT NOT NULL,
+
       ticker TEXT,
+
       exchange TEXT DEFAULT 'NSE',
+
       sector TEXT,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+      created_at TIMESTAMPTZ
+        NOT NULL
+        DEFAULT NOW(),
+
+      updated_at TIMESTAMPTZ
+        NOT NULL
+        DEFAULT NOW(),
+
       UNIQUE (ticker, exchange)
     )
     `,
@@ -159,6 +214,7 @@ async function initDatabase() {
     `
     CREATE TABLE IF NOT EXISTS reports (
       id BIGSERIAL PRIMARY KEY,
+
       company_id BIGINT
         REFERENCES companies(id)
         ON DELETE CASCADE,
@@ -329,7 +385,7 @@ async function initDatabase() {
 
 
 /* ============================================================
-   COMPANY DATABASE HELPER
+   5. COMPANY HELPER
    ============================================================ */
 
 async function upsertCompany({
@@ -349,6 +405,18 @@ async function upsertCompany({
 
 
   if (ticker) {
+
+    const normalizedTicker =
+      String(ticker)
+        .trim()
+        .toUpperCase();
+
+
+    const normalizedExchange =
+      String(exchange || "NSE")
+        .trim()
+        .toUpperCase();
+
 
     const result =
       await dbQuery(
@@ -376,26 +444,64 @@ async function upsertCompany({
         )
 
         DO UPDATE SET
-          name = EXCLUDED.name,
+
+          name =
+            EXCLUDED.name,
+
           sector =
             COALESCE(
               EXCLUDED.sector,
               companies.sector
             ),
-          updated_at = NOW()
+
+          updated_at =
+            NOW()
 
         RETURNING *
         `,
         [
-          name || ticker,
-          ticker.toUpperCase(),
-          exchange.toUpperCase(),
+          name ||
+          normalizedTicker,
+
+          normalizedTicker,
+
+          normalizedExchange,
+
           sector
         ]
       );
 
 
     return result.rows[0];
+
+  }
+
+
+  /*
+   * Without ticker, first try company name.
+   */
+
+  const existing =
+    await dbQuery(
+      `
+      SELECT *
+      FROM companies
+      WHERE LOWER(name) =
+            LOWER($1)
+      LIMIT 1
+      `,
+      [
+        name ||
+        "Unknown company"
+      ]
+    );
+
+
+  if (
+    existing.rows[0]
+  ) {
+
+    return existing.rows[0];
 
   }
 
@@ -418,7 +524,9 @@ async function upsertCompany({
       RETURNING *
       `,
       [
-        name || "Unknown company",
+        name ||
+        "Unknown company",
+
         sector
       ]
     );
@@ -430,8 +538,18 @@ async function upsertCompany({
 
 
 /* ============================================================
-   FILE UPLOAD
+   6. FILE UPLOAD
    ============================================================ */
+
+/*
+ * Memory storage allows Gemini PDF upload
+ * without writing temporary files.
+ *
+ * 45 MB remains deliberately conservative.
+ *
+ * Page count is handled separately by the frontend's
+ * 1,000-page PDF scanner.
+ */
 
 const upload =
   multer({
@@ -452,25 +570,26 @@ const upload =
 
 
 /* ============================================================
-   EXPRESS CONFIGURATION
+   7. EXPRESS CONFIGURATION
    ============================================================ */
 
 app.use(
   express.json({
-    limit: "8mb"
+    limit: "10mb"
   })
 );
+
 
 app.use(
   express.urlencoded({
     extended: true,
-    limit: "8mb"
+    limit: "10mb"
   })
 );
 
 
 /* ============================================================
-   BASIC AUTH
+   8. BASIC AUTH
    ============================================================ */
 
 function basicAuth(
@@ -480,7 +599,7 @@ function basicAuth(
 ) {
 
   /*
-   * Render health check stays public.
+   * Render needs an unauthenticated health check.
    */
 
   if (
@@ -503,7 +622,8 @@ function basicAuth(
 
 
   const raw =
-    req.headers.authorization || "";
+    req.headers.authorization ||
+    "";
 
 
   const [
@@ -536,19 +656,25 @@ function basicAuth(
 
 
       const username =
+
         separator >= 0
+
           ? decoded.slice(
               0,
               separator
             )
+
           : decoded;
 
 
       const password =
+
         separator >= 0
+
           ? decoded.slice(
               separator + 1
             )
+
           : "";
 
 
@@ -570,7 +696,9 @@ function basicAuth(
 
     catch {
 
-      /* Continue to auth challenge */
+      /*
+       * Fall through to challenge.
+       */
 
     }
 
@@ -598,7 +726,7 @@ app.use(
 
 
 /* ============================================================
-   STATIC WEBSITE
+   9. STATIC WEBSITE
    ============================================================ */
 
 app.use(
@@ -609,12 +737,15 @@ app.use(
 
 
 /* ============================================================
-   HOMEPAGE
+   10. HOMEPAGE
    ============================================================ */
 
 app.get(
   "/",
-  (req, res) => {
+  (
+    req,
+    res
+  ) => {
 
     res.sendFile(
       path.join(
@@ -628,12 +759,15 @@ app.get(
 
 
 /* ============================================================
-   RENDER HEALTH CHECK
+   11. RENDER HEALTH CHECK
    ============================================================ */
 
 app.get(
   "/healthz",
-  (req, res) => {
+  (
+    req,
+    res
+  ) => {
 
     res
       .status(200)
@@ -644,11 +778,12 @@ app.get(
 
 
 /* ============================================================
-   FINSIGHT HEALTH CHECK
+   12. FINSIGHT HEALTH
    ============================================================ */
 
 app.get(
   "/api/health",
+
   async (
     req,
     res
@@ -665,6 +800,7 @@ app.get(
         await dbQuery(
           "SELECT 1"
         );
+
 
         databaseReady =
           true;
@@ -687,7 +823,8 @@ app.get(
 
     res.json({
 
-      ok: true,
+      ok:
+        true,
 
       aiConfigured:
         Boolean(
@@ -719,7 +856,13 @@ app.get(
         Boolean(
           FINSIGHT_USERNAME &&
           FINSIGHT_PASSWORD
-        )
+        ),
+
+      multiReportAnalysis:
+        true,
+
+      maxLocalPdfPages:
+        1000
 
     });
 
@@ -728,7 +871,7 @@ app.get(
 
 
 /* ============================================================
-   GENERIC JSON FETCH
+   13. FETCH JSON HELPER
    ============================================================ */
 
 async function fetchJSON(
@@ -743,12 +886,34 @@ async function fetchJSON(
     );
 
 
-  const body =
-    await response
-      .json()
-      .catch(
-        () => ({})
-      );
+  const text =
+    await response.text();
+
+
+  let body = {};
+
+
+  if (text) {
+
+    try {
+
+      body =
+        JSON.parse(
+          text
+        );
+
+    }
+
+    catch {
+
+      body = {
+        raw:
+          text
+      };
+
+    }
+
+  }
 
 
   if (
@@ -765,6 +930,10 @@ async function fetchJSON(
 
       ||
 
+      body?.raw
+
+      ||
+
       `HTTP ${response.status}`
 
     );
@@ -778,7 +947,7 @@ async function fetchJSON(
 
 
 /* ============================================================
-   GEMINI SYSTEM INSTRUCTIONS
+   14. GEMINI SYSTEM INSTRUCTIONS
    ============================================================ */
 
 const analystInstructions = `
@@ -803,6 +972,7 @@ Never invent:
 - management statements
 - share prices
 - valuation multiples
+- auditor observations
 
 If information is unavailable, clearly say so.
 
@@ -820,15 +990,23 @@ You may assess:
 - cash quality
 - valuation
 
-when the supplied evidence supports the assessment.
+only when the supplied evidence supports the assessment.
 
-Be analytical, clear and concise.
+When multiple annual reports are supplied in one PDF:
+
+- treat each reporting year separately first
+- do not mix years
+- do not mix standalone and consolidated figures
+- prefer consolidated figures for group-level analysis
+- then perform longitudinal trend analysis
+
+Be analytical, evidence-driven and concise.
 
 `;
 
 
 /* ============================================================
-   GEMINI RESPONSE TEXT HELPER
+   15. GEMINI RESPONSE HELPER
    ============================================================ */
 
 function extractGeminiText(
@@ -850,7 +1028,8 @@ function extractGeminiText(
 
     .map(
       part =>
-        part.text || ""
+        part.text ||
+        ""
     )
 
     .join("\n")
@@ -861,7 +1040,7 @@ function extractGeminiText(
 
 
 /* ============================================================
-   GEMINI REQUEST
+   16. GEMINI REQUEST
    ============================================================ */
 
 async function geminiGenerate(
@@ -924,6 +1103,9 @@ async function geminiGenerate(
       json
 
         ? {
+
+            temperature:
+              0.15,
 
             responseMimeType:
               "application/json"
@@ -998,12 +1180,31 @@ async function geminiGenerate(
 
 
 /* ============================================================
-   SAFE JSON
+   17. SAFE JSON
    ============================================================ */
 
 function safeJSON(
   text
 ) {
+
+  if (
+    !text
+  ) {
+
+    return null;
+
+  }
+
+
+  if (
+    typeof text ===
+    "object"
+  ) {
+
+    return text;
+
+  }
+
 
   try {
 
@@ -1023,9 +1224,8 @@ function safeJSON(
 
 
 /* ============================================================
-   ANNUAL REPORT AI
-   FRONTEND:
-   /api/ai/analyze-report
+   18. ANNUAL REPORT AI
+   MULTI-REPORT ENABLED
    ============================================================ */
 
 app.post(
@@ -1074,29 +1274,36 @@ app.post(
       }
 
 
-      if (
-        req.file.mimetype !==
+      const isPdf =
+
+        req.file.mimetype ===
           "application/pdf"
 
-        &&
+        ||
 
-        !req.file
+        req.file
           .originalname
           .toLowerCase()
-          .endsWith(".pdf")
-      ) {
+          .endsWith(".pdf");
+
+
+      if (!isPdf) {
 
         return res
           .status(400)
           .json({
 
             error:
-              "Annual-report AI currently accepts PDF files."
+              "Annual Report AI currently accepts PDF files."
 
           });
 
       }
 
+
+      /* ------------------------------------------------------
+         FINANCIAL CONTEXT
+         ------------------------------------------------------ */
 
       const metrics =
 
@@ -1109,43 +1316,440 @@ app.post(
           : null;
 
 
+      /* ------------------------------------------------------
+         MULTI-REPORT CONTEXT
+         ------------------------------------------------------ */
+
+      const pdfContext =
+
+        req.body.pdfContext
+
+          ? safeJSON(
+              req.body.pdfContext
+            )
+
+          : null;
+
+
+      const detectedReports =
+
+        Array.isArray(
+          pdfContext?.reports
+        )
+
+          ? pdfContext.reports
+
+          : [];
+
+
+      const isMultiReport =
+        detectedReports.length >
+        1;
+
+
+      console.log(
+
+        `FinSight annual-report analysis: ${
+
+          isMultiReport
+
+            ? `${detectedReports.length} reports detected`
+
+            : "single report"
+
+        }`
+
+      );
+
+
+      /* ------------------------------------------------------
+         PROMPT
+         ------------------------------------------------------ */
+
       const prompt = `
 
-Analyze the attached annual report as an investor due-diligence document.
+You are FinSight AI, an evidence-first equity research analyst.
 
-Investigate:
+You are analyzing an annual-report PDF supplied by an investor.
+
+The PDF may contain ONE annual report or MULTIPLE annual reports
+from the same company covering different financial years.
+
+
+============================================================
+DOCUMENT STRUCTURE DETECTED BY FINSIGHT
+============================================================
+
+${JSON.stringify(
+  pdfContext || {},
+  null,
+  2
+)}
+
+
+============================================================
+MULTI-REPORT INSTRUCTIONS
+============================================================
+
+${
+  isMultiReport
+
+    ?
+
+`FinSight detected ${detectedReports.length} annual reports in this PDF.
+
+Detected reporting periods:
+
+${detectedReports
+  .map(
+    report =>
+      `${report.label}: approximately PDF pages ${report.startPage}-${report.endPage}`
+  )
+  .join("\n")}
+
+Treat these as SEPARATE annual reports first.
+
+Do not mix financial figures from different financial years.
+
+Do not mix standalone and consolidated financial figures.
+
+Analyze each financial year independently.
+
+After completing the individual-year analysis,
+perform a longitudinal comparison across all supplied years.`
+
+    :
+
+`FinSight detected one annual-report period.
+
+Analyze the supplied annual report normally.`
+}
+
+
+============================================================
+SOURCE PRIORITY
+============================================================
+
+For group-level investor analysis:
+
+Prefer CONSOLIDATED financial statements when consolidated
+financial statements are available.
+
+Use standalone statements when:
+
+- consolidated data is unavailable, or
+- the standalone figure itself is analytically relevant.
+
+Always identify whether important financial figures are:
+
+CONSOLIDATED
+
+or
+
+STANDALONE.
+
+
+============================================================
+ANALYZE EACH FINANCIAL YEAR
+============================================================
+
+For every detected financial year investigate:
+
+
+BUSINESS
 
 - business model
-- products/services
-- segments
+- how the company makes money
+- major products
+- major services
+- business segments
 - geographic exposure
-- revenue trajectory
-- margins
-- profitability
-- ROE/ROCE
+- customer concentration where disclosed
+- competitive advantages
+- industry conditions
+
+
+GROWTH
+
+- revenue
+- revenue growth
+- customer/subscriber growth
+- segment growth
+- new businesses
+- new products
+- international expansion
+- acquisitions
+
+
+PROFITABILITY
+
+- EBITDA
+- EBITDA margin
+- operating profit
+- operating margin
+- net income
+- net margin
+- ROE
+- ROCE
+
+
+CASH QUALITY
+
 - operating cash flow
+- profit versus operating cash flow
 - cash conversion
-- working capital
+- capital expenditure
+- free-cash-flow implications when evidence permits
+
+
+WORKING CAPITAL
+
 - receivables
+- receivable days where calculable
 - inventory
-- debt
+- inventory days where calculable
+- payables
+- working-capital movements
+
+
+BALANCE SHEET
+
+- total assets
+- equity
+- borrowings
+- debt changes
+- net debt where calculable
+- finance costs
 - interest coverage
+- liquidity
+
+
+CAPITAL ALLOCATION
+
 - capital expenditure
 - acquisitions
-- management strategy
-- management guidance
-- auditor observations
-- key audit matters
-- contingent liabilities
+- disposals
+- dividends
+- buybacks
+- debt repayment
+- investments
+
+
+MANAGEMENT
+
+- strategy
+- guidance
+- targets
+- promises
+- expansion plans
+- technology plans
+- capital allocation commentary
+
+
+GOVERNANCE
+
+- board changes
 - related-party transactions
-- governance
-- capital allocation
-- growth drivers
-- major risks
+- promoter relationships
+- parent-company relationships
+- governance observations
+- whistleblower disclosures where material
 
-Use page references only when clearly visible and reliable.
 
-FinSight calculated financial context:
+AUDITOR
+
+- audit opinion
+- qualifications
+- reservations
+- adverse remarks
+- disclaimers
+- key audit matters
+- internal-control observations
+- audit-trail observations
+
+
+RISKS
+
+- business risks
+- competitive risks
+- regulatory risks
+- technology risks
+- leverage risks
+- customer concentration
+- cybersecurity
+- litigation
+- contingent liabilities
+- related-party exposure
+
+
+============================================================
+CROSS-YEAR ANALYSIS
+============================================================
+
+When multiple annual reports are supplied,
+compare all reporting periods.
+
+Explicitly analyze:
+
+1. Revenue trend
+
+2. EBITDA trend
+
+3. Profit trend
+
+4. Operating-margin trend
+
+5. EBITDA-margin trend
+
+6. Cash-flow trend
+
+7. Cash-conversion trend
+
+8. Borrowing/debt trend
+
+9. Finance-cost trend
+
+10. Working-capital trend
+
+11. Receivable trend
+
+12. Inventory trend
+
+13. ROE trend
+
+14. ROCE trend
+
+15. Capital-expenditure trend
+
+16. Capital-allocation changes
+
+17. Segment changes
+
+18. New businesses
+
+19. Businesses exited or sold
+
+20. Acquisition activity
+
+21. Auditor-observation changes
+
+22. Governance changes
+
+23. Related-party transaction changes
+
+24. Contingent-liability changes
+
+25. Risk-factor changes
+
+
+============================================================
+MANAGEMENT PROMISE TRACKER
+============================================================
+
+Search earlier annual reports for forward-looking management:
+
+- statements
+- targets
+- plans
+- strategic commitments
+- customer targets
+- subscriber targets
+- margin targets
+- debt reduction
+- expansion plans
+- technology deployment
+- product launches
+- capital expenditure
+- acquisitions
+- international expansion
+
+Then search later annual reports for evidence of execution.
+
+Classify each supported promise as:
+
+ACHIEVED
+
+PARTIALLY ACHIEVED
+
+PENDING
+
+CHANGED
+
+NOT VERIFIABLE
+
+
+Do not classify a promise as achieved unless later evidence
+supports the conclusion.
+
+
+============================================================
+CHANGE DETECTION
+============================================================
+
+Identify:
+
+NEW RISKS
+
+RISKS THAT INCREASED
+
+RISKS THAT REDUCED
+
+RISKS THAT DISAPPEARED
+
+NEW GROWTH DRIVERS
+
+NEW DEBT OR FINANCING PRESSURES
+
+NEW RELATED-PARTY EXPOSURES
+
+NEW AUDITOR CONCERNS
+
+IMPROVED AUDITOR OR CONTROL OBSERVATIONS
+
+MANAGEMENT STRATEGY CHANGES
+
+
+============================================================
+EVIDENCE RULES
+============================================================
+
+Every material conclusion should be identifiable as:
+
+REPORTED FACT
+
+CALCULATED METRIC
+
+MANAGEMENT CLAIM
+
+AI INTERPRETATION
+
+
+Never invent:
+
+- financial values
+- page numbers
+- management statements
+- risks
+- market share
+- auditor findings
+- valuation multiples
+
+
+If information is missing say:
+
+"Not found in supplied report."
+
+
+A financial anomaly is NOT proof of fraud.
+
+Describe anomalies as matters requiring investor investigation.
+
+Do not issue personalized buy/sell instructions.
+
+
+============================================================
+FINSIGHT CALCULATED CONTEXT
+============================================================
 
 ${JSON.stringify(
   metrics || {},
@@ -1153,40 +1757,147 @@ ${JSON.stringify(
   2
 )}
 
-Return ONLY valid JSON using exactly this structure:
+
+============================================================
+REQUIRED JSON OUTPUT
+============================================================
+
+Return ONLY valid JSON.
+
+Use this structure:
 
 {
   "company": "",
+
+  "report_type": "single|multi",
+
+  "financial_years": [],
+
   "overall_view": "",
-  "confidence": "High",
+
+  "confidence": "High|Medium|Low",
+
+  "yearly_analysis": [
+    {
+      "financial_year": "",
+
+      "statement_basis": "Consolidated|Standalone|Mixed",
+
+      "business_summary": "",
+
+      "financial_summary": {
+        "revenue": null,
+        "ebitda": null,
+        "net_income": null,
+        "operating_cash_flow": null,
+        "total_debt": null
+      },
+
+      "good": [],
+
+      "bad": [],
+
+      "watch": [],
+
+      "risks": [],
+
+      "management": "",
+
+      "governance": "",
+
+      "auditor": "",
+
+      "capital_allocation": ""
+    }
+  ],
+
+  "trend_analysis": {
+    "revenue": "",
+    "ebitda": "",
+    "profit": "",
+    "margins": "",
+    "cash_flow": "",
+    "cash_conversion": "",
+    "debt": "",
+    "finance_cost": "",
+    "working_capital": "",
+    "receivables": "",
+    "inventory": "",
+    "returns": "",
+    "capital_expenditure": "",
+    "capital_allocation": ""
+  },
+
+  "management_promise_tracker": [
+    {
+      "promise": "",
+      "made_in_year": "",
+      "later_evidence": "",
+      "status": "Achieved|Partially achieved|Pending|Changed|Not verifiable"
+    }
+  ],
+
+  "changes": {
+    "new_risks": [],
+    "increased_risks": [],
+    "reduced_risks": [],
+    "resolved_risks": [],
+    "new_growth_drivers": [],
+    "strategy_changes": [],
+    "auditor_changes": [],
+    "governance_changes": []
+  },
+
   "good": [],
+
   "bad": [],
+
   "watch": [],
+
   "red_flags": [],
+
   "growth_drivers": [],
+
   "management_assessment": "",
+
   "governance_assessment": "",
+
   "auditor_assessment": "",
+
   "cash_quality_assessment": "",
+
   "investor_questions": [],
+
   "missing_information": []
 }
 
-Every item inside good, bad, watch, red_flags and growth_drivers must be:
+
+Every object inside:
+
+good,
+bad,
+watch,
+red_flags,
+growth_drivers
+
+must use:
 
 {
   "title": "",
   "explanation": "",
   "evidence": [],
-  "priority": "High"
+  "priority": "High|Medium|Low"
 }
 
-Priority must be High, Medium or Low.
 
-Do not invent evidence.
+Return valid JSON only.
 
 `;
 
+
+      /* ------------------------------------------------------
+         GEMINI
+         ------------------------------------------------------ */
 
       const text =
         await geminiGenerate(
@@ -1219,7 +1930,8 @@ Do not invent evidence.
           ],
 
           {
-            json: true
+            json:
+              true
           }
 
         );
@@ -1231,9 +1943,7 @@ Do not invent evidence.
         );
 
 
-      if (
-        !analysis
-      ) {
+      if (!analysis) {
 
         throw new Error(
           "Gemini returned an unreadable structured response."
@@ -1242,17 +1952,15 @@ Do not invent evidence.
       }
 
 
-      /*
-       * Optional persistence
-       */
+      /* ------------------------------------------------------
+         DATABASE PERSISTENCE
+         ------------------------------------------------------ */
 
       let persisted =
         null;
 
 
-      if (
-        pool
-      ) {
+      if (pool) {
 
         try {
 
@@ -1299,6 +2007,43 @@ Do not invent evidence.
             );
 
 
+          const newestYear =
+
+            Array.isArray(
+              analysis.financial_years
+            )
+
+              ? Math.max(
+
+                  ...analysis
+                    .financial_years
+                    .map(
+                      value => {
+
+                        const match =
+                          String(value)
+                            .match(
+                              /20\d{2}/g
+                            );
+
+                        if (!match) {
+                          return 0;
+                        }
+
+                        return Math.max(
+                          ...match.map(
+                            Number
+                          )
+                        );
+
+                      }
+                    )
+
+                )
+
+              : null;
+
+
           const query =
             await dbQuery(
               `
@@ -1332,17 +2077,21 @@ Do not invent evidence.
                 req.file
                   .originalname,
 
-                req.body
-                  .reportYear
+                Number.isFinite(
+                  newestYear
+                ) &&
+                newestYear > 0
 
-                  ? Number(
-                      req.body
-                        .reportYear
-                    )
+                  ? newestYear
 
                   : null,
 
-                metrics || {},
+                {
+                  ...(metrics || {}),
+
+                  pdfContext:
+                    pdfContext || null
+                },
 
                 analysis,
 
@@ -1365,6 +2114,97 @@ Do not invent evidence.
 
           };
 
+
+          /*
+           * Save management promises extracted
+           * from multi-year analysis.
+           */
+
+          if (
+            Array.isArray(
+              analysis
+                .management_promise_tracker
+            )
+          ) {
+
+            for (
+              const promise of
+              analysis
+                .management_promise_tracker
+            ) {
+
+              if (
+                !promise?.promise
+              ) {
+                continue;
+              }
+
+
+              try {
+
+                await dbQuery(
+                  `
+                  INSERT INTO management_promises
+                  (
+                    company_id,
+                    report_id,
+                    promise,
+                    status,
+                    evidence
+                  )
+
+                  VALUES
+                  (
+                    $1,
+                    $2,
+                    $3,
+                    $4,
+                    $5
+                  )
+                  `,
+                  [
+                    company.id,
+
+                    query.rows[0].id,
+
+                    promise.promise,
+
+                    promise.status ||
+                    "open",
+
+                    [
+                      {
+                        madeInYear:
+                          promise
+                            .made_in_year ||
+                          null,
+
+                        laterEvidence:
+                          promise
+                            .later_evidence ||
+                          null
+                      }
+                    ]
+                  ]
+                );
+
+              }
+
+              catch (
+                promiseError
+              ) {
+
+                console.error(
+                  "Management promise persistence warning:",
+                  promiseError.message
+                );
+
+              }
+
+            }
+
+          }
+
         }
 
         catch (
@@ -1381,12 +2221,36 @@ Do not invent evidence.
       }
 
 
+      /* ------------------------------------------------------
+         RESPONSE
+         ------------------------------------------------------ */
+
       res.json({
 
         analysis,
 
         model:
           GEMINI_MODEL,
+
+        document: {
+
+          fileName:
+            req.file
+              .originalname,
+
+          size:
+            req.file.size,
+
+          multiReport:
+            isMultiReport,
+
+          detectedReports:
+            detectedReports.length,
+
+          reports:
+            detectedReports
+
+        },
 
         persisted
 
@@ -1399,7 +2263,7 @@ Do not invent evidence.
     ) {
 
       console.error(
-        "Annual report AI:",
+        "Annual Report AI:",
         error
       );
 
@@ -1425,7 +2289,7 @@ Do not invent evidence.
 
 
 /* ============================================================
-   ASK FINSIGHT
+   19. ASK FINSIGHT
    ============================================================ */
 
 app.post(
@@ -1509,6 +2373,9 @@ ${JSON.stringify(
 
 Answer using only the supplied evidence.
 
+If multiple annual reports are represented in the context,
+compare the relevant years when useful.
+
 Clearly distinguish:
 
 - reported facts
@@ -1516,7 +2383,8 @@ Clearly distinguish:
 - management claims
 - AI interpretation
 
-If the supplied evidence cannot answer part of the question, say so.
+If evidence cannot answer part of the question,
+say so.
 
 Do not invent missing information.
 
@@ -1578,7 +2446,7 @@ Do not invent missing information.
 
 
 /* ============================================================
-   AI ANNUAL REPORT COMPARISON
+   20. AI COMPETITOR COMPARISON
    ============================================================ */
 
 app.post(
@@ -1658,7 +2526,18 @@ app.post(
 
       const prompt = `
 
-Compare these two annual reports from a long-term investor's perspective.
+Compare these two annual-report documents from a
+long-term investor's perspective.
+
+Each PDF may itself contain multiple annual reports.
+
+When multiple reporting periods exist:
+
+1. Analyze the latest comparable year.
+2. Analyze multi-year trends.
+3. Do not mix reporting periods.
+4. Prefer consolidated figures for group comparisons.
+5. State where comparisons are not like-for-like.
 
 Compare:
 
@@ -1680,16 +2559,14 @@ Compare:
 - auditor issues
 - capital allocation
 - risks
-- disclosed growth opportunities
 - red flags
+- growth opportunities
 
-Normalize differences in reporting terminology and periods where possible.
+Do not simply declare one company the winner.
 
-Clearly state where comparisons are not like-for-like.
+Explain trade-offs.
 
-Do not choose a stock simply because one metric is higher.
-
-Explain the trade-offs and what the investor should investigate further.
+Do not invent missing information.
 
 `;
 
@@ -1701,7 +2578,7 @@ Explain the trade-offs and what the investor should investigate further.
 
             {
               text:
-                "COMPANY A ANNUAL REPORT"
+                "COMPANY A ANNUAL REPORT DOCUMENT"
             },
 
             {
@@ -1724,7 +2601,7 @@ Explain the trade-offs and what the investor should investigate further.
 
             {
               text:
-                "COMPANY B ANNUAL REPORT"
+                "COMPANY B ANNUAL REPORT DOCUMENT"
             },
 
             {
@@ -1797,9 +2674,7 @@ Explain the trade-offs and what the investor should investigate further.
 
 
 /* ============================================================
-   ALPHA VANTAGE QUOTE
-   FRONTEND:
-   /api/market/:ticker?exchange=NSE
+   21. ALPHA VANTAGE MARKET QUOTE
    ============================================================ */
 
 app.get(
@@ -1852,9 +2727,7 @@ app.get(
         .toUpperCase();
 
 
-      if (
-        !ticker
-      ) {
+      if (!ticker) {
 
         return res
           .status(400)
@@ -1869,11 +2742,12 @@ app.get(
 
 
       /*
-       * Keep symbol logic simple.
+       * Alpha Vantage symbol mapping.
        *
-       * BSE gets .BSE suffix.
+       * BSE symbols often use .BSE.
        *
-       * NSE support varies by Alpha Vantage symbol coverage.
+       * NSE coverage depends on Alpha Vantage's
+       * available symbol mapping.
        */
 
       const symbol =
@@ -2088,8 +2962,7 @@ app.get(
 
 
 /* ============================================================
-   ALPHA VANTAGE HISTORY
-   IMPORTANT: must come after quote behavior is distinguishable.
+   22. ALPHA VANTAGE HISTORY
    ============================================================ */
 
 app.get(
@@ -2119,6 +2992,8 @@ app.get(
           req.params.ticker
         )
 
+        .trim()
+
         .toUpperCase();
 
 
@@ -2128,6 +3003,8 @@ app.get(
           req.query.exchange ||
           "NSE"
         )
+
+        .trim()
 
         .toUpperCase();
 
@@ -2183,9 +3060,7 @@ app.get(
         ];
 
 
-      if (
-        !series
-      ) {
+      if (!series) {
 
         throw new Error(
 
@@ -2299,7 +3174,7 @@ app.get(
 
 
 /* ============================================================
-   AI VALUATION INTERPRETATION
+   23. AI VALUATION INTERPRETATION
    ============================================================ */
 
 app.post(
@@ -2344,9 +3219,10 @@ app.post(
 
       const prompt = `
 
-Assess this company's valuation for educational investor research.
+Assess this company's valuation for educational
+investor research.
 
-Do NOT invent missing values.
+Do not invent missing values.
 
 Separate:
 
@@ -2390,13 +3266,14 @@ ${JSON.stringify(
 )}
 
 
-VALUATION CALCULATIONS:
+VALUATION:
 
 ${JSON.stringify(
   valuation || {},
   null,
   2
 )}
+
 
 Explain what assumptions could make the conclusion wrong.
 
@@ -2458,7 +3335,7 @@ Explain what assumptions could make the conclusion wrong.
 
 
 /* ============================================================
-   DCF
+   24. DCF
    ============================================================ */
 
 app.post(
@@ -2503,7 +3380,7 @@ app.post(
 
 
 /* ============================================================
-   REVERSE DCF
+   25. REVERSE DCF
    ============================================================ */
 
 app.post(
@@ -2548,7 +3425,7 @@ app.post(
 
 
 /* ============================================================
-   SAVE THESIS
+   26. SAVE THESIS
    ============================================================ */
 
 app.post(
@@ -2561,9 +3438,7 @@ app.post(
 
     try {
 
-      if (
-        !pool
-      ) {
+      if (!pool) {
 
         return res
           .status(503)
@@ -2706,7 +3581,7 @@ app.post(
 
 
 /* ============================================================
-   LOAD RESEARCH MEMORY
+   27. LOAD RESEARCH MEMORY
    ============================================================ */
 
 app.get(
@@ -2719,9 +3594,7 @@ app.get(
 
     try {
 
-      if (
-        !pool
-      ) {
+      if (!pool) {
 
         return res
           .status(503)
@@ -2741,6 +3614,8 @@ app.get(
           req.params.ticker
         )
 
+        .trim()
+
         .toUpperCase();
 
 
@@ -2750,6 +3625,8 @@ app.get(
           req.query.exchange ||
           "NSE"
         )
+
+        .trim()
 
         .toUpperCase();
 
@@ -2928,7 +3805,7 @@ app.get(
 
 
 /* ============================================================
-   SAVE VALUATION SNAPSHOT
+   28. SAVE VALUATION SNAPSHOT
    ============================================================ */
 
 app.post(
@@ -2941,9 +3818,7 @@ app.post(
 
     try {
 
-      if (
-        !pool
-      ) {
+      if (!pool) {
 
         return res
           .status(503)
@@ -3048,6 +3923,12 @@ app.post(
       error
     ) {
 
+      console.error(
+        "Save valuation snapshot:",
+        error
+      );
+
+
       res
         .status(500)
         .json({
@@ -3064,7 +3945,7 @@ app.post(
 
 
 /* ============================================================
-   DATABASE STATUS
+   29. DATABASE STATUS
    ============================================================ */
 
 app.get(
@@ -3075,9 +3956,7 @@ app.get(
     res
   ) => {
 
-    if (
-      !pool
-    ) {
+    if (!pool) {
 
       return res.json({
 
@@ -3151,7 +4030,7 @@ app.get(
 
 
 /* ============================================================
-   404
+   30. 404
    ============================================================ */
 
 app.use(
@@ -3180,7 +4059,7 @@ app.use(
 
 
 /* ============================================================
-   ERROR HANDLER
+   31. ERROR HANDLER
    ============================================================ */
 
 app.use(
@@ -3238,16 +4117,14 @@ app.use(
 
 
 /* ============================================================
-   START FINSIGHT
+   32. START FINSIGHT
    ============================================================ */
 
 async function boot() {
 
   try {
 
-    if (
-      pool
-    ) {
+    if (pool) {
 
       await initDatabase();
 
@@ -3260,7 +4137,8 @@ async function boot() {
   ) {
 
     /*
-     * Don't kill the whole website if Supabase fails.
+     * Database problems should not take down
+     * the whole FinSight website.
      */
 
     console.error(
@@ -3308,6 +4186,16 @@ async function boot() {
             ? "YES"
             : "NO"
         }`
+      );
+
+
+      console.log(
+        "Multi-report annual-report analysis: YES"
+      );
+
+
+      console.log(
+        "Frontend PDF scan limit: 1000 pages"
       );
 
     }
