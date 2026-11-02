@@ -639,10 +639,33 @@ if (
           "metrics",
 
           JSON.stringify(
-            currentContext()
+             currentContext()
           )
-
         );
+         /*
+ * MULTI-REPORT CONTEXT
+ *
+ * If finsight-investor.js detected several annual reports
+ * inside one PDF, send their year/page boundaries and
+ * local disclosure evidence to the secure backend.
+ */
+
+if (
+  window.finSightPDFContext
+) {
+
+  formData.append(
+
+    "pdfContext",
+
+    JSON.stringify(
+      window.finSightPDFContext
+    )
+
+  );
+
+}
+            
 
 
         const identity =
