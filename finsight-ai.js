@@ -1,206 +1,593 @@
 /* ============================================================
-   FINSIGHT AI
-   Gemini AI · Alpha Vantage · Valuation · DCF · Research Memory
+   FINSIGHT AI — FRONTEND AI CONTROLLER
+
+   Handles:
+   - Annual-report AI
+   - Multi-year report context
+   - Ask FinSight
+   - Business/report questions
+   - AI valuation interpretation
+   - Two-company annual-report comparison
+
+   IMPORTANT:
+   Financial extraction itself is initiated by
+   finsight-investor.js through:
+
+   POST /api/ai/extract-financials
    ============================================================ */
 
 
 /* ============================================================
-   1. STATE
+   1. HELPERS
    ============================================================ */
 
-let selectedAIReport = null;
+function aiElement(id) {
 
-let latestAIAnalysis = null;
-
-let latestMarketData = null;
-
-let latestValuationData = null;
-
-
-/* ============================================================
-   2. HELPERS
-   ============================================================ */
-
-const aiEl = id =>
-  document.getElementById(id);
-
-
-function escapeHtml(value) {
-
-  return String(value ?? "")
-    .replace(
-      /[&<>"']/g,
-      character => ({
-        "&": "&amp;",
-        "<": "&lt;",
-        ">": "&gt;",
-        '"': "&quot;",
-        "'": "&#39;"
-      })[character]
-    );
-
-}
-
-
-function formatNumber(
-  value,
-  digits = 2
-) {
-
-  const number =
-    Number(value);
-
-
-  if (
-    !Number.isFinite(number)
-  ) {
-
-    return "N/A";
-
-  }
-
-
-  return number.toLocaleString(
-    "en-IN",
-    {
-      maximumFractionDigits:
-        digits
-    }
+  return document.getElementById(
+    id
   );
 
 }
 
 
-function currentContext() {
+function getResearchContext() {
 
-  try {
+  if (
+    typeof window.finSightGetContext ===
+    "function"
+  ) {
 
-    const analysis =
-      calc(primary);
-
-
-    return {
-
-      company:
-        analysis.l.company,
-
-      latestYear:
-        analysis.l.year,
-
-      latest:
-        analysis.l,
-
-      ratios:
-        analysis.r,
-
-      deterministicSignals:
-        signals(analysis),
-
-      pdfEvidence
-
-    };
+    return window
+      .finSightGetContext();
 
   }
 
-  catch {
-
-    return {};
-
-  }
-
-}
-
-
-function tickerIdentity() {
 
   return {
 
-    ticker:
+    company:
+      null,
 
-      (
-        aiEl("tickerInput")
-          ?.value || ""
-      )
+    financials:
+      [],
 
-      .trim()
+    selectedYear:
+      "all",
 
-      .toUpperCase(),
+    market:
+      null,
 
+    valuation:
+      null,
 
-    exchange:
+    pdfContext:
+      window.finSightPDFContext ||
+      null,
 
-      aiEl("exchangeInput")
-        ?.value || "NSE"
+    aiAnalysis:
+      null
 
   };
 
 }
 
 
+function currentReport() {
+
+  const selected =
+    aiElement(
+      "aiReportFile"
+    )
+      ?.files?.[0];
+
+
+  return (
+
+    selected
+
+    ||
+
+    window.finSightCurrentReportFile
+
+    ||
+
+    null
+
+  );
+
+}
+
+
+function setLoading(
+  element,
+  message
+) {
+
+  if (!element) {
+    return;
+  }
+
+
+  element.classList.add(
+    "loading"
+  );
+
+
+  element.textContent =
+    message;
+
+}
+
+
+function clearLoading(
+  element
+) {
+
+  element
+    ?.classList
+    .remove(
+      "loading"
+    );
+
+}
+
+
+async function readJSONResponse(
+  response
+) {
+
+  const text =
+    await response.text();
+
+
+  let payload;
+
+
+  try {
+
+    payload =
+      text
+        ? JSON.parse(text)
+        : {};
+
+  }
+
+  catch {
+
+    throw new Error(
+      "Server returned an unreadable response."
+    );
+
+  }
+
+
+  if (!response.ok) {
+
+    throw new Error(
+
+      payload?.error
+
+      ||
+
+      payload?.message
+
+      ||
+
+      `Request failed with status ${response.status}.`
+
+    );
+
+  }
+
+
+  return payload;
+
+}
+
+
 /* ============================================================
-   3. AI ANALYSIS RENDERER
+   2. SAFE HTML
    ============================================================ */
 
-function renderAIAnalysis(
+function escapeHTML(value) {
+
+  return String(
+    value ?? ""
+  )
+
+    .replace(
+      /&/g,
+      "&amp;"
+    )
+
+    .replace(
+      /</g,
+      "&lt;"
+    )
+
+    .replace(
+      />/g,
+      "&gt;"
+    )
+
+    .replace(
+      /"/g,
+      "&quot;"
+    )
+
+    .replace(
+      /'/g,
+      "&#039;"
+    );
+
+}
+
+
+/* ============================================================
+   3. GENERAL RENDER HELPERS
+   ============================================================ */
+
+function renderStringList(
+  title,
+  values
+) {
+
+  if (
+    !Array.isArray(values) ||
+    !values.length
+  ) {
+
+    return "";
+
+  }
+
+
+  return `
+
+    <div class="group-title">
+      ${escapeHTML(title)}
+    </div>
+
+    ${
+
+      values
+
+        .map(
+          value => {
+
+            if (
+              typeof value ===
+              "string"
+            ) {
+
+              return `
+
+                <div class="ai-finding">
+                  ${escapeHTML(value)}
+                </div>
+
+              `;
+
+            }
+
+
+            return `
+
+              <div class="ai-finding">
+
+                <b>
+                  ${escapeHTML(
+                    value?.title ||
+                    value?.promise ||
+                    value?.financial_year ||
+                    "Finding"
+                  )}
+                </b>
+
+                ${
+
+                  value?.explanation
+
+                    ? `
+
+                      <div>
+                        ${escapeHTML(
+                          value.explanation
+                        )}
+                      </div>
+
+                    `
+
+                    : ""
+
+                }
+
+                ${
+
+                  value?.later_evidence
+
+                    ? `
+
+                      <small>
+                        Later evidence:
+                        ${escapeHTML(
+                          value.later_evidence
+                        )}
+                      </small>
+
+                    `
+
+                    : ""
+
+                }
+
+                ${
+
+                  value?.status
+
+                    ? `
+
+                      <small>
+                        Status:
+                        ${escapeHTML(
+                          value.status
+                        )}
+                      </small>
+
+                    `
+
+                    : ""
+
+                }
+
+              </div>
+
+            `;
+
+          }
+        )
+
+        .join("")
+
+    }
+
+  `;
+
+}
+
+
+/* ============================================================
+   4. ANNUAL REPORT AI RENDERER
+   ============================================================ */
+
+function renderAnnualReportAnalysis(
   analysis
 ) {
 
-  const group = (
-    title,
-    items
-  ) => {
+  if (!analysis) {
 
-    const content =
+    return (
+      "AI analysis returned no usable content."
+    );
 
-      (items || [])
+  }
+
+
+  if (
+    analysis.raw
+  ) {
+
+    return escapeHTML(
+      analysis.raw
+    );
+
+  }
+
+
+  const years =
+
+    Array.isArray(
+      analysis.financial_years
+    )
+
+      ? analysis
+          .financial_years
+          .join(", ")
+
+      : "";
+
+
+  const yearly =
+
+    Array.isArray(
+      analysis.yearly_analysis
+    )
+
+      ?
+
+      analysis
+        .yearly_analysis
+
+        .map(
+          year => `
+
+            <div class="group-title">
+
+              ${escapeHTML(
+                year.financial_year ||
+                "Financial year"
+              )}
+
+            </div>
+
+
+            <div class="ai-finding">
+
+              <b>
+                Statement basis
+              </b>
+
+              <div>
+                ${escapeHTML(
+                  year.statement_basis ||
+                  "Not specified"
+                )}
+              </div>
+
+            </div>
+
+
+            ${
+
+              year.business_summary
+
+                ? `
+
+                  <div class="ai-finding">
+
+                    <b>
+                      Business
+                    </b>
+
+                    <div>
+                      ${escapeHTML(
+                        year.business_summary
+                      )}
+                    </div>
+
+                  </div>
+
+                `
+
+                : ""
+
+            }
+
+
+            ${
+
+              year.management
+
+                ? `
+
+                  <div class="ai-finding">
+
+                    <b>
+                      Management
+                    </b>
+
+                    <div>
+                      ${escapeHTML(
+                        year.management
+                      )}
+                    </div>
+
+                  </div>
+
+                `
+
+                : ""
+
+            }
+
+
+            ${
+
+              year.governance
+
+                ? `
+
+                  <div class="ai-finding">
+
+                    <b>
+                      Governance
+                    </b>
+
+                    <div>
+                      ${escapeHTML(
+                        year.governance
+                      )}
+                    </div>
+
+                  </div>
+
+                `
+
+                : ""
+
+            }
+
+
+            ${
+
+              year.auditor
+
+                ? `
+
+                  <div class="ai-finding">
+
+                    <b>
+                      Auditor
+                    </b>
+
+                    <div>
+                      ${escapeHTML(
+                        year.auditor
+                      )}
+                    </div>
+
+                  </div>
+
+                `
+
+                : ""
+
+            }
+
+          `
+        )
+
+        .join("")
+
+      :
+
+      "";
+
+
+  const trends =
+    analysis.trend_analysis ||
+    {};
+
+
+  const trendHTML =
+
+    Object.entries(
+      trends
+    )
+
+      .filter(
+        ([, value]) =>
+          value
+      )
 
       .map(
-        item => `
+        ([key, value]) => `
 
           <div class="ai-finding">
 
             <b>
-              ${escapeHtml(
-                item.title
+              ${escapeHTML(
+                key
+                  .replace(
+                    /_/g,
+                    " "
+                  )
               )}
             </b>
 
-            ${
-              item.priority
-
-                ? ` · ${escapeHtml(
-                    item.priority
-                  )}`
-
-                : ""
-            }
-
-            <br>
-
-            ${escapeHtml(
-              item.explanation
-            )}
-
-            <small>
-
-              ${
-                escapeHtml(
-
-                  (
-                    item.evidence ||
-                    []
-                  )
-
-                  .join(" · ")
-
-                  ||
-
-                  "Evidence not specified"
-
-                )
-              }
-
-            </small>
+            <div>
+              ${escapeHTML(value)}
+            </div>
 
           </div>
 
@@ -210,180 +597,236 @@ function renderAIAnalysis(
       .join("");
 
 
-    return `
-
-      <div class="group-title">
-
-        ${title}
-
-      </div>
-
-      ${
-
-        content
-
-        ||
-
-        `<div class="ai-finding">
-           No supported finding.
-         </div>`
-
-      }
-
-    `;
-
-  };
+  const changes =
+    analysis.changes ||
+    {};
 
 
   return `
 
-    <b>
-      ${escapeHtml(
-        analysis.company ||
-        "Company"
-      )}
-    </b>
+    <div class="group-title">
+      Overall investor view
+    </div>
 
-    <br>
+    <div class="ai-finding">
 
-    ${escapeHtml(
-      analysis.overall_view ||
-      "No overall assessment returned."
-    )}
+      <b>
+        ${escapeHTML(
+          analysis.company ||
+          "Company"
+        )}
+      </b>
 
-    <br>
+      <div>
+        ${escapeHTML(
+          analysis.overall_view ||
+          "No overall assessment returned."
+        )}
+      </div>
 
-    <small>
-      Confidence:
-      ${escapeHtml(
-        analysis.confidence ||
-        "Not specified"
-      )}
-    </small>
+      <small>
+
+        ${
+          years
+            ? `Reporting periods: ${escapeHTML(years)} · `
+            : ""
+        }
+
+        Confidence:
+        ${escapeHTML(
+          analysis.confidence ||
+          "Not specified"
+        )}
+
+      </small>
+
+    </div>
 
 
-    ${group(
-      "GOOD",
+    ${yearly}
+
+
+    ${
+
+      trendHTML
+
+        ? `
+
+          <div class="group-title">
+            Cross-year trends
+          </div>
+
+          ${trendHTML}
+
+        `
+
+        : ""
+
+    }
+
+
+    ${renderStringList(
+      "Good",
       analysis.good
     )}
 
 
-    ${group(
-      "BAD",
+    ${renderStringList(
+      "Bad",
       analysis.bad
     )}
 
 
-    ${group(
-      "WATCH",
+    ${renderStringList(
+      "Watch",
       analysis.watch
     )}
 
 
-    ${group(
-      "RED FLAGS / INVESTIGATE",
+    ${renderStringList(
+      "Potential red flags",
       analysis.red_flags
     )}
 
 
-    ${group(
-      "GROWTH DRIVERS",
+    ${renderStringList(
+      "Growth drivers",
       analysis.growth_drivers
     )}
 
 
-    <div class="group-title">
-      MANAGEMENT
-    </div>
-
-    ${escapeHtml(
-      analysis.management_assessment ||
-      "No supported management assessment."
+    ${renderStringList(
+      "Management promise tracker",
+      analysis.management_promise_tracker
     )}
 
 
-    <div class="group-title">
-      GOVERNANCE
-    </div>
-
-    ${escapeHtml(
-      analysis.governance_assessment ||
-      "No supported governance assessment."
+    ${renderStringList(
+      "New risks",
+      changes.new_risks
     )}
 
 
-    <div class="group-title">
-      AUDITOR
-    </div>
-
-    ${escapeHtml(
-      analysis.auditor_assessment ||
-      "No supported auditor assessment."
+    ${renderStringList(
+      "Increased risks",
+      changes.increased_risks
     )}
 
 
-    <div class="group-title">
-      CASH QUALITY
-    </div>
-
-    ${escapeHtml(
-      analysis.cash_quality_assessment ||
-      "No supported cash-quality assessment."
+    ${renderStringList(
+      "Reduced risks",
+      changes.reduced_risks
     )}
 
 
-    <div class="group-title">
-      QUESTIONS BEFORE INVESTING
-    </div>
+    ${renderStringList(
+      "Resolved risks",
+      changes.resolved_risks
+    )}
+
 
     ${
-      (
-        analysis
-          .investor_questions ||
-        []
-      )
 
-      .map(
-        question =>
+      analysis.management_assessment
 
-          `• ${escapeHtml(
-            question
-          )}`
-      )
+        ? `
 
-      .join("<br>")
+          <div class="group-title">
+            Management assessment
+          </div>
 
-      ||
+          <div class="ai-finding">
+            ${escapeHTML(
+              analysis.management_assessment
+            )}
+          </div>
 
-      "No additional questions returned."
+        `
+
+        : ""
+
     }
 
 
-    <div class="group-title">
-      MISSING / NEEDS VERIFICATION
-    </div>
+    ${
+
+      analysis.governance_assessment
+
+        ? `
+
+          <div class="group-title">
+            Governance assessment
+          </div>
+
+          <div class="ai-finding">
+            ${escapeHTML(
+              analysis.governance_assessment
+            )}
+          </div>
+
+        `
+
+        : ""
+
+    }
+
 
     ${
-      (
-        analysis
-          .missing_information ||
-        []
-      )
 
-      .map(
-        item =>
+      analysis.auditor_assessment
 
-          `• ${escapeHtml(
-            item
-          )}`
-      )
+        ? `
 
-      .join("<br>")
+          <div class="group-title">
+            Auditor assessment
+          </div>
 
-      ||
+          <div class="ai-finding">
+            ${escapeHTML(
+              analysis.auditor_assessment
+            )}
+          </div>
 
-      "No missing information identified."
+        `
+
+        : ""
+
     }
+
+
+    ${
+
+      analysis.cash_quality_assessment
+
+        ? `
+
+          <div class="group-title">
+            Cash quality
+          </div>
+
+          <div class="ai-finding">
+            ${escapeHTML(
+              analysis.cash_quality_assessment
+            )}
+          </div>
+
+        `
+
+        : ""
+
+    }
+
+
+    ${renderStringList(
+      "Questions investors should investigate",
+      analysis.investor_questions
+    )}
+
+
+    ${renderStringList(
+      "Missing information",
+      analysis.missing_information
+    )}
 
   `;
 
@@ -391,118 +834,143 @@ function renderAIAnalysis(
 
 
 /* ============================================================
-   4. BACKEND HEALTH CHECK
+   5. ANNUAL REPORT AI REQUEST
    ============================================================ */
 
-async function health() {
+async function runAnnualReportAI(
+  file = currentReport()
+) {
 
-  const status =
-    aiEl("aiStatus");
+  const resultBox =
+    aiElement(
+      "aiReportResult"
+    );
 
 
-  if (
-    !status
-  ) {
+  if (!file) {
 
-    return;
+    if (resultBox) {
+
+      resultBox.textContent =
+        "Upload an annual-report PDF first.";
+
+    }
+
+    return null;
 
   }
 
 
+  setLoading(
+    resultBox,
+    "FinSight AI is analyzing the annual report, management commentary, auditor disclosures, governance and cross-year changes…"
+  );
+
+
   try {
+
+    const context =
+      getResearchContext();
+
+
+    const formData =
+      new FormData();
+
+
+    formData.append(
+      "report",
+      file
+    );
+
+
+    formData.append(
+
+      "metrics",
+
+      JSON.stringify({
+
+        company:
+          context.company,
+
+        financials:
+          context.financials,
+
+        market:
+          context.market,
+
+        valuation:
+          context.valuation
+
+      })
+
+    );
+
+
+    if (
+      context.pdfContext
+    ) {
+
+      formData.append(
+
+        "pdfContext",
+
+        JSON.stringify(
+          context.pdfContext
+        )
+
+      );
+
+    }
+
 
     const response =
       await fetch(
-        "/api/health"
+        "/api/ai/analyze-report",
+        {
+          method:
+            "POST",
+
+          body:
+            formData
+        }
       );
 
 
-    const data =
-      await response.json();
+    const payload =
+      await readJSONResponse(
+        response
+      );
+
+
+    const analysis =
+      payload.analysis ||
+      payload;
 
 
     if (
-      !response.ok
+      typeof window.finSightSetAIAnalysis ===
+      "function"
     ) {
 
-      throw new Error(
-        data.error ||
-        "Health check failed."
-      );
+      window
+        .finSightSetAIAnalysis(
+          analysis
+        );
 
     }
 
 
-    const pieces = [];
+    if (resultBox) {
 
-
-    /* Gemini */
-
-    if (
-      data.aiConfigured
-    ) {
-
-      pieces.push(
-        `AI connected · ${data.model}`
-      );
-
-    }
-
-    else {
-
-      pieces.push(
-        "Gemini key missing"
-      );
+      resultBox.innerHTML =
+        renderAnnualReportAnalysis(
+          analysis
+        );
 
     }
 
 
-    /* Market */
-
-    if (
-      data.marketConfigured
-    ) {
-
-      pieces.push(
-        "Alpha Vantage connected"
-      );
-
-    }
-
-    else {
-
-      pieces.push(
-        "market key missing"
-      );
-
-    }
-
-
-    /* Database */
-
-    if (
-      data.databaseReady
-    ) {
-
-      pieces.push(
-        "research memory connected"
-      );
-
-    }
-
-    else if (
-      data.databaseConfigured
-    ) {
-
-      pieces.push(
-        "database configured but unavailable"
-      );
-
-    }
-
-
-    status.textContent =
-      pieces.join(" · ");
+    return analysis;
 
   }
 
@@ -510,12 +978,28 @@ async function health() {
     error
   ) {
 
-    status.textContent =
-      "FinSight backend not reachable";
-
     console.error(
-      "Health check:",
+      "Annual Report AI:",
       error
+    );
+
+
+    if (resultBox) {
+
+      resultBox.textContent =
+        error.message;
+
+    }
+
+
+    return null;
+
+  }
+
+  finally {
+
+    clearLoading(
+      resultBox
     );
 
   }
@@ -524,2160 +1008,1170 @@ async function health() {
 
 
 /* ============================================================
-   5. ANNUAL REPORT FILE SELECTION
+   6. ANNUAL REPORT BUTTON
    ============================================================ */
 
-const aiReportFile =
-  aiEl("aiReportFile");
+aiElement(
+  "runAIReport"
+)
+  ?.addEventListener(
+    "click",
+    () => {
 
+      runAnnualReportAI();
 
-if (
-  aiReportFile
-) {
-
-  aiReportFile.onchange =
-    event => {
-
-      selectedAIReport =
-
-        event.target
-          .files?.[0]
-
-        || null;
-
-
-      const box =
-        aiEl(
-          "aiReportResult"
-        );
-
-
-      if (
-        !box
-      ) {
-
-        return;
-
-      }
-
-
-      box.textContent =
-
-        selectedAIReport
-
-          ?
-
-          `${selectedAIReport.name} selected. Tap Run AI analysis.`
-
-          :
-
-          "No file selected.";
-
-    };
-
-}
+    }
+  );
 
 
 /* ============================================================
-   6. ANNUAL REPORT AI
+   7. AUTOMATIC AI AFTER REPORT EXTRACTION
    ============================================================ */
-
-const runAIReport =
-  aiEl(
-    "runAIReport"
-  );
-
-
-if (
-  runAIReport
-) {
-
-  runAIReport.onclick =
-    async () => {
-
-      const box =
-        aiEl(
-          "aiReportResult"
-        );
-
-
-      if (
-        !selectedAIReport
-      ) {
-
-        box.textContent =
-          "Choose an annual-report PDF first.";
-
-        return;
-
-      }
-
-
-      box.textContent =
-        "FinSight AI is reading the annual report and cross-checking it against the financial analysis…";
-
-
-      box.classList.add(
-        "loading"
-      );
-
-
-      try {
-
-        const formData =
-          new FormData();
-
-
-        formData.append(
-          "report",
-          selectedAIReport
-        );
-
-
-        formData.append(
-
-          "metrics",
-
-          JSON.stringify(
-             currentContext()
-          )
-        );
-         /*
- * MULTI-REPORT CONTEXT
- *
- * If finsight-investor.js detected several annual reports
- * inside one PDF, send their year/page boundaries and
- * local disclosure evidence to the secure backend.
- */
-
-if (
-  window.finSightPDFContext
-) {
-
-  formData.append(
-
-    "pdfContext",
-
-    JSON.stringify(
-      window.finSightPDFContext
-    )
-
-  );
-
-}
-            
-
-
-        const identity =
-          tickerIdentity();
-
-
-        if (
-          identity.ticker
-        ) {
-
-          formData.append(
-            "ticker",
-            identity.ticker
-          );
-
-
-          formData.append(
-            "exchange",
-            identity.exchange
-          );
-
-        }
-
-
-        const response =
-          await fetch(
-
-            "/api/ai/analyze-report",
-
-            {
-              method: "POST",
-              body: formData
-            }
-
-          );
-
-
-        const data =
-          await response.json();
-
-
-        if (
-          !response.ok
-        ) {
-
-          throw new Error(
-
-            data.error ||
-            "AI annual-report analysis failed."
-
-          );
-
-        }
-
-
-        latestAIAnalysis =
-          data.analysis;
-
-
-        box.innerHTML =
-
-          renderAIAnalysis(
-            data.analysis
-          );
-
-      }
-
-      catch (
-        error
-      ) {
-
-        box.textContent =
-          error.message;
-
-
-        console.error(
-          "Annual report AI:",
-          error
-        );
-
-      }
-
-      finally {
-
-        box.classList.remove(
-          "loading"
-        );
-
-      }
-
-    };
-
-}
-
-
-/* ============================================================
-   7. ASK FINSIGHT
-   ============================================================ */
-
-const askAI =
-  aiEl(
-    "askAI"
-  );
-
-
-if (
-  askAI
-) {
-
-  askAI.onclick =
-    async () => {
-
-      const questionBox =
-        aiEl(
-          "aiQuestion"
-        );
-
-
-      const answerBox =
-        aiEl(
-          "aiAnswer"
-        );
-
-
-      const question =
-
-        questionBox
-          .value
-          .trim();
-
-
-      if (
-        !question
-      ) {
-
-        answerBox.textContent =
-          "Enter a question first.";
-
-        questionBox.focus();
-
-        return;
-
-      }
-
-
-      answerBox.textContent =
-        "FinSight AI is reasoning from the available company evidence…";
-
-
-      answerBox.classList.add(
-        "loading"
-      );
-
-
-      try {
-
-        const response =
-          await fetch(
-
-            "/api/ai/ask",
-
-            {
-
-              method:
-                "POST",
-
-              headers: {
-
-                "Content-Type":
-                  "application/json"
-
-              },
-
-              body:
-                JSON.stringify({
-
-                  question,
-
-                  context:
-                    currentContext(),
-
-                  priorAnalysis:
-                    latestAIAnalysis
-
-                })
-
-            }
-
-          );
-
-
-        const data =
-          await response.json();
-
-
-        if (
-          !response.ok
-        ) {
-
-          throw new Error(
-
-            data.error ||
-            "AI question failed."
-
-          );
-
-        }
-
-
-        answerBox.textContent =
-          data.answer;
-
-      }
-
-      catch (
-        error
-      ) {
-
-        answerBox.textContent =
-          error.message;
-
-
-        console.error(
-          "Ask FinSight:",
-          error
-        );
-
-      }
-
-      finally {
-
-        answerBox
-          .classList
-          .remove(
-            "loading"
-          );
-
-      }
-
-    };
-
-}
-
 
 /*
- * Pressing Enter inside Ask FinSight
- * submits the question.
+ * When finsight-investor.js finishes extracting financials,
+ * automatically run qualitative AI analysis using the same
+ * uploaded annual report.
+ *
+ * This means the investor normally uploads the report ONCE.
  */
 
-const aiQuestion =
-  aiEl(
-    "aiQuestion"
+window.addEventListener(
+
+  "finsight:report-ready",
+
+  event => {
+
+    const file =
+      event.detail?.file;
+
+
+    if (!file) {
+      return;
+    }
+
+
+    runAnnualReportAI(
+      file
+    );
+
+  }
+
+);
+
+
+/* ============================================================
+   8. ASK FINSIGHT ANSWER RENDERER
+   ============================================================ */
+
+function renderAskAnswer(
+  answer
+) {
+
+  if (
+    answer == null
+  ) {
+
+    return (
+      "No answer was returned."
+    );
+
+  }
+
+
+  if (
+    typeof answer ===
+    "string"
+  ) {
+
+    return escapeHTML(
+      answer
+    );
+
+  }
+
+
+  if (
+    answer.raw
+  ) {
+
+    return escapeHTML(
+      answer.raw
+    );
+
+  }
+
+
+  return `
+
+    ${
+
+      answer.answer
+
+        ? `
+
+          <div class="ai-finding">
+
+            ${escapeHTML(
+              answer.answer
+            )}
+
+          </div>
+
+        `
+
+        : ""
+
+    }
+
+
+    ${renderStringList(
+      "Reported facts",
+      answer.reported_facts
+    )}
+
+
+    ${renderStringList(
+      "Calculated metrics",
+      answer.calculated_metrics
+    )}
+
+
+    ${renderStringList(
+      "Management claims",
+      answer.management_claims
+    )}
+
+
+    ${renderStringList(
+      "AI interpretation",
+      answer.ai_interpretation
+    )}
+
+
+    ${renderStringList(
+      "Evidence",
+      answer.evidence
+    )}
+
+
+    ${renderStringList(
+      "Risks / limitations",
+      answer.risks
+    )}
+
+
+    ${renderStringList(
+      "What to investigate next",
+      answer.what_to_investigate_next
+    )}
+
+  `;
+
+}
+
+
+/* ============================================================
+   9. ASK FINSIGHT
+   ============================================================ */
+
+async function askFinSight() {
+
+  const questionInput =
+    aiElement(
+      "aiQuestion"
+    );
+
+
+  const answerBox =
+    aiElement(
+      "aiAnswer"
+    );
+
+
+  const question =
+    questionInput
+      ?.value
+      ?.trim();
+
+
+  if (!question) {
+
+    if (answerBox) {
+
+      answerBox.textContent =
+        "Enter a question about the company or annual report.";
+
+    }
+
+    return;
+
+  }
+
+
+  const context =
+    getResearchContext();
+
+
+  if (
+    !context.company
+  ) {
+
+    if (answerBox) {
+
+      answerBox.textContent =
+        "Upload an annual report first so FinSight has company evidence to answer from.";
+
+    }
+
+    return;
+
+  }
+
+
+  setLoading(
+    answerBox,
+    "Searching the loaded company evidence and preparing an answer…"
   );
 
 
-if (
-  aiQuestion
-) {
+  try {
 
-  aiQuestion.addEventListener(
+    const response =
+      await fetch(
+        "/api/ai/ask",
+        {
+          method:
+            "POST",
 
+          headers: {
+            "Content-Type":
+              "application/json"
+          },
+
+          body:
+            JSON.stringify({
+
+              question,
+
+              company:
+                context.company,
+
+              financials:
+                context.financials,
+
+              market:
+                context.market,
+
+              valuation:
+                context.valuation,
+
+              reportAnalysis:
+                context.aiAnalysis,
+
+              pdfContext:
+                context.pdfContext
+
+            })
+        }
+      );
+
+
+    const payload =
+      await readJSONResponse(
+        response
+      );
+
+
+    const answer =
+      payload.answer ||
+      payload;
+
+
+    if (answerBox) {
+
+      answerBox.innerHTML =
+        renderAskAnswer(
+          answer
+        );
+
+    }
+
+  }
+
+  catch (
+    error
+  ) {
+
+    console.error(
+      "Ask FinSight:",
+      error
+    );
+
+
+    if (answerBox) {
+
+      answerBox.textContent =
+        error.message;
+
+    }
+
+  }
+
+  finally {
+
+    clearLoading(
+      answerBox
+    );
+
+  }
+
+}
+
+
+/* ============================================================
+   10. ASK EVENTS
+   ============================================================ */
+
+aiElement(
+  "askAI"
+)
+  ?.addEventListener(
+    "click",
+    askFinSight
+  );
+
+
+aiElement(
+  "aiQuestion"
+)
+  ?.addEventListener(
     "keydown",
-
     event => {
 
       if (
-        event.key === "Enter" &&
+        event.key ===
+        "Enter"
+
+        &&
+
         !event.shiftKey
       ) {
 
         event.preventDefault();
 
-        askAI?.click();
+        askFinSight();
 
       }
 
     }
-
   );
+
+
+/* ============================================================
+   11. AI VALUATION
+   ============================================================ */
+
+async function runAIValuation() {
+
+  const output =
+    aiElement(
+      "aiValuation"
+    );
+
+
+  const context =
+    getResearchContext();
+
+
+  if (
+    !context.company
+  ) {
+
+    if (output) {
+
+      output.textContent =
+        "Upload an annual report first.";
+
+    }
+
+    return;
+
+  }
+
+
+  if (
+    !context.market
+  ) {
+
+    if (output) {
+
+      const listing =
+        context.company
+          ?.listing_status ||
+        "unknown";
+
+
+      output.textContent =
+
+        `Public-market valuation is unavailable. Listing status: ${listing}. FinSight will not invent a market price or ticker.`;
+
+    }
+
+    return;
+
+  }
+
+
+  setLoading(
+    output,
+    "FinSight AI is interpreting the company's valuation…"
+  );
+
+
+  try {
+
+    const response =
+      await fetch(
+        "/api/ai/valuation",
+        {
+          method:
+            "POST",
+
+          headers: {
+            "Content-Type":
+              "application/json"
+          },
+
+          body:
+            JSON.stringify({
+
+              company:
+                context.company,
+
+              market:
+                context.market,
+
+              fundamentals:
+                context.financials,
+
+              valuation:
+                context.valuation,
+
+              reportAnalysis:
+                context.aiAnalysis
+
+            })
+        }
+      );
+
+
+    const payload =
+      await readJSONResponse(
+        response
+      );
+
+
+    const assessment =
+      payload.assessment ||
+      payload;
+
+
+    if (output) {
+
+      output.innerHTML =
+
+        typeof assessment ===
+        "string"
+
+          ?
+
+          escapeHTML(
+            assessment
+          )
+
+          :
+
+          renderAskAnswer(
+            assessment
+          );
+
+    }
+
+  }
+
+  catch (
+    error
+  ) {
+
+    console.error(
+      "AI valuation:",
+      error
+    );
+
+
+    if (output) {
+
+      output.textContent =
+        error.message;
+
+    }
+
+  }
+
+  finally {
+
+    clearLoading(
+      output
+    );
+
+  }
 
 }
 
 
 /* ============================================================
-   8. AI COMPETITOR COMPARISON
+   12. AUTOMATIC VALUATION EVENT
    ============================================================ */
 
-const runAICompare =
-  aiEl(
-    "runAICompare"
+/*
+ * The investor engine updates the shared research context
+ * after fetching market data.
+ *
+ * Run valuation interpretation shortly after report readiness.
+ * If market data is still being fetched, one retry is allowed.
+ */
+
+window.addEventListener(
+
+  "finsight:report-ready",
+
+  () => {
+
+    window.setTimeout(
+
+      async () => {
+
+        const context =
+          getResearchContext();
+
+
+        if (
+          context.market
+        ) {
+
+          await runAIValuation();
+          return;
+
+        }
+
+
+        /*
+         * One delayed retry.
+         */
+
+        window.setTimeout(
+
+          () => {
+
+            const retryContext =
+              getResearchContext();
+
+
+            if (
+              retryContext.market
+            ) {
+
+              runAIValuation();
+
+            }
+
+            else {
+
+              const output =
+                aiElement(
+                  "aiValuation"
+                );
+
+
+              if (
+                output &&
+                retryContext.company
+              ) {
+
+                const status =
+                  retryContext.company
+                    .listing_status ||
+                  "unknown";
+
+
+                output.textContent =
+
+                  `Automatic market valuation was not run because a verified public market price is unavailable. Listing status: ${status}.`;
+
+              }
+
+            }
+
+          },
+
+          3500
+
+        );
+
+      },
+
+      1800
+
+    );
+
+  }
+
+);
+
+
+/* ============================================================
+   13. COMPETITOR COMPARISON RENDERER
+   ============================================================ */
+
+function renderComparison(
+  comparison
+) {
+
+  if (!comparison) {
+
+    return (
+      "No comparison was returned."
+    );
+
+  }
+
+
+  if (
+    typeof comparison ===
+    "string"
+  ) {
+
+    return escapeHTML(
+      comparison
+    );
+
+  }
+
+
+  if (
+    comparison.raw
+  ) {
+
+    return escapeHTML(
+      comparison.raw
+    );
+
+  }
+
+
+  const sections =
+    [];
+
+
+  if (
+    comparison.summary
+  ) {
+
+    sections.push(`
+
+      <div class="group-title">
+        Investor comparison
+      </div>
+
+      <div class="ai-finding">
+        ${escapeHTML(
+          comparison.summary
+        )}
+      </div>
+
+    `);
+
+  }
+
+
+  const comparisonKeys = [
+
+    [
+      "business_quality",
+      "Business quality"
+    ],
+
+    [
+      "growth",
+      "Growth"
+    ],
+
+    [
+      "profitability",
+      "Profitability"
+    ],
+
+    [
+      "cash_generation",
+      "Cash generation"
+    ],
+
+    [
+      "balance_sheet",
+      "Balance sheet"
+    ],
+
+    [
+      "management",
+      "Management"
+    ],
+
+    [
+      "governance",
+      "Governance"
+    ],
+
+    [
+      "risk",
+      "Risk"
+    ],
+
+    [
+      "valuation",
+      "Valuation"
+    ]
+
+  ];
+
+
+  for (
+    const [
+      key,
+      label
+    ]
+    of comparisonKeys
+  ) {
+
+    const value =
+      comparison[key];
+
+
+    if (!value) {
+      continue;
+    }
+
+
+    if (
+      typeof value ===
+      "string"
+    ) {
+
+      sections.push(`
+
+        <div class="group-title">
+          ${escapeHTML(label)}
+        </div>
+
+        <div class="ai-finding">
+          ${escapeHTML(value)}
+        </div>
+
+      `);
+
+      continue;
+
+    }
+
+
+    sections.push(`
+
+      <div class="group-title">
+        ${escapeHTML(label)}
+      </div>
+
+      <div class="ai-finding">
+
+        ${
+
+          value.company_a
+
+            ? `
+
+              <b>
+                Company A
+              </b>
+
+              <div>
+                ${escapeHTML(
+                  value.company_a
+                )}
+              </div>
+
+            `
+
+            : ""
+
+        }
+
+
+        ${
+
+          value.company_b
+
+            ? `
+
+              <br>
+
+              <b>
+                Company B
+              </b>
+
+              <div>
+                ${escapeHTML(
+                  value.company_b
+                )}
+              </div>
+
+            `
+
+            : ""
+
+        }
+
+
+        ${
+
+          value.edge
+
+            ? `
+
+              <small>
+                Investor trade-off:
+                ${escapeHTML(
+                  value.edge
+                )}
+              </small>
+
+            `
+
+            : ""
+
+        }
+
+      </div>
+
+    `);
+
+  }
+
+
+  sections.push(
+
+    renderStringList(
+      "Company A strengths",
+      comparison.company_a_strengths
+    ),
+
+    renderStringList(
+      "Company A weaknesses",
+      comparison.company_a_weaknesses
+    ),
+
+    renderStringList(
+      "Company B strengths",
+      comparison.company_b_strengths
+    ),
+
+    renderStringList(
+      "Company B weaknesses",
+      comparison.company_b_weaknesses
+    ),
+
+    renderStringList(
+      "Important trade-offs",
+      comparison.important_tradeoffs
+    ),
+
+    renderStringList(
+      "Questions before choosing Company A",
+      comparison.questions_before_choosing_a
+    ),
+
+    renderStringList(
+      "Questions before choosing Company B",
+      comparison.questions_before_choosing_b
+    )
+
   );
 
 
-if (
-  runAICompare
-) {
+  return sections.join("");
 
-  runAICompare.onclick =
-    async () => {
-
-      const reportA =
-
-        aiEl(
-          "aiCompareA"
-        )
-        ?.files?.[0];
+}
 
 
-      const reportB =
+/* ============================================================
+   14. COMPARE TWO REPORTS
+   ============================================================ */
 
-        aiEl(
-          "aiCompareB"
-        )
-        ?.files?.[0];
+async function compareReports() {
+
+  const fileA =
+    aiElement(
+      "aiCompareA"
+    )
+      ?.files?.[0];
 
 
-      const box =
-        aiEl(
+  const fileB =
+    aiElement(
+      "aiCompareB"
+    )
+      ?.files?.[0];
+
+
+  const output =
+    aiElement(
+      "aiCompareResult"
+    );
+
+
+  if (
+    !fileA ||
+    !fileB
+  ) {
+
+    if (output) {
+
+      output.textContent =
+        "Select both company annual-report PDFs.";
+
+    }
+
+    return;
+
+  }
+
+
+  setLoading(
+    output,
+    "FinSight AI is comparing the two companies and their annual-report evidence…"
+  );
+
+
+  try {
+
+    const formData =
+      new FormData();
+
+
+    formData.append(
+      "companyA",
+      fileA
+    );
+
+
+    formData.append(
+      "companyB",
+      fileB
+    );
+
+
+    const response =
+      await fetch(
+        "/api/ai/compare",
+        {
+          method:
+            "POST",
+
+          body:
+            formData
+        }
+      );
+
+
+    const payload =
+      await readJSONResponse(
+        response
+      );
+
+
+    const comparison =
+      payload.comparison ||
+      payload;
+
+
+    if (output) {
+
+      output.innerHTML =
+        renderComparison(
+          comparison
+        );
+
+    }
+
+  }
+
+  catch (
+    error
+  ) {
+
+    console.error(
+      "AI comparison:",
+      error
+    );
+
+
+    if (output) {
+
+      output.textContent =
+        error.message;
+
+    }
+
+  }
+
+  finally {
+
+    clearLoading(
+      output
+    );
+
+  }
+
+}
+
+
+/* ============================================================
+   15. COMPARISON BUTTON
+   ============================================================ */
+
+aiElement(
+  "runAICompare"
+)
+  ?.addEventListener(
+    "click",
+    compareReports
+  );
+
+
+/* ============================================================
+   16. FILE LABEL FEEDBACK
+   ============================================================ */
+
+aiElement(
+  "aiReportFile"
+)
+  ?.addEventListener(
+    "change",
+    event => {
+
+      const file =
+        event.target
+          .files?.[0];
+
+
+      if (!file) {
+        return;
+      }
+
+
+      const output =
+        aiElement(
+          "aiReportResult"
+        );
+
+
+      if (output) {
+
+        output.textContent =
+          `${file.name} selected. Tap Run AI analysis.`;
+
+      }
+
+    }
+  );
+
+
+aiElement(
+  "aiCompareA"
+)
+  ?.addEventListener(
+    "change",
+    event => {
+
+      const file =
+        event.target
+          .files?.[0];
+
+
+      if (!file) {
+        return;
+      }
+
+
+      const output =
+        aiElement(
           "aiCompareResult"
         );
 
 
-      if (
-        !reportA ||
-        !reportB
-      ) {
+      if (output) {
 
-        box.textContent =
-          "Choose both annual-report PDFs first.";
-
-        return;
-
-      }
-
-
-      box.textContent =
-        "FinSight AI is comparing both annual reports…";
-
-
-      box.classList.add(
-        "loading"
-      );
-
-
-      try {
-
-        const formData =
-          new FormData();
-
-
-        formData.append(
-          "companyA",
-          reportA
-        );
-
-
-        formData.append(
-          "companyB",
-          reportB
-        );
-
-
-        const response =
-          await fetch(
-
-            "/api/ai/compare",
-
-            {
-              method: "POST",
-              body: formData
-            }
-
-          );
-
-
-        const data =
-          await response.json();
-
-
-        if (
-          !response.ok
-        ) {
-
-          throw new Error(
-
-            data.error ||
-            "AI comparison failed."
-
-          );
-
-        }
-
-
-        box.textContent =
-          data.comparison;
-
-      }
-
-      catch (
-        error
-      ) {
-
-        box.textContent =
-          error.message;
-
-
-        console.error(
-          "AI comparison:",
-          error
-        );
-
-      }
-
-      finally {
-
-        box
-          .classList
-          .remove(
-            "loading"
-          );
-
-      }
-
-    };
-
-}
-
-
-/* ============================================================
-   9. ALPHA VANTAGE MARKET DATA
-   ============================================================ */
-
-const marketFetch =
-  aiEl(
-    "fetchMarket"
-  );
-
-
-if (
-  marketFetch
-) {
-
-  marketFetch.onclick =
-    async () => {
-
-      const identity =
-        tickerIdentity();
-
-
-      const display =
-        aiEl(
-          "priceDisplay"
-        );
-
-
-      const priceInput =
-        aiEl(
-          "priceInput"
-        );
-
-
-      if (
-        !identity.ticker
-      ) {
-
-        display.textContent =
-          "Set a ticker first";
-
-        /*
-         * Open market-data modal automatically.
-         */
-
-        if (
-          aiEl(
-            "marketModal"
-          )
-        ) {
-
-          aiEl(
-            "marketModal"
-          ).hidden =
-            false;
-
-        }
-
-        return;
-
-      }
-
-
-      display.textContent =
-        `Fetching ${identity.ticker} last available price…`;
-
-
-      marketFetch.disabled =
-        true;
-
-
-      try {
-
-        const response =
-          await fetch(
-
-            `/api/market/${encodeURIComponent(
-              identity.ticker
-            )}?exchange=${encodeURIComponent(
-              identity.exchange
-            )}`
-
-          );
-
-
-        const data =
-          await response.json();
-
-
-        if (
-          !response.ok
-        ) {
-
-          throw new Error(
-
-            data.error ||
-            "Price lookup failed."
-
-          );
-
-        }
-
-
-        latestMarketData =
-          data;
-
-
-        priceInput.value =
-          data.price;
-
-
-        let change = null;
-
-
-        if (
-          Number.isFinite(
-            Number(
-              data.previousClose
-            )
-          )
-
-          &&
-
-          Number(
-            data.previousClose
-          ) !== 0
-        ) {
-
-          change =
-
-            (
-              (
-                Number(
-                  data.price
-                )
-
-                -
-
-                Number(
-                  data.previousClose
-                )
-              )
-
-              /
-
-              Number(
-                data.previousClose
-              )
-            )
-
-            *
-
-            100;
-
-        }
-
-
-        const priceText =
-
-          `₹${formatNumber(
-            data.price,
-            2
-          )}`;
-
-
-        const changeText =
-
-          change === null
-
-            ? ""
-
-            : ` · ${
-                change >= 0
-                  ? "+"
-                  : ""
-              }${change.toFixed(
-                2
-              )}%`;
-
-
-        const providerText =
-
-          data.provider
-
-            ? ` · ${data.provider}`
-
-            : " · Alpha Vantage";
-
-
-        /*
-         * IMPORTANT:
-         * Display Alpha Vantage's actual trading date.
-         */
-
-        const dateText =
-
-          data.asOf
-
-            ? ` · ${data.asOf}`
-
-            : "";
-
-
-        display.textContent =
-
-          priceText
-
-          +
-
-          changeText
-
-          +
-
-          providerText
-
-          +
-
-          dateText;
-
-
-        /*
-         * Add useful tooltip for iPad/desktop.
-         */
-
-        display.title =
-
-          `${identity.ticker} · ${identity.exchange}\n`
-
-          +
-
-          `${
-            data.freshness ||
-            "End-of-day / last available; not live"
-          }`;
-
-
-        /*
-         * Don't call it live.
-         */
-
-        const marketNote =
-          document.querySelector(
-            ".market-note"
-          );
-
-
-        if (
-          marketNote
-        ) {
-
-          marketNote.textContent =
-
-            `Price source: ${
-              data.provider ||
-              "Alpha Vantage"
-            }. `
-
-            +
-
-            `${
-              data.asOf
-                ? `Trading date: ${data.asOf}. `
-                : ""
-            }`
-
-            +
-
-            "Free mode is end-of-day / last available and is not a live trading quote.";
-
-        }
-
-      }
-
-      catch (
-        error
-      ) {
-
-        latestMarketData =
-          null;
-
-
-        display.textContent =
-          `Price unavailable · ${error.message}`;
-
-
-        display.title =
-          "You can still enter the current share price manually.";
-
-
-        console.error(
-          "Alpha Vantage:",
-          error
-        );
-
-      }
-
-      finally {
-
-        marketFetch.disabled =
-          false;
-
-      }
-
-    };
-
-}
-
-
-/* ============================================================
-   10. ENHANCED VALUATION CALCULATION
-   ============================================================ */
-
-/*
- * finsight-investor.js already performs the basic
- * Bear / Base / Bull scenario.
- *
- * This listener runs afterwards and calculates:
- *
- * - EPS
- * - current P/E
- * - preferred P/E
- * - peer P/E
- * - historical P/E
- * - reference value
- * - valuation classification
- */
-
-const originalValueBtn =
-  aiEl(
-    "valueBtn"
-  );
-
-
-if (
-  originalValueBtn
-) {
-
-  originalValueBtn.addEventListener(
-
-    "click",
-
-    () => {
-
-      try {
-
-        const context =
-          currentContext();
-
-
-        const price =
-          Number(
-            aiEl(
-              "priceInput"
-            ).value
-          );
-
-
-        const shares =
-          Number(
-            aiEl(
-              "sharesInput"
-            ).value
-          );
-
-
-        const selectedPe =
-          Number(
-            aiEl(
-              "peInput"
-            ).value
-          );
-
-
-        const peerPeRaw =
-          Number(
-            aiEl(
-              "peerPeInput"
-            )?.value
-          );
-
-
-        const historicalPeRaw =
-          Number(
-            aiEl(
-              "histPeInput"
-            )?.value
-          );
-
-
-        const peerPe =
-
-          peerPeRaw > 0
-
-            ? peerPeRaw
-
-            : null;
-
-
-        const historicalPe =
-
-          historicalPeRaw > 0
-
-            ? historicalPeRaw
-
-            : null;
-
-
-        if (
-          !price ||
-          !shares ||
-          !selectedPe ||
-          !context.latest
-        ) {
-
-          latestValuationData =
-            null;
-
-          return;
-
-        }
-
-
-        const eps =
-
-          Number(
-            context.latest
-              .net_income
-          )
-
-          /
-
-          shares;
-
-
-        if (
-          !Number.isFinite(
-            eps
-          )
-
-          ||
-
-          eps <= 0
-        ) {
-
-          latestValuationData =
-            null;
-
-          return;
-
-        }
-
-
-        const currentPe =
-          price / eps;
-
-
-        const base =
-          eps * selectedPe;
-
-
-        const references = [
-
-          selectedPe,
-
-          peerPe,
-
-          historicalPe
-
-        ]
-
-        .filter(
-          value =>
-            Number.isFinite(
-              value
-            )
-
-            &&
-
-            value > 0
-        );
-
-
-        const referencePe =
-
-          references.reduce(
-            (sum, value) =>
-              sum + value,
-            0
-          )
-
-          /
-
-          references.length;
-
-
-        const referenceValue =
-          eps * referencePe;
-
-
-        const premium =
-
-          (
-            price -
-            referenceValue
-          )
-
-          /
-
-          referenceValue;
-
-
-        let classification;
-
-
-        if (
-          premium <= -0.15
-        ) {
-
-          classification =
-            "Attractive";
-
-        }
-
-        else if (
-          premium < 0.10
-        ) {
-
-          classification =
-            "Fair";
-
-        }
-
-        else if (
-          premium < 0.30
-        ) {
-
-          classification =
-            "Premium";
-
-        }
-
-        else {
-
-          classification =
-            "Expensive";
-
-        }
-
-
-        latestValuationData = {
-
-          price,
-
-          shares,
-
-          eps,
-
-          currentPe,
-
-          selectedPe,
-
-          peerPe,
-
-          historicalMedianPe:
-            historicalPe,
-
-          referencePe,
-
-          referenceValue,
-
-          premium,
-
-          classification,
-
-          bear:
-            base * 0.8,
-
-          base,
-
-          bull:
-            base * 1.2
-
-        };
-
-
-        aiEl(
-          "valuationView"
-        ).textContent =
-
-          `${classification} · ${currentPe.toFixed(
-            1
-          )}× earnings`;
-
-      }
-
-      catch (
-        error
-      ) {
-
-        console.error(
-          "Valuation calculation:",
-          error
-        );
+        output.textContent =
+          `Company A: ${file.name}`;
 
       }
 
     }
-
-  );
-
-}
-
-
-/* ============================================================
-   11. AI VALUATION INTERPRETATION
-   ============================================================ */
-
-const aiValueBtn =
-  aiEl(
-    "aiValueBtn"
   );
 
 
-if (
-  aiValueBtn
-) {
+aiElement(
+  "aiCompareB"
+)
+  ?.addEventListener(
+    "change",
+    event => {
 
-  aiValueBtn.onclick =
-    async () => {
-
-      const box =
-        aiEl(
-          "aiValuation"
-        );
+      const file =
+        event.target
+          .files?.[0];
 
 
-      if (
-        !latestValuationData
-      ) {
-
-        box.textContent =
-          "Run Evaluate price first.";
-
+      if (!file) {
         return;
-
       }
 
 
-      box.textContent =
-        "FinSight AI is separating business quality from price…";
+      const output =
+        aiElement(
+          "aiCompareResult"
+        );
 
 
-      box.classList.add(
-        "loading"
-      );
+      if (output) {
 
+        const current =
+          output.textContent || "";
 
-      try {
 
-        const context =
-          currentContext();
+        output.textContent =
 
-
-        const response =
-          await fetch(
-
-            "/api/ai/valuation",
-
-            {
-
-              method:
-                "POST",
-
-              headers: {
-
-                "Content-Type":
-                  "application/json"
-
-              },
-
-              body:
-                JSON.stringify({
-
-                  company:
-                    context.company,
-
-                  market:
-
-                    latestMarketData
-
-                    ||
-
-                    {
-
-                      price:
-                        latestValuationData.price,
-
-                      source:
-                        "manual"
-
-                    },
-
-                  fundamentals:
-                    context,
-
-                  valuation:
-                    latestValuationData
-
-                })
-
-            }
-
-          );
-
-
-        const data =
-          await response.json();
-
-
-        if (
-          !response.ok
-        ) {
-
-          throw new Error(
-
-            data.error ||
-            "Valuation interpretation failed."
-
-          );
-
-        }
-
-
-        box.textContent =
-          data.assessment;
-
-
-        /*
-         * Save valuation snapshot when database
-         * and ticker are available.
-         */
-
-        const identity =
-          tickerIdentity();
-
-
-        if (
-          identity.ticker
-        ) {
-
-          fetch(
-
-            "/api/valuation/snapshot",
-
-            {
-
-              method:
-                "POST",
-
-              headers: {
-
-                "Content-Type":
-                  "application/json"
-
-              },
-
-              body:
-                JSON.stringify({
-
-                  company:
-                    context.company,
-
-                  ticker:
-                    identity.ticker,
-
-                  exchange:
-                    identity.exchange,
-
-                  market:
-
-                    latestMarketData
-
-                    ||
-
-                    {
-
-                      price:
-                        latestValuationData.price,
-
-                      source:
-                        "manual"
-
-                    },
-
-                  fundamentals:
-                    context,
-
-                  valuation:
-                    latestValuationData,
-
-                  aiAssessment:
-                    data.assessment
-
-                })
-
-            }
-
+          current.includes(
+            "Company A:"
           )
 
-          .catch(
-            () => {}
-          );
+            ?
 
-        }
+            `${current}\nCompany B: ${file.name}`
 
-      }
+            :
 
-      catch (
-        error
-      ) {
-
-        box.textContent =
-          error.message;
-
-
-        console.error(
-          "AI valuation:",
-          error
-        );
+            `Company B: ${file.name}`;
 
       }
 
-      finally {
-
-        box
-          .classList
-          .remove(
-            "loading"
-          );
-
-      }
-
-    };
-
-}
-
-
-/* ============================================================
-   12. DCF PAYLOAD
-   ============================================================ */
-
-function dcfPayload() {
-
-  const context =
-    currentContext();
-
-
-  const shares =
-    Number(
-      aiEl(
-        "sharesInput"
-      )?.value
-    );
-
-
-  const price =
-    Number(
-      aiEl(
-        "priceInput"
-      )?.value
-    );
-
-
-  return {
-
-    revenue:
-      Number(
-        context.latest
-          ?.revenue
-      ),
-
-    ebitMargin:
-
-      Number(
-        aiEl(
-          "dcfMargin"
-        ).value
-      )
-
-      /
-
-      100,
-
-    taxRate:
-      0.25,
-
-    growthRate:
-
-      Number(
-        aiEl(
-          "dcfGrowth"
-        ).value
-      )
-
-      /
-
-      100,
-
-    years:
-      5,
-
-    daPctRevenue:
-      0.03,
-
-    capexPctRevenue:
-      0.05,
-
-    nwcPctRevenue:
-      0.08,
-
-    wacc:
-
-      Number(
-        aiEl(
-          "dcfWacc"
-        ).value
-      )
-
-      /
-
-      100,
-
-    terminalGrowth:
-
-      Number(
-        aiEl(
-          "dcfTerminal"
-        ).value
-      )
-
-      /
-
-      100,
-
-    netDebt:
-
-      Number(
-        aiEl(
-          "dcfNetDebt"
-        ).value
-      )
-
-      || 0,
-
-    shares,
-
-    marketPrice:
-      price
-
-  };
-
-}
-
-
-/* ============================================================
-   13. RUN DCF
-   ============================================================ */
-
-const runDcf =
-  aiEl(
-    "runDcf"
+    }
   );
-
-
-if (
-  runDcf
-) {
-
-  runDcf.onclick =
-    async () => {
-
-      const box =
-        aiEl(
-          "dcfResult"
-        );
-
-
-      box.textContent =
-        "Running deterministic DCF…";
-
-
-      box.classList.add(
-        "loading"
-      );
-
-
-      try {
-
-        const payload =
-          dcfPayload();
-
-
-        if (
-          !payload.revenue ||
-          !payload.shares
-        ) {
-
-          throw new Error(
-            "Load company financials and enter shares outstanding first."
-          );
-
-        }
-
-
-        const response =
-          await fetch(
-
-            "/api/valuation/dcf",
-
-            {
-
-              method:
-                "POST",
-
-              headers: {
-
-                "Content-Type":
-                  "application/json"
-
-              },
-
-              body:
-                JSON.stringify(
-                  payload
-                )
-
-            }
-
-          );
-
-
-        const data =
-          await response.json();
-
-
-        if (
-          !response.ok
-        ) {
-
-          throw new Error(
-
-            data.error ||
-            "DCF failed."
-
-          );
-
-        }
-
-
-        box.textContent =
-
-          `DCF value/share: ₹${formatNumber(
-            data.valuePerShare,
-            2
-          )}\n`
-
-          +
-
-          `Enterprise value: ${formatNumber(
-            data.enterpriseValue,
-            1
-          )}\n`
-
-          +
-
-          `Equity value: ${formatNumber(
-            data.equityValue,
-            1
-          )}\n\n`
-
-          +
-
-          "This is an assumption-driven valuation scenario, not a guaranteed price target.";
-
-      }
-
-      catch (
-        error
-      ) {
-
-        box.textContent =
-          error.message;
-
-
-        console.error(
-          "DCF:",
-          error
-        );
-
-      }
-
-      finally {
-
-        box
-          .classList
-          .remove(
-            "loading"
-          );
-
-      }
-
-    };
-
-}
-
-
-/* ============================================================
-   14. REVERSE DCF
-   ============================================================ */
-
-const runReverseDcf =
-  aiEl(
-    "runReverseDcf"
-  );
-
-
-if (
-  runReverseDcf
-) {
-
-  runReverseDcf.onclick =
-    async () => {
-
-      const box =
-        aiEl(
-          "dcfResult"
-        );
-
-
-      box.textContent =
-        "Solving for the growth rate implied by the current share price…";
-
-
-      box.classList.add(
-        "loading"
-      );
-
-
-      try {
-
-        const payload =
-          dcfPayload();
-
-
-        if (
-          !payload.marketPrice
-        ) {
-
-          throw new Error(
-            "Enter or fetch the current share price first."
-          );
-
-        }
-
-
-        if (
-          !payload.shares
-        ) {
-
-          throw new Error(
-            "Enter shares outstanding first."
-          );
-
-        }
-
-
-        const response =
-          await fetch(
-
-            "/api/valuation/reverse-dcf",
-
-            {
-
-              method:
-                "POST",
-
-              headers: {
-
-                "Content-Type":
-                  "application/json"
-
-              },
-
-              body:
-                JSON.stringify(
-                  payload
-                )
-
-            }
-
-          );
-
-
-        const data =
-          await response.json();
-
-
-        if (
-          !response.ok
-        ) {
-
-          throw new Error(
-
-            data.error ||
-            "Reverse DCF failed."
-
-          );
-
-        }
-
-
-        box.textContent =
-
-          `Current price implies approximately ${(
-            Number(
-              data.impliedGrowthRate
-            ) * 100
-          ).toFixed(1)}% constant annual revenue growth over the forecast period.\n\n`
-
-          +
-
-          `Model value/share: ₹${formatNumber(
-            data.modelValuePerShare,
-            2
-          )}\n\n`
-
-          +
-
-          "This result depends on the supplied margin, reinvestment, WACC and terminal-growth assumptions. Change those assumptions to stress-test market expectations.";
-
-      }
-
-      catch (
-        error
-      ) {
-
-        box.textContent =
-          error.message;
-
-
-        console.error(
-          "Reverse DCF:",
-          error
-        );
-
-      }
-
-      finally {
-
-        box
-          .classList
-          .remove(
-            "loading"
-          );
-
-      }
-
-    };
-
-}
-
-
-/* ============================================================
-   15. SAVE INVESTMENT THESIS
-   ============================================================ */
-
-const saveThesis =
-  aiEl(
-    "saveThesis"
-  );
-
-
-if (
-  saveThesis
-) {
-
-  saveThesis.onclick =
-    async () => {
-
-      const box =
-        aiEl(
-          "memoryResult"
-        );
-
-
-      const identity =
-        tickerIdentity();
-
-
-      const context =
-        currentContext();
-
-
-      const thesis =
-
-        aiEl(
-          "thesisText"
-        )
-        .value
-        .trim();
-
-
-      if (
-        !identity.ticker
-      ) {
-
-        box.textContent =
-          "Set a ticker first using Set market data.";
-
-        return;
-
-      }
-
-
-      if (
-        !thesis
-      ) {
-
-        box.textContent =
-          "Enter an investment thesis before saving.";
-
-        return;
-
-      }
-
-
-      box.textContent =
-        "Saving research thesis…";
-
-
-      try {
-
-        const response =
-          await fetch(
-
-            "/api/thesis",
-
-            {
-
-              method:
-                "POST",
-
-              headers: {
-
-                "Content-Type":
-                  "application/json"
-
-              },
-
-              body:
-                JSON.stringify({
-
-                  company:
-                    context.company,
-
-                  ticker:
-                    identity.ticker,
-
-                  exchange:
-                    identity.exchange,
-
-                  thesis,
-
-                  bullCase:
-
-                    aiEl(
-                      "bullCase"
-                    )
-                    .value,
-
-                  bearCase:
-
-                    aiEl(
-                      "bearCase"
-                    )
-                    .value
-
-                })
-
-            }
-
-          );
-
-
-        const data =
-          await response.json();
-
-
-        if (
-          !response.ok
-        ) {
-
-          throw new Error(
-
-            data.error ||
-            "Save failed."
-
-          );
-
-        }
-
-
-        box.textContent =
-
-          `Saved thesis for ${data.company.ticker}. Research memory is now persistent.`;
-
-      }
-
-      catch (
-        error
-      ) {
-
-        box.textContent =
-          error.message;
-
-
-        console.error(
-          "Save thesis:",
-          error
-        );
-
-      }
-
-    };
-
-}
-
-
-/* ============================================================
-   16. LOAD RESEARCH MEMORY
-   ============================================================ */
-
-const loadMemory =
-  aiEl(
-    "loadMemory"
-  );
-
-
-if (
-  loadMemory
-) {
-
-  loadMemory.onclick =
-    async () => {
-
-      const box =
-        aiEl(
-          "memoryResult"
-        );
-
-
-      const identity =
-        tickerIdentity();
-
-
-      if (
-        !identity.ticker
-      ) {
-
-        box.textContent =
-          "Set a ticker first using Set market data.";
-
-        return;
-
-      }
-
-
-      box.textContent =
-        "Loading saved FinSight research…";
-
-
-      try {
-
-        const response =
-          await fetch(
-
-            `/api/research/${encodeURIComponent(
-              identity.ticker
-            )}?exchange=${encodeURIComponent(
-              identity.exchange
-            )}`
-
-          );
-
-
-        const data =
-          await response.json();
-
-
-        if (
-          !response.ok
-        ) {
-
-          throw new Error(
-
-            data.error ||
-            "Load failed."
-
-          );
-
-        }
-
-
-        const thesis =
-          data.theses?.[0];
-
-
-        if (
-          thesis
-        ) {
-
-          aiEl(
-            "thesisText"
-          ).value =
-            thesis.thesis || "";
-
-
-          aiEl(
-            "bullCase"
-          ).value =
-            thesis.bull_case || "";
-
-
-          aiEl(
-            "bearCase"
-          ).value =
-            thesis.bear_case || "";
-
-        }
-
-
-        box.textContent =
-
-          `Loaded ${data.reports?.length || 0} report analyses, `
-
-          +
-
-          `${data.theses?.length || 0} thesis versions, `
-
-          +
-
-          `${data.valuations?.length || 0} valuation snapshots, `
-
-          +
-
-          `${data.promises?.length || 0} management promises and `
-
-          +
-
-          `${data.events?.length || 0} monitoring events.`;
-
-      }
-
-      catch (
-        error
-      ) {
-
-        box.textContent =
-          error.message;
-
-
-        console.error(
-          "Load memory:",
-          error
-        );
-
-      }
-
-    };
-
-}
-
-
-/* ============================================================
-   17. INITIAL BACKEND CHECK
-   ============================================================ */
-
-health();
