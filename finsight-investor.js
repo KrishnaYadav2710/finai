@@ -1,6 +1,14 @@
-/* ============================================================
+ /* ============================================================
    FINSIGHT AI — CORE INVESTOR ENGINE
-   Financial analysis · scoring · comparison · parsing
+
+   Financial analysis
+   Financial scoring
+   Good / Bad / Watch
+   Excel + CSV parsing
+   Large PDF scanning — up to 1,000 pages
+   Multi-annual-report detection
+   Competitor analysis
+   Valuation
    ============================================================ */
 
 
@@ -27,6 +35,7 @@ const demo = [
     accounts_payable: 88,
     finance_cost: 18
   },
+
   {
     company: "Apex Industries Ltd.",
     year: 2023,
@@ -45,6 +54,7 @@ const demo = [
     accounts_payable: 96,
     finance_cost: 19
   },
+
   {
     company: "Apex Industries Ltd.",
     year: 2024,
@@ -63,6 +73,7 @@ const demo = [
     accounts_payable: 108,
     finance_cost: 20
   },
+
   {
     company: "Apex Industries Ltd.",
     year: 2025,
@@ -84,47 +95,54 @@ const demo = [
 ];
 
 
-const competitorDemo = demo.map((row, index) => ({
-  ...row,
+const competitorDemo =
+  demo.map(
+    (row, index) => ({
+      ...row,
 
-  company: "Beacon Consumer Ltd.",
+      company:
+        "Beacon Consumer Ltd.",
 
-  revenue:
-    row.revenue * (0.91 + index * 0.015),
+      revenue:
+        row.revenue *
+        (0.91 + index * 0.015),
 
-  operating_income:
-    row.operating_income * (1.03 - index * 0.01),
+      operating_income:
+        row.operating_income *
+        (1.03 - index * 0.01),
 
-  net_income:
-    row.net_income * (0.96 + index * 0.005),
+      net_income:
+        row.net_income *
+        (0.96 + index * 0.005),
 
-  total_debt:
-    row.total_debt * 1.22,
+      total_debt:
+        row.total_debt * 1.22,
 
-  total_equity:
-    row.total_equity * 1.04,
+      total_equity:
+        row.total_equity * 1.04,
 
-  operating_cash_flow:
-    row.operating_cash_flow * 1.08,
+      operating_cash_flow:
+        row.operating_cash_flow * 1.08,
 
-  current_assets:
-    row.current_assets * 0.96,
+      current_assets:
+        row.current_assets * 0.96,
 
-  current_liabilities:
-    row.current_liabilities * 1.02,
+      current_liabilities:
+        row.current_liabilities * 1.02,
 
-  inventory:
-    row.inventory * 1.08,
+      inventory:
+        row.inventory * 1.08,
 
-  accounts_receivable:
-    row.accounts_receivable * 0.90,
+      accounts_receivable:
+        row.accounts_receivable * 0.90,
 
-  accounts_payable:
-    row.accounts_payable * 1.03,
+      accounts_payable:
+        row.accounts_payable * 1.03,
 
-  finance_cost:
-    row.finance_cost * 1.25
-}));
+      finance_cost:
+        row.finance_cost * 1.25
+    })
+  );
 
 
 /* ============================================================
@@ -148,54 +166,83 @@ const required = [
 ];
 
 
-let primary = demo;
+let primary =
+  demo;
 
-let competitor = null;
 
-let pdfEvidence = [];
+let competitor =
+  null;
+
+
+let pdfEvidence =
+  [];
+
+
+/*
+ * Shared PDF context.
+ *
+ * finsight-ai.js reads this and sends it to server.js.
+ */
+
+window.finSightPDFContext =
+  null;
 
 
 /* ============================================================
    3. HELPERS
    ============================================================ */
 
-const $ = selector =>
-  document.querySelector(selector);
+const $ =
+  selector =>
+    document.querySelector(
+      selector
+    );
 
 
-const fmt = new Intl.NumberFormat(
-  "en-IN",
-  {
-    maximumFractionDigits: 1
-  }
-);
-
-
-const money = value =>
-  `₹${fmt.format(value)} Cr`;
-
-
-const pct = value =>
-  `${fmt.format(value * 100)}%`;
-
-
-const div = (a, b) =>
-  Number(b)
-    ? Number(a) / Number(b)
-    : 0;
-
-
-const chg = (a, b) =>
-  b
-    ? (a - b) / Math.abs(b)
-    : 0;
-
-
-const clamp = number =>
-  Math.max(
-    0,
-    Math.min(100, number)
+const fmt =
+  new Intl.NumberFormat(
+    "en-IN",
+    {
+      maximumFractionDigits: 1
+    }
   );
+
+
+const money =
+  value =>
+    `₹${fmt.format(value)} Cr`;
+
+
+const pct =
+  value =>
+    `${fmt.format(value * 100)}%`;
+
+
+const div =
+  (a, b) =>
+    Number(b)
+      ? Number(a) /
+        Number(b)
+      : 0;
+
+
+const chg =
+  (a, b) =>
+    b
+      ? (a - b) /
+        Math.abs(b)
+      : 0;
+
+
+const clamp =
+  number =>
+    Math.max(
+      0,
+      Math.min(
+        100,
+        number
+      )
+    );
 
 
 /* ============================================================
@@ -204,21 +251,28 @@ const clamp = number =>
 
 function calc(data) {
 
-  const rows = [...data].sort(
-    (a, b) => a.year - b.year
-  );
+  const rows =
+    [...data].sort(
+      (a, b) =>
+        a.year - b.year
+    );
 
-  const latest = rows.at(-1);
+
+  const latest =
+    rows.at(-1);
+
 
   const prior =
-    rows.at(-2) || latest;
+    rows.at(-2) ||
+    latest;
 
 
-  const average = key =>
-    (
-      Number(latest[key]) +
-      Number(prior[key])
-    ) / 2;
+  const average =
+    key =>
+      (
+        Number(latest[key]) +
+        Number(prior[key])
+      ) / 2;
 
 
   const ratios = {
@@ -226,7 +280,7 @@ function calc(data) {
     gross:
       div(
         latest.revenue -
-        latest.cogs,
+          latest.cogs,
 
         latest.revenue
       ),
@@ -256,7 +310,7 @@ function calc(data) {
     quick:
       div(
         latest.current_assets -
-        latest.inventory,
+          latest.inventory,
 
         latest.current_liabilities
       ),
@@ -287,8 +341,13 @@ function calc(data) {
       div(
         latest.operating_income,
 
-        average("total_assets") -
-        average("current_liabilities")
+        average(
+          "total_assets"
+        ) -
+
+        average(
+          "current_liabilities"
+        )
       ),
 
 
@@ -301,8 +360,9 @@ function calc(data) {
 
     recv:
       div(
-        average("accounts_receivable") *
-        365,
+        average(
+          "accounts_receivable"
+        ) * 365,
 
         latest.revenue
       ),
@@ -310,8 +370,9 @@ function calc(data) {
 
     inv:
       div(
-        average("inventory") *
-        365,
+        average(
+          "inventory"
+        ) * 365,
 
         latest.cogs
       ),
@@ -321,8 +382,9 @@ function calc(data) {
       latest.accounts_payable
 
         ? div(
-            average("accounts_payable") *
-            365,
+            average(
+              "accounts_payable"
+            ) * 365,
 
             latest.cogs
           )
@@ -387,15 +449,10 @@ function calc(data) {
 
 
   return {
-
     rows,
-
     l: latest,
-
     p: prior,
-
     r: ratios
-
   };
 
 }
@@ -410,7 +467,6 @@ function scores(r) {
   return {
 
     Profitability:
-
       clamp(
         45 +
         r.op * 180 +
@@ -419,7 +475,6 @@ function scores(r) {
 
 
     Liquidity:
-
       clamp(
         25 +
         r.current * 35
@@ -427,7 +482,6 @@ function scores(r) {
 
 
     Leverage:
-
       clamp(
         100 -
         r.de * 55
@@ -435,14 +489,12 @@ function scores(r) {
 
 
     "Cash quality":
-
       clamp(
         r.cash * 75
       ),
 
 
     Efficiency:
-
       clamp(
 
         85
@@ -469,33 +521,36 @@ function scores(r) {
 
 
 /* ============================================================
-   6. GOOD / BAD / WATCH SIGNAL ENGINE
+   6. GOOD / BAD / WATCH
    ============================================================ */
 
-function signals(analysis) {
+function signals(
+  analysis
+) {
 
   const r =
     analysis.r;
 
-  const out = [];
+
+  const out =
+    [];
 
 
-  const add = (
-    type,
-    title,
-    text
-  ) => {
-
-    out.push({
+  const add =
+    (
       type,
       title,
       text
-    });
+    ) => {
 
-  };
+      out.push({
+        type,
+        title,
+        text
+      });
 
+    };
 
-  /* Revenue */
 
   add(
 
@@ -519,16 +574,12 @@ function signals(analysis) {
       Math.abs(
         r.revGrowth
       ) * 100
-    )}% YoY to ${
-      money(
-        analysis.l.revenue
-      )
-    }.`
+    )}% YoY to ${money(
+      analysis.l.revenue
+    )}.`
 
   );
 
-
-  /* Margin */
 
   add(
 
@@ -557,8 +608,6 @@ function signals(analysis) {
   );
 
 
-  /* Cash */
-
   add(
 
     r.cash >= 1
@@ -581,8 +630,6 @@ function signals(analysis) {
 
   );
 
-
-  /* Leverage */
 
   add(
 
@@ -613,8 +660,6 @@ function signals(analysis) {
   );
 
 
-  /* Liquidity */
-
   add(
 
     r.current >= 1.5
@@ -637,8 +682,6 @@ function signals(analysis) {
 
   );
 
-
-  /* Returns */
 
   add(
 
@@ -667,8 +710,6 @@ function signals(analysis) {
   );
 
 
-  /* Receivables */
-
   add(
 
     r.recv <= 45
@@ -691,8 +732,6 @@ function signals(analysis) {
 
   );
 
-
-  /* Interest coverage */
 
   if (
     r.coverage != null
@@ -729,7 +768,7 @@ function signals(analysis) {
 
 
 /* ============================================================
-   7. MAIN DASHBOARD RENDER
+   7. MAIN DASHBOARD
    ============================================================ */
 
 function render(
@@ -775,117 +814,103 @@ function render(
     `FY${analysis.rows[0].year}–FY${analysis.l.year}`;
 
 
-  /* Metrics */
-
   $("#metrics").innerHTML = [
 
     [
       "REVENUE",
-
       money(
         analysis.l.revenue
       ),
-
       analysis.r.revGrowth
     ],
 
-
     [
       "NET INCOME",
-
       money(
         analysis.l.net_income
       ),
-
       analysis.r.incomeGrowth
     ],
 
-
     [
       "OPERATING MARGIN",
-
       pct(
         analysis.r.op
       ),
-
       analysis.r.marginShift
     ],
 
-
     [
       "ROCE",
-
       pct(
         analysis.r.roce
       ),
-
       analysis.r.roce
     ],
 
-
     [
       "DEBT / EQUITY",
-
       `${fmt.format(
         analysis.r.de
       )}×`,
-
       -analysis.r.debtGrowth
     ]
 
   ]
 
-  .map(
-    ([label, value, direction]) => `
+    .map(
+      (
+        [
+          label,
+          value,
+          direction
+        ]
+      ) => `
 
-      <article class="metric">
+        <article class="metric">
 
-        <span>
-          ${label}
-        </span>
+          <span>
+            ${label}
+          </span>
 
-        <strong>
-          ${value}
-        </strong>
+          <strong>
+            ${value}
+          </strong>
 
-        <small
-          class="${
-            direction >= 0
-              ? "up"
-              : "down"
-          }"
-        >
+          <small
+            class="${
+              direction >= 0
+                ? "up"
+                : "down"
+            }"
+          >
 
-          ${
-            direction >= 0
-              ? "↑"
-              : "↓"
-          }
+            ${
+              direction >= 0
+                ? "↑"
+                : "↓"
+            }
 
-          ${fmt.format(
-            Math.abs(
-              direction
-            ) * 100
-          )}%
+            ${fmt.format(
+              Math.abs(
+                direction
+              ) * 100
+            )}%
 
-        </small>
+          </small>
 
-      </article>
+        </article>
 
-    `
-  )
+      `
+    )
 
-  .join("");
+    .join("");
 
-
-  /* Chart */
 
   renderChart(
     analysis.rows
   );
 
-
-  /* Score */
 
   $("#ring")
     .style
@@ -922,33 +947,33 @@ function render(
       scoreSet
     )
 
-    .map(
-      ([name, value]) => `
+      .map(
+        ([name, value]) => `
 
-        <div class="score-row">
+          <div class="score-row">
 
-          <span>
-            ${name}
-          </span>
+            <span>
+              ${name}
+            </span>
 
-          <div class="track">
+            <div class="track">
 
-            <i
-              style="width:${value}%"
-            ></i>
+              <i
+                style="width:${value}%"
+              ></i>
+
+            </div>
+
+            <b>
+              ${Math.round(value)}
+            </b>
 
           </div>
 
-          <b>
-            ${Math.round(value)}
-          </b>
+        `
+      )
 
-        </div>
-
-      `
-    )
-
-    .join("");
+      .join("");
 
 
   renderSections(
@@ -961,12 +986,8 @@ function render(
   );
 
 
-  if (
-    competitor
-  ) {
-
+  if (competitor) {
     renderCompare();
-
   }
 
 }
@@ -980,11 +1001,14 @@ function renderChart(
   rows
 ) {
 
-  const width = 720;
+  const width =
+    720;
 
-  const height = 250;
+  const height =
+    250;
 
-  const padding = 38;
+  const padding =
+    38;
 
 
   const max =
@@ -996,50 +1020,52 @@ function renderChart(
     ) * 1.12;
 
 
-  const x = index =>
+  const x =
+    index =>
 
-    padding
+      padding
 
-    +
+      +
 
-    index *
+      index *
 
-    (
       (
-        width -
-        padding * 2
+        (
+          width -
+          padding * 2
+        )
+
+        /
+
+        Math.max(
+          rows.length - 1,
+          1
+        )
+      );
+
+
+  const y =
+    value =>
+
+      height
+
+      -
+
+      padding
+
+      -
+
+      (
+        value /
+        max
       )
 
-      /
+      *
 
-      Math.max(
-        rows.length - 1,
-        1
-      )
-    );
-
-
-  const y = value =>
-
-    height
-
-    -
-
-    padding
-
-    -
-
-    (
-      value /
-      max
-    )
-
-    *
-
-    (
-      height -
-      padding * 1.45
-    );
+      (
+        height -
+        padding * 1.45
+      );
 
 
   const line =
@@ -1047,50 +1073,44 @@ function renderChart(
 
       rows
 
-      .map(
-        (row, index) =>
+        .map(
+          (row, index) =>
 
-          `${
-            index
-              ? "L"
-              : "M"
-          }${x(index)},${y(row[key])}`
-      )
+            `${
+              index
+                ? "L"
+                : "M"
+            }${x(index)},${y(
+              row[key]
+            )}`
+        )
 
-      .join(" ");
+        .join(" ");
 
 
   const labels =
 
     rows
 
-    .map(
-      (row, index) => `
+      .map(
+        (row, index) => `
 
-        <text
+          <text
+            x="${x(index)}"
+            y="${height - 8}"
+            text-anchor="middle"
+            fill="#63716c"
+            font-size="11"
+          >
+            FY${String(
+              row.year
+            ).slice(-2)}
+          </text>
 
-          x="${x(index)}"
+        `
+      )
 
-          y="${height - 8}"
-
-          text-anchor="middle"
-
-          fill="#63716c"
-
-          font-size="11"
-
-        >
-
-          FY${String(
-            row.year
-          ).slice(-2)}
-
-        </text>
-
-      `
-    )
-
-    .join("");
+      .join("");
 
 
   $("#chart").innerHTML = `
@@ -1120,36 +1140,44 @@ function renderChart(
 
         rows
 
-        .map(
-          (row, index) => `
+          .map(
+            (row, index) => `
 
-            <circle
-              cx="${x(index)}"
-              cy="${y(row.revenue)}"
-              r="4"
-              fill="#2f7d68"
-            >
-              <title>
-                Revenue FY${row.year}: ${money(row.revenue)}
-              </title>
-            </circle>
+              <circle
+                cx="${x(index)}"
+                cy="${y(
+                  row.revenue
+                )}"
+                r="4"
+                fill="#2f7d68"
+              >
+                <title>
+                  Revenue FY${row.year}: ${money(
+                    row.revenue
+                  )}
+                </title>
+              </circle>
 
 
-            <circle
-              cx="${x(index)}"
-              cy="${y(row.net_income)}"
-              r="4"
-              fill="#b7df75"
-            >
-              <title>
-                Net income FY${row.year}: ${money(row.net_income)}
-              </title>
-            </circle>
+              <circle
+                cx="${x(index)}"
+                cy="${y(
+                  row.net_income
+                )}"
+                r="4"
+                fill="#b7df75"
+              >
+                <title>
+                  Net income FY${row.year}: ${money(
+                    row.net_income
+                  )}
+                </title>
+              </circle>
 
-          `
-        )
+            `
+          )
 
-        .join("")
+          .join("")
 
       }
 
@@ -1196,76 +1224,73 @@ function renderSections(
 
     sections
 
-    .map(
-      (section, index) => `
+      .map(
+        (section, index) => `
 
-        <button
+          <button
 
-          class="tab ${
-            index
-              ? ""
-              : "active"
-          }"
+            class="tab ${
+              index
+                ? ""
+                : "active"
+            }"
 
-          data-section="${section}"
+            data-section="${section}"
 
-        >
+          >
 
-          ${section}
+            ${section}
 
-        </button>
+          </button>
 
-      `
-    )
+        `
+      )
 
-    .join("");
+      .join("");
 
 
   document
 
-  .querySelectorAll(
-    ".tab"
-  )
+    .querySelectorAll(
+      ".tab"
+    )
 
-  .forEach(
-    button => {
+    .forEach(
+      button => {
 
-      button.onclick =
-        () => {
+        button.onclick =
+          () => {
 
-          document
+            document
 
-          .querySelectorAll(
-            ".tab"
-          )
-
-          .forEach(
-            item =>
-              item.classList.remove(
-                "active"
+              .querySelectorAll(
+                ".tab"
               )
-          );
+
+              .forEach(
+                item =>
+                  item.classList.remove(
+                    "active"
+                  )
+              );
 
 
-          button
-            .classList
-            .add(
-              "active"
+            button
+              .classList
+              .add(
+                "active"
+              );
+
+
+            sectionContent(
+              button.dataset.section,
+              analysis
             );
 
+          };
 
-          sectionContent(
-
-            button.dataset.section,
-
-            analysis
-
-          );
-
-        };
-
-    }
-  );
+      }
+    );
 
 
   sectionContent(
@@ -1277,7 +1302,7 @@ function renderSections(
 
 
 /* ============================================================
-   10. SECTION CARD BUILDER
+   10. CARD BUILDER
    ============================================================ */
 
 function cards(
@@ -1292,31 +1317,37 @@ function cards(
 
         items
 
-        .map(
-          ([heading, value, copy]) => `
+          .map(
+            (
+              [
+                heading,
+                value,
+                copy
+              ]
+            ) => `
 
-            <article class="panel-card">
+              <article class="panel-card">
 
-              <h4>
-                ${heading}
-              </h4>
+                <h4>
+                  ${heading}
+                </h4>
 
-              ${
-                value
-                  ? `<strong>${value}</strong>`
-                  : ""
-              }
+                ${
+                  value
+                    ? `<strong>${value}</strong>`
+                    : ""
+                }
 
-              <p>
-                ${copy}
-              </p>
+                <p>
+                  ${copy}
+                </p>
 
-            </article>
+              </article>
 
-          `
-        )
+            `
+          )
 
-        .join("")
+          .join("")
 
       }
 
@@ -1339,10 +1370,13 @@ function sectionContent(
   const r =
     analysis.r;
 
+
   const latest =
     analysis.l;
 
-  let items = [];
+
+  let items =
+    [];
 
 
   if (
@@ -1354,8 +1388,12 @@ function sectionContent(
 
       [
         "Revenue",
-        money(latest.revenue),
-        `${pct(r.revGrowth)} YoY growth`
+        money(
+          latest.revenue
+        ),
+        `${pct(
+          r.revGrowth
+        )} YoY growth`
       ],
 
       [
@@ -1376,7 +1414,9 @@ function sectionContent(
 
       [
         "Asset turnover",
-        `${fmt.format(r.asset)}×`,
+        `${fmt.format(
+          r.asset
+        )}×`,
         "Revenue generated per unit of assets"
       ],
 
@@ -1388,8 +1428,12 @@ function sectionContent(
 
       [
         "Net income",
-        money(latest.net_income),
-        `${pct(r.incomeGrowth)} YoY change`
+        money(
+          latest.net_income
+        ),
+        `${pct(
+          r.incomeGrowth
+        )} YoY change`
       ]
 
     ];
@@ -1626,11 +1670,11 @@ function sectionContent(
         analysis
       )
 
-      .filter(
-        item =>
-          item.type !==
-          "good"
-      );
+        .filter(
+          item =>
+            item.type !==
+            "good"
+        );
 
 
     items = sig.length
@@ -1640,8 +1684,11 @@ function sectionContent(
 
             item.title,
 
-            item.type === "bad"
+            item.type ===
+            "bad"
+
               ? "Concern"
+
               : "Watch",
 
             item.text
@@ -1669,54 +1716,55 @@ function sectionContent(
     "Management & report"
   ) {
 
-    items = pdfEvidence.length
+    items =
+      pdfEvidence.length
 
-      ? pdfEvidence
+        ? pdfEvidence
 
-        .slice(
-          0,
-          6
-        )
+            .slice(
+              0,
+              12
+            )
 
-        .map(
-          evidence => [
+            .map(
+              evidence => [
 
-            evidence.title,
+                evidence.title,
 
-            evidence.label,
+                evidence.label,
 
-            evidence.text
+                evidence.text
 
-          ]
-        )
+              ]
+            )
 
-      : [
+        : [
 
-          [
-            "Annual-report narrative",
+            [
+              "Annual-report narrative",
 
-            "Upload a PDF",
+              "Upload a PDF",
 
-            "PDF mode scans for management, risk, auditor, related-party, capex and contingent-liability evidence."
-          ],
+              "PDF mode scans management, risk, auditor, related-party, capex, debt, governance and contingent-liability evidence."
+            ],
 
-          [
-            "Management promise tracker",
+            [
+              "Management promise tracker",
 
-            "AI research feature",
+              "AI research feature",
 
-            "Compare management guidance and commitments against later outcomes."
-          ],
+              "Multi-report AI compares earlier management commitments against later evidence."
+            ],
 
-          [
-            "Claims vs numbers",
+            [
+              "Claims vs numbers",
 
-            "AI research feature",
+              "AI research feature",
 
-            "Test qualitative management claims against quantitative financial evidence."
-          ]
+              "FinSight can test qualitative management claims against quantitative financial evidence."
+            ]
 
-        ];
+          ];
 
   }
 
@@ -1813,30 +1861,31 @@ function renderAnalyst(
 
       sig
 
-      .filter(
-        item =>
-          item.type === type
-      )
+        .filter(
+          item =>
+            item.type ===
+            type
+        )
 
-      .map(
-        item => `
+        .map(
+          item => `
 
-          <div class="finding">
+            <div class="finding">
 
-            <b>
-              ${item.title}
-            </b>
+              <b>
+                ${item.title}
+              </b>
 
-            <br>
+              <br>
 
-            ${item.text}
+              ${item.text}
 
-          </div>
+            </div>
 
-        `
-      )
+          `
+        )
 
-      .join("");
+        .join("");
 
 
     $(`#${type}List`)
@@ -1856,14 +1905,16 @@ function renderAnalyst(
   const bad =
     sig.filter(
       item =>
-        item.type === "bad"
+        item.type ===
+        "bad"
     );
 
 
   const watch =
     sig.filter(
       item =>
-        item.type === "watch"
+        item.type ===
+        "watch"
     );
 
 
@@ -1904,7 +1955,8 @@ function renderAnalyst(
           bad
             .map(
               item =>
-                item.title.toLowerCase()
+                item.title
+                  .toLowerCase()
             )
             .join(", ")
         }.`
@@ -1920,7 +1972,8 @@ function renderAnalyst(
             watch
               .map(
                 item =>
-                  item.title.toLowerCase()
+                  item.title
+                    .toLowerCase()
               )
               .join(", ")
 
@@ -1931,7 +1984,8 @@ function renderAnalyst(
     );
 
 
-  const questions = [];
+  const questions =
+    [];
 
 
   if (
@@ -1993,19 +2047,17 @@ function renderAnalyst(
 
     questions
 
-    .map(
-      question => `
+      .map(
+        question => `
 
-        <div class="question">
+          <div class="question">
+            ${question}
+          </div>
 
-          ${question}
+        `
+      )
 
-        </div>
-
-      `
-    )
-
-    .join("");
+      .join("");
 
 }
 
@@ -2016,12 +2068,8 @@ function renderAnalyst(
 
 function renderCompare() {
 
-  if (
-    !competitor
-  ) {
-
+  if (!competitor) {
     return;
-
   }
 
 
@@ -2106,40 +2154,41 @@ function renderCompare() {
   ];
 
 
-  const value = (
-    number,
-    type
-  ) => {
+  const value =
+    (
+      number,
+      type
+    ) => {
 
-    if (
-      type.startsWith(
-        "pct"
-      )
-    ) {
+      if (
+        type.startsWith(
+          "pct"
+        )
+      ) {
 
-      return pct(number);
+        return pct(number);
 
-    }
+      }
 
 
-    if (
-      type.startsWith(
-        "days"
-      )
-    ) {
+      if (
+        type.startsWith(
+          "days"
+        )
+      ) {
+
+        return `${fmt.format(
+          number
+        )} days`;
+
+      }
+
 
       return `${fmt.format(
         number
-      )} days`;
+      )}×`;
 
-    }
-
-
-    return `${fmt.format(
-      number
-    )}×`;
-
-  };
+    };
 
 
   $("#comparePanel").className =
@@ -2183,84 +2232,91 @@ function renderCompare() {
 
             rows
 
-            .map(
-              ([name, a, b, type]) => {
+              .map(
+                (
+                  [
+                    name,
+                    a,
+                    b,
+                    type
+                  ]
+                ) => {
 
-                const lowerBetter =
-                  type.endsWith(
-                    "Low"
-                  );
-
-
-                const winner =
-
-                  lowerBetter
-
-                    ?
-
-                    a < b
-                      ? "A"
-                      : b < a
-                      ? "B"
-                      : "Tie"
-
-                    :
-
-                    a > b
-                      ? "A"
-                      : b > a
-                      ? "B"
-                      : "Tie";
+                  const lowerBetter =
+                    type.endsWith(
+                      "Low"
+                    );
 
 
-                return `
+                  const winner =
 
-                  <tr>
+                    lowerBetter
 
-                    <td>
-                      <b>
-                        ${name}
-                      </b>
-                    </td>
+                      ?
 
-                    <td>
-                      ${value(
-                        a,
-                        type
-                      )}
-                    </td>
+                      a < b
+                        ? "A"
+                        : b < a
+                        ? "B"
+                        : "Tie"
 
-                    <td>
-                      ${value(
-                        b,
-                        type
-                      )}
-                    </td>
+                      :
 
-                    <td class="winner">
+                      a > b
+                        ? "A"
+                        : b > a
+                        ? "B"
+                        : "Tie";
 
-                      ${
-                        winner === "A"
 
-                          ? companyA.l.company
+                  return `
 
-                          : winner === "B"
+                    <tr>
 
-                          ? companyB.l.company
+                      <td>
+                        <b>
+                          ${name}
+                        </b>
+                      </td>
 
-                          : "Comparable"
-                      }
+                      <td>
+                        ${value(
+                          a,
+                          type
+                        )}
+                      </td>
 
-                    </td>
+                      <td>
+                        ${value(
+                          b,
+                          type
+                        )}
+                      </td>
 
-                  </tr>
+                      <td class="winner">
 
-                `;
+                        ${
+                          winner === "A"
 
-              }
-            )
+                            ? companyA.l.company
 
-            .join("")
+                            : winner === "B"
+
+                            ? companyB.l.company
+
+                            : "Comparable"
+                        }
+
+                      </td>
+
+                    </tr>
+
+                  `;
+
+                }
+              )
+
+              .join("")
 
           }
 
@@ -2287,13 +2343,13 @@ function parseCSV(
 
     text
 
-    .trim()
+      .trim()
 
-    .split(
-      /\r?\n/
-    )
+      .split(
+        /\r?\n/
+      )
 
-    .filter(Boolean);
+      .filter(Boolean);
 
 
   if (
@@ -2311,34 +2367,34 @@ function parseCSV(
 
     lines[0]
 
-    .split(",")
+      .split(",")
 
-    .map(
-      item =>
+      .map(
+        item =>
 
-        item
+          item
 
-        .trim()
+            .trim()
 
-        .toLowerCase()
+            .toLowerCase()
 
-        .replace(
-          /\s+/g,
-          "_"
-        )
-    );
+            .replace(
+              /\s+/g,
+              "_"
+            )
+      );
 
 
   const missing =
 
     required
 
-    .filter(
-      key =>
-        !headers.includes(
-          key
-        )
-    );
+      .filter(
+        key =>
+          !headers.includes(
+            key
+          )
+      );
 
 
   if (
@@ -2367,15 +2423,20 @@ function parseCSV(
           line.split(",");
 
 
-        const row = {};
+        const row =
+          {};
 
 
         headers.forEach(
-          (header, index) => {
+          (
+            header,
+            index
+          ) => {
 
             row[header] =
 
-              header === "company"
+              header ===
+              "company"
 
                 ? cells[index]
 
@@ -2385,10 +2446,10 @@ function parseCSV(
                       cells[index]
                     )
 
-                    .replace(
-                      /[₹$]/g,
-                      ""
-                    )
+                      .replace(
+                        /[₹$]/g,
+                        ""
+                      )
 
                   );
 
@@ -2416,14 +2477,14 @@ function norm(
     value ?? ""
   )
 
-  .toLowerCase()
+    .toLowerCase()
 
-  .replace(
-    /[^a-z0-9]+/g,
-    " "
-  )
+    .replace(
+      /[^a-z0-9]+/g,
+      " "
+    )
 
-  .trim();
+    .trim();
 
 }
 
@@ -2433,8 +2494,14 @@ function num(
 ) {
 
   if (
-    typeof value === "number" &&
-    Number.isFinite(value)
+    typeof value ===
+      "number"
+
+    &&
+
+    Number.isFinite(
+      value
+    )
   ) {
 
     return value;
@@ -2450,10 +2517,10 @@ function num(
         value ?? ""
       )
 
-      .replace(
-        /[₹,$()\s]/g,
-        ""
-      )
+        .replace(
+          /[₹,$()\s]/g,
+          ""
+        )
 
     );
 
@@ -2548,49 +2615,52 @@ function years(
 
   rows
 
-  .slice(
-    0,
-    10
-  )
+    .slice(
+      0,
+      10
+    )
 
-  .forEach(
-    row =>
+    .forEach(
+      row =>
 
-      row.forEach(
-        (cell, index) => {
+        row.forEach(
+          (
+            cell,
+            index
+          ) => {
 
-          const match =
+            const match =
 
-            String(
-              cell ?? ""
-            )
-
-            .match(
-              /(?:FY\s*)?(20\d{2})/i
-            );
-
-
-          if (
-            match &&
-            !map.has(
-              Number(
-                match[1]
+              String(
+                cell ?? ""
               )
-            )
-          ) {
 
-            map.set(
-              Number(
-                match[1]
-              ),
-              index
-            );
+                .match(
+                  /(?:FY\s*)?(20\d{2})/i
+                );
+
+
+            if (
+              match &&
+              !map.has(
+                Number(
+                  match[1]
+                )
+              )
+            ) {
+
+              map.set(
+                Number(
+                  match[1]
+                ),
+                index
+              );
+
+            }
 
           }
-
-        }
-      )
-  );
+        )
+    );
 
 
   return map;
@@ -2679,23 +2749,23 @@ function parseWorkbook(
 
     [...incomeYears.keys()]
 
-    .filter(
-      year =>
-        balanceYears.has(
-          year
-        )
+      .filter(
+        year =>
+          balanceYears.has(
+            year
+          )
 
-        &&
+          &&
 
-        cashYears.has(
-          year
-        )
-    )
+          cashYears.has(
+            year
+          )
+      )
 
-    .sort(
-      (a, b) =>
-        a - b
-    );
+      .sort(
+        (a, b) =>
+          a - b
+      );
 
 
   if (
@@ -2878,209 +2948,218 @@ function parseWorkbook(
 
     reportingYears
 
-    .map(
-      year => {
+      .map(
+        year => {
 
-        const incomeColumn =
-          incomeYears.get(
-            year
-          );
-
-
-        const balanceColumn =
-          balanceYears.get(
-            year
-          );
+          const incomeColumn =
+            incomeYears.get(
+              year
+            );
 
 
-        const cashColumn =
-          cashYears.get(
-            year
-          );
+          const balanceColumn =
+            balanceYears.get(
+              year
+            );
 
 
-        const value =
-          (financialRow, column) =>
-
-            financialRow
-
-              ? num(
-                  financialRow[column]
-                )
-
-              : null;
+          const cashColumn =
+            cashYears.get(
+              year
+            );
 
 
-        const cogs = [
-
-          R.materials,
-
-          R.purchases,
-
-          R.inventoryChange,
-
-          R.excise
-
-        ]
-
-        .reduce(
-          (sum, item) =>
-
-            sum
-
-            +
-
+          const value =
             (
+              financialRow,
+              column
+            ) =>
+
+              financialRow
+
+                ? num(
+                    financialRow[column]
+                  )
+
+                : null;
+
+
+          const cogs = [
+
+            R.materials,
+
+            R.purchases,
+
+            R.inventoryChange,
+
+            R.excise
+
+          ]
+
+            .reduce(
+              (
+                sum,
+                item
+              ) =>
+
+                sum
+
+                +
+
+                (
+                  value(
+                    item,
+                    incomeColumn
+                  )
+
+                  || 0
+                ),
+
+              0
+            );
+
+
+          const financeCost =
+
+            value(
+              R.finance,
+              incomeColumn
+            )
+
+            || 0;
+
+
+          const debt =
+
+            R.borrowings
+
+              .reduce(
+                (
+                  sum,
+                  item
+                ) =>
+
+                  sum
+
+                  +
+
+                  (
+                    value(
+                      item,
+                      balanceColumn
+                    )
+
+                    || 0
+                  ),
+
+                0
+              );
+
+
+          return {
+
+            company,
+
+            year,
+
+            revenue:
               value(
-                item,
+                R.revenue,
                 incomeColumn
-              )
+              ),
 
-              || 0
-            ),
+            cogs,
 
-          0
-        );
-
-
-        const financeCost =
-
-          value(
-            R.finance,
-            incomeColumn
-          )
-
-          || 0;
-
-
-        const debt =
-
-          R.borrowings
-
-          .reduce(
-            (sum, item) =>
-
-              sum
-
-              +
+            operating_income:
 
               (
                 value(
-                  item,
-                  balanceColumn
+                  R.pbt,
+                  incomeColumn
                 )
 
                 || 0
-              ),
-
-            0
-          );
-
-
-        return {
-
-          company,
-
-          year,
-
-          revenue:
-            value(
-              R.revenue,
-              incomeColumn
-            ),
-
-          cogs,
-
-          operating_income:
-
-            (
-              value(
-                R.pbt,
-                incomeColumn
               )
 
-              || 0
-            )
+              +
 
-            +
+              financeCost,
 
-            financeCost,
+            net_income:
+              value(
+                R.pat,
+                incomeColumn
+              ),
 
-          net_income:
-            value(
-              R.pat,
-              incomeColumn
-            ),
+            total_assets:
+              value(
+                R.totalAssets,
+                balanceColumn
+              ),
 
-          total_assets:
-            value(
-              R.totalAssets,
-              balanceColumn
-            ),
+            current_assets:
+              value(
+                R.currentAssets,
+                balanceColumn
+              ),
 
-          current_assets:
-            value(
-              R.currentAssets,
-              balanceColumn
-            ),
+            current_liabilities:
+              value(
+                R.currentLiabilities,
+                balanceColumn
+              ),
 
-          current_liabilities:
-            value(
-              R.currentLiabilities,
-              balanceColumn
-            ),
+            total_debt:
+              debt,
 
-          total_debt:
-            debt,
+            total_equity:
+              value(
+                R.equity,
+                balanceColumn
+              ),
 
-          total_equity:
-            value(
-              R.equity,
-              balanceColumn
-            ),
+            operating_cash_flow:
+              value(
+                R.operatingCash,
+                cashColumn
+              ),
 
-          operating_cash_flow:
-            value(
-              R.operatingCash,
-              cashColumn
-            ),
+            inventory:
+              value(
+                R.inventory,
+                balanceColumn
+              ),
 
-          inventory:
-            value(
-              R.inventory,
-              balanceColumn
-            ),
+            accounts_receivable:
+              value(
+                R.receivables,
+                balanceColumn
+              ),
 
-          accounts_receivable:
-            value(
-              R.receivables,
-              balanceColumn
-            ),
+            accounts_payable:
+              value(
+                R.payables,
+                balanceColumn
+              ),
 
-          accounts_payable:
-            value(
-              R.payables,
-              balanceColumn
-            ),
+            finance_cost:
+              financeCost
 
-          finance_cost:
-            financeCost
+          };
 
-        };
+        }
+      )
 
-      }
-    )
+      .filter(
+        item =>
 
-    .filter(
-      item =>
-
-        required.every(
-          key =>
-            Number.isFinite(
-              item[key]
-            )
-        )
-    );
+          required.every(
+            key =>
+              Number.isFinite(
+                item[key]
+              )
+          )
+      );
 
 
   if (
@@ -3100,7 +3179,7 @@ function parseWorkbook(
 
 
 /* ============================================================
-   17. LOCAL PDF DISCLOSURE SCAN
+   17. LARGE PDF + MULTI-REPORT ANALYZER
    ============================================================ */
 
 async function parsePDF(
@@ -3129,15 +3208,35 @@ async function parsePDF(
 
     await pdfjsLib
 
-    .getDocument({
-      data:
-        await file.arrayBuffer()
-    })
+      .getDocument({
+        data:
+          await file.arrayBuffer()
+      })
 
-    .promise;
+      .promise;
 
 
-  const keys = [
+  /* ----------------------------------------------------------
+     1,000 PAGE LIMIT
+     ---------------------------------------------------------- */
+
+  const MAX_PDF_SCAN_PAGES =
+    1000;
+
+
+  const pagesToScan =
+
+    Math.min(
+      pdf.numPages,
+      MAX_PDF_SCAN_PAGES
+    );
+
+
+  /* ----------------------------------------------------------
+     DISCLOSURE CATEGORIES
+     ---------------------------------------------------------- */
+
+  const disclosureKeys = [
 
     [
       "Management discussion",
@@ -3177,27 +3276,341 @@ async function parsePDF(
     [
       "Segment reporting",
       "segment"
+    ],
+
+    [
+      "Corporate governance",
+      "corporate governance"
+    ],
+
+    [
+      "Internal financial controls",
+      "internal financial control"
+    ],
+
+    [
+      "Management outlook",
+      "outlook"
+    ],
+
+    [
+      "Acquisitions",
+      "acquisition"
+    ],
+
+    [
+      "Subsidiaries",
+      "subsidiar"
+    ],
+
+    [
+      "Auditor qualification",
+      "qualification"
+    ],
+
+    [
+      "Cash flow",
+      "cash flow"
+    ],
+
+    [
+      "Revenue",
+      "revenue"
+    ],
+
+    [
+      "Profitability",
+      "profit"
+    ],
+
+    [
+      "Dividend",
+      "dividend"
+    ],
+
+    [
+      "IPO / listing",
+      "initial public offer"
     ]
 
   ];
 
 
-  const found = [];
+  const found =
+    [];
 
 
-  const pagesToScan =
-    Math.min(
-      pdf.numPages,
-      120
+  const detectedReports =
+    [];
+
+
+  const reportMap =
+    new Map();
+
+
+  /* ----------------------------------------------------------
+     YEAR NORMALIZATION
+     ---------------------------------------------------------- */
+
+  function normalizeEndYear(
+    startYear,
+    rawEnd
+  ) {
+
+    let endYear =
+      Number(
+        rawEnd
+      );
+
+
+    if (
+      endYear < 100
+    ) {
+
+      endYear =
+
+        Math.floor(
+          startYear / 100
+        ) * 100
+
+        +
+
+        endYear;
+
+
+      if (
+        endYear <=
+        startYear
+      ) {
+
+        endYear +=
+          100;
+
+      }
+
+    }
+
+
+    return endYear;
+
+  }
+
+
+  function makeYearInfo(
+    startYear,
+    rawEnd
+  ) {
+
+    const endYear =
+      normalizeEndYear(
+        startYear,
+        rawEnd
+      );
+
+
+    return {
+
+      startYear,
+
+      endYear,
+
+      label:
+
+        `FY${startYear}-${String(
+          endYear
+        ).slice(-2)}`
+
+    };
+
+  }
+
+
+  /* ----------------------------------------------------------
+     GENERAL YEAR DETECTION
+     ---------------------------------------------------------- */
+
+  function detectFinancialYear(
+    text
+  ) {
+
+    const normalized =
+
+      String(
+        text || ""
+      )
+
+        .replace(
+          /\s+/g,
+          " "
+        )
+
+        .trim();
+
+
+    let match =
+
+      normalized.match(
+        /annual\s+report\s+(20\d{2})\s*[-–—]\s*(\d{2,4})/i
+      );
+
+
+    if (match) {
+
+      return makeYearInfo(
+        Number(match[1]),
+        Number(match[2])
+      );
+
+    }
+
+
+    match =
+
+      normalized.match(
+        /financial\s+year\s+(20\d{2})\s*[-–—]\s*(\d{2,4})/i
+      );
+
+
+    if (match) {
+
+      return makeYearInfo(
+        Number(match[1]),
+        Number(match[2])
+      );
+
+    }
+
+
+    match =
+
+      normalized.match(
+        /\bFY\s*(20\d{2})\s*[-–—]\s*(\d{2,4})/i
+      );
+
+
+    if (match) {
+
+      return makeYearInfo(
+        Number(match[1]),
+        Number(match[2])
+      );
+
+    }
+
+
+    /*
+     * Supporting evidence only:
+     * "year ended March 31, 2026"
+     */
+
+    match =
+
+      normalized.match(
+        /year\s+ended\s+(?:31(?:st)?\s+)?march\s+31[,]?\s*(20\d{2})/i
+      );
+
+
+    if (match) {
+
+      const endYear =
+        Number(
+          match[1]
+        );
+
+
+      return {
+
+        startYear:
+          endYear - 1,
+
+        endYear,
+
+        label:
+
+          `FY${endYear - 1}-${String(
+            endYear
+          ).slice(-2)}`
+
+      };
+
+    }
+
+
+    return null;
+
+  }
+
+
+  /* ----------------------------------------------------------
+     STRONG REPORT BOUNDARY DETECTION
+     ---------------------------------------------------------- */
+
+  function detectStrongReportHeading(
+    text
+  ) {
+
+    const normalized =
+
+      String(
+        text || ""
+      )
+
+        .replace(
+          /\s+/g,
+          " "
+        );
+
+
+    const match =
+
+      normalized.match(
+        /annual\s+report\s+(20\d{2})\s*[-–—]\s*(\d{2,4})/i
+      );
+
+
+    if (!match) {
+      return null;
+    }
+
+
+    return makeYearInfo(
+      Number(match[1]),
+      Number(match[2])
+    );
+
+  }
+
+
+  let currentReport =
+    null;
+
+
+  /* ----------------------------------------------------------
+     STATUS WHILE SCANNING
+     ---------------------------------------------------------- */
+
+  const uploadStatus =
+    document.getElementById(
+      "uploadStatus"
     );
 
 
+  if (uploadStatus) {
+
+    uploadStatus.textContent =
+
+      `Scanning ${pagesToScan} of ${pdf.numPages} PDF pages…`;
+
+  }
+
+
+  /* ----------------------------------------------------------
+     PAGE SCAN
+     ---------------------------------------------------------- */
+
   for (
     let pageNumber = 1;
-
-    pageNumber <=
-    pagesToScan;
-
+    pageNumber <= pagesToScan;
     pageNumber++
   ) {
 
@@ -3216,99 +3629,583 @@ async function parsePDF(
 
       content.items
 
-      .map(
-        item =>
-          item.str
-      )
+        .map(
+          item =>
+            item.str
+        )
 
-      .join(" ")
+        .join(" ")
 
-      .replace(
-        /\s+/g,
-        " "
-      );
+        .replace(
+          /\s+/g,
+          " "
+        )
+
+        .trim();
 
 
     const lower =
       text.toLowerCase();
 
 
+    /* --------------------------------------------------------
+       REPORT BOUNDARY
+       -------------------------------------------------------- */
+
+    const strongYear =
+      detectStrongReportHeading(
+        text
+      );
+
+
+    if (strongYear) {
+
+      const key =
+
+        `${strongYear.startYear}-${strongYear.endYear}`;
+
+
+      if (
+        !reportMap.has(
+          key
+        )
+      ) {
+
+        /*
+         * Close previous report.
+         */
+
+        if (
+          currentReport &&
+          currentReport.endPage == null
+        ) {
+
+          currentReport.endPage =
+            pageNumber - 1;
+
+        }
+
+
+        const report = {
+
+          ...strongYear,
+
+          startPage:
+            pageNumber,
+
+          endPage:
+            null,
+
+          disclosureCount:
+            0
+
+        };
+
+
+        detectedReports.push(
+          report
+        );
+
+
+        reportMap.set(
+          key,
+          report
+        );
+
+
+        currentReport =
+          report;
+
+      }
+
+      else {
+
+        currentReport =
+          reportMap.get(
+            key
+          );
+
+      }
+
+    }
+
+
+    /*
+     * If a strong annual-report heading hasn't
+     * appeared yet, use other year evidence.
+     */
+
+    if (
+      !currentReport
+    ) {
+
+      const weakYear =
+        detectFinancialYear(
+          text
+        );
+
+
+      if (weakYear) {
+
+        const key =
+
+          `${weakYear.startYear}-${weakYear.endYear}`;
+
+
+        if (
+          !reportMap.has(
+            key
+          )
+        ) {
+
+          const report = {
+
+            ...weakYear,
+
+            startPage:
+              pageNumber,
+
+            endPage:
+              null,
+
+            disclosureCount:
+              0
+
+          };
+
+
+          detectedReports.push(
+            report
+          );
+
+
+          reportMap.set(
+            key,
+            report
+          );
+
+
+          currentReport =
+            report;
+
+        }
+
+      }
+
+    }
+
+
+    /* --------------------------------------------------------
+       DISCLOSURES
+       -------------------------------------------------------- */
+
     for (
       const [
         title,
         keyword
       ]
-
-      of keys
+      of disclosureKeys
     ) {
 
       if (
-        lower.includes(
+        !lower.includes(
           keyword
-        )
-
-        &&
-
-        !found.some(
-          item =>
-            item.title ===
-            title
         )
       ) {
 
-        const index =
-          lower.indexOf(
-            keyword
-          );
-
-
-        found.push({
-
-          title,
-
-          label:
-            `Page ${pageNumber}`,
-
-          text:
-
-            text.slice(
-
-              Math.max(
-                0,
-                index - 90
-              ),
-
-              index + 260
-
-            )
-
-            +
-
-            "…"
-
-        });
+        continue;
 
       }
+
+
+      const reportLabel =
+
+        currentReport
+          ?.label
+
+        ||
+
+        "Unknown FY";
+
+
+      /*
+       * One evidence sample per category per report.
+       */
+
+      const duplicate =
+
+        found.some(
+          item =>
+
+            item.title ===
+              title
+
+            &&
+
+            item.report ===
+              reportLabel
+        );
+
+
+      if (duplicate) {
+        continue;
+      }
+
+
+      const index =
+        lower.indexOf(
+          keyword
+        );
+
+
+      const evidenceText =
+
+        text.slice(
+
+          Math.max(
+            0,
+            index - 120
+          ),
+
+          Math.min(
+            text.length,
+            index + 420
+          )
+
+        );
+
+
+      found.push({
+
+        title,
+
+        report:
+          reportLabel,
+
+        financialYear:
+          currentReport
+            ?.endYear ||
+          null,
+
+        page:
+          pageNumber,
+
+        label:
+
+          `${reportLabel} · PDF page ${pageNumber}`,
+
+        text:
+
+          evidenceText +
+          "…"
+
+      });
+
+
+      if (
+        currentReport
+      ) {
+
+        currentReport
+          .disclosureCount++;
+
+      }
+
+    }
+
+
+    /* --------------------------------------------------------
+       PROGRESS
+       -------------------------------------------------------- */
+
+    if (
+      uploadStatus &&
+      (
+        pageNumber === 1 ||
+        pageNumber % 25 === 0 ||
+        pageNumber === pagesToScan
+      )
+    ) {
+
+      const percent =
+
+        Math.round(
+          (
+            pageNumber /
+            pagesToScan
+          ) * 100
+        );
+
+
+      uploadStatus.textContent =
+
+        `Scanning annual report: ${pageNumber}/${pagesToScan} pages (${percent}%)…`;
+
+    }
+
+
+    /*
+     * Yield periodically.
+     *
+     * Important for iPad Safari on large PDFs.
+     */
+
+    if (
+      pageNumber % 20 === 0
+    ) {
+
+      await new Promise(
+        resolve =>
+          setTimeout(
+            resolve,
+            0
+          )
+      );
 
     }
 
   }
 
 
+  /* ----------------------------------------------------------
+     CLOSE LAST REPORT
+     ---------------------------------------------------------- */
+
+  if (
+    currentReport &&
+    currentReport.endPage == null
+  ) {
+
+    currentReport.endPage =
+      pagesToScan;
+
+  }
+
+
+  detectedReports.sort(
+    (a, b) =>
+      a.startPage -
+      b.startPage
+  );
+
+
+  /*
+   * Repair any missing boundaries.
+   */
+
+  for (
+    let index = 0;
+    index < detectedReports.length;
+    index++
+  ) {
+
+    const report =
+      detectedReports[index];
+
+
+    const next =
+      detectedReports[
+        index + 1
+      ];
+
+
+    if (
+      report.endPage == null
+    ) {
+
+      report.endPage =
+
+        next
+
+          ? next.startPage - 1
+
+          : pagesToScan;
+
+    }
+
+  }
+
+
+  /*
+   * AI gets newest report first.
+   */
+
+  const reportsNewestFirst =
+
+    [...detectedReports]
+
+      .sort(
+        (a, b) =>
+          b.endYear -
+          a.endYear
+      );
+
+
+  /* ----------------------------------------------------------
+     STORE SHARED CONTEXT
+     ---------------------------------------------------------- */
+
   pdfEvidence =
     found;
 
 
-  $("#confidence").textContent =
-    "Medium · PDF narrative scan";
+  window.finSightPDFContext = {
+
+    fileName:
+      file.name,
+
+    totalPages:
+      pdf.numPages,
+
+    scannedPages:
+      pagesToScan,
+
+    scanLimit:
+      MAX_PDF_SCAN_PAGES,
+
+    truncated:
+
+      pdf.numPages >
+      MAX_PDF_SCAN_PAGES,
+
+    multiReport:
+
+      reportsNewestFirst.length >
+      1,
+
+    reportCount:
+      reportsNewestFirst.length,
+
+    reports:
+      reportsNewestFirst,
+
+    evidence:
+      found
+
+  };
 
 
-  $("#uploadStatus").textContent =
+  /* ----------------------------------------------------------
+     CONFIDENCE
+     ---------------------------------------------------------- */
 
-    `${file.name}: scanned ${pagesToScan} pages and found ${found.length} disclosure categories. Use Annual Report AI below for deeper analysis.`;
+  const confidence =
+    document.getElementById(
+      "confidence"
+    );
 
 
-  render(primary);
+  if (confidence) {
+
+    if (
+      reportsNewestFirst.length >
+      1
+    ) {
+
+      confidence.textContent =
+
+        `High · ${reportsNewestFirst.length} reports detected`;
+
+    }
+
+    else {
+
+      confidence.textContent =
+        "Medium · PDF narrative scan";
+
+    }
+
+  }
+
+
+  /* ----------------------------------------------------------
+     FINAL STATUS
+     ---------------------------------------------------------- */
+
+  if (uploadStatus) {
+
+    const pageMessage =
+
+      pdf.numPages >
+      MAX_PDF_SCAN_PAGES
+
+        ?
+
+        `Scanned first ${MAX_PDF_SCAN_PAGES} of ${pdf.numPages} pages.`
+
+        :
+
+        `Scanned all ${pdf.numPages} pages.`;
+
+
+    if (
+      reportsNewestFirst.length >
+      1
+    ) {
+
+      const yearList =
+
+        reportsNewestFirst
+
+          .map(
+            report =>
+              report.label
+          )
+
+          .join(", ");
+
+
+      uploadStatus.textContent =
+
+        `${file.name}: ${pageMessage} `
+
+        +
+
+        `Detected ${reportsNewestFirst.length} annual reports (${yearList}). `
+
+        +
+
+        `Found ${found.length} disclosure categories across the reports. `
+
+        +
+
+        `Annual Report AI can now analyze each year separately and compare them.`;
+
+    }
+
+    else {
+
+      uploadStatus.textContent =
+
+        `${file.name}: ${pageMessage} `
+
+        +
+
+        `Found ${found.length} disclosure categories. `
+
+        +
+
+        "Use Annual Report AI for deeper analysis.";
+
+    }
+
+  }
+
+
+  /*
+   * Keep existing structured-data dashboard.
+   *
+   * The PDF is narrative evidence; Gemini handles
+   * the deeper annual-report extraction.
+   */
+
+  render(
+    primary
+  );
+
+
+  return window
+    .finSightPDFContext;
 
 }
 
@@ -3329,7 +4226,8 @@ async function loadFile(
 
 
     const filename =
-      file.name.toLowerCase();
+      file.name
+        .toLowerCase();
 
 
     if (
@@ -3338,7 +4236,22 @@ async function loadFile(
       )
     ) {
 
-      await parsePDF(file);
+      /*
+       * Reset previous PDF context.
+       */
+
+      pdfEvidence =
+        [];
+
+
+      window.finSightPDFContext =
+        null;
+
+
+      await parsePDF(
+        file
+      );
+
 
       return;
 
@@ -3453,9 +4366,7 @@ $("#companyFile")
         .files?.[0];
 
 
-    if (
-      file
-    ) {
+    if (file) {
 
       loadFile(
         file,
@@ -3476,9 +4387,7 @@ $("#competitorFile")
         .files?.[0];
 
 
-    if (
-      file
-    ) {
+    if (file) {
 
       loadFile(
         file,
@@ -3506,15 +4415,21 @@ $("#sampleBtn")
       competitorDemo;
 
 
+    pdfEvidence =
+      [];
+
+
+    window.finSightPDFContext =
+      null;
+
+
     $("#uploadStatus")
       .textContent =
-
       "Demo company and competitor loaded.";
 
 
     $("#confidence")
       .textContent =
-
       "High · structured demo data";
 
 
@@ -3598,9 +4513,7 @@ $("#saveMarket")
       true;
 
 
-    if (
-      ticker
-    ) {
+    if (ticker) {
 
       $("#priceDisplay")
         .textContent =
@@ -3613,7 +4526,6 @@ $("#saveMarket")
 
       $("#priceDisplay")
         .textContent =
-
         "Manual quote mode";
 
     }
@@ -3667,11 +4579,11 @@ $("#valueBtn")
       $("#valuationResults")
         .innerHTML = `
 
-        <p>
-          Enter current price, shares outstanding and preferred P/E.
-        </p>
+          <p>
+            Enter current price, shares outstanding and preferred P/E.
+          </p>
 
-      `;
+        `;
 
       return;
 
@@ -3725,8 +4637,8 @@ $("#valueBtn")
 
 
     /*
-     * Don't overwrite Alpha Vantage provider/date
-     * if market API has already populated priceDisplay.
+     * Preserve Alpha Vantage provider/date if the
+     * market API has already populated this field.
      */
 
     if (
@@ -3734,9 +4646,9 @@ $("#valueBtn")
         $("#priceDisplay")
           .textContent
       )
-      .includes(
-        "Alpha Vantage"
-      )
+        .includes(
+          "Alpha Vantage"
+        )
     ) {
 
       $("#priceDisplay")
@@ -3789,31 +4701,37 @@ $("#valueBtn")
 
       ]
 
-      .map(
-        ([name, value, description]) => `
+        .map(
+          (
+            [
+              name,
+              value,
+              description
+            ]
+          ) => `
 
-          <div class="scenario">
+            <div class="scenario">
 
-            <b>
-              ${name}
-            </b>
+              <b>
+                ${name}
+              </b>
 
-            <strong>
-              ₹${fmt.format(
-                value
-              )}
-            </strong>
+              <strong>
+                ₹${fmt.format(
+                  value
+                )}
+              </strong>
 
-            <small>
-              ${description}
-            </small>
+              <small>
+                ${description}
+              </small>
 
-          </div>
+            </div>
 
-        `
-      )
+          `
+        )
 
-      .join("");
+        .join("");
 
   };
 
