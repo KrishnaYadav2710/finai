@@ -1,3 +1,1745 @@
-:root{--ink:#10231f;--forest:#173f35;--green:#2f7d68;--mint:#dcebe5;--lime:#b7df75;--cream:#f5f2e9;--paper:#fffdf7;--line:#d9ddd5;--muted:#63716c;--danger:#a44135;--warning:#9a6a15}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--paper);color:var(--ink);font-family:Inter,system-ui,sans-serif}button,input{font:inherit}button{cursor:pointer}.topbar{height:70px;padding:0 5vw;display:flex;align-items:center;gap:36px;position:sticky;top:0;z-index:20;background:rgba(255,253,247,.95);border-bottom:1px solid var(--line);backdrop-filter:blur(14px)}.brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink);font:700 20px Georgia,serif}.brand-mark{width:32px;height:32px;display:grid;place-items:center;background:var(--forest);color:white;border-radius:50% 50% 50% 8px}.topbar nav{display:flex;gap:24px}.topbar nav a{color:var(--muted);text-decoration:none;font-size:13px;font-weight:700}.status{margin-left:auto;font-size:12px;color:var(--muted)}.status i{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--lime);margin-right:7px}.hero{padding:78px 7vw;display:grid;grid-template-columns:1.2fr .8fr;gap:8vw;align-items:center;background:radial-gradient(circle at 80% 5%,rgba(183,223,117,.25),transparent 28%),var(--cream)}.eyebrow,.kicker,.tiny{font-size:10px;font-weight:850;letter-spacing:.16em;color:var(--green)}h1,h2,h3,p{margin-top:0}h1{font:500 clamp(44px,6vw,78px)/.98 Georgia,serif;letter-spacing:-.045em;margin-bottom:22px}h1 em{color:var(--green);font-weight:500}.intro{max-width:750px;font-size:18px;line-height:1.65;color:var(--muted)}.hero-actions{display:flex;flex-wrap:wrap;gap:10px;margin:28px 0 12px}.primary,.secondary{padding:13px 18px;border-radius:3px;font-weight:800;font-size:13px}.primary{background:var(--forest);color:white;border:1px solid var(--forest)}.secondary{background:transparent;color:var(--forest);border:1px solid #82908b}.note{font-size:11px;line-height:1.55;color:var(--muted)}.hero-card{background:var(--forest);color:white;padding:28px;box-shadow:0 20px 60px rgba(16,35,31,.1)}.hero-label{font-size:10px;letter-spacing:.17em;color:var(--lime);font-weight:850;margin-bottom:22px}.flow{display:grid;grid-template-columns:40px 1fr;gap:4px 12px}.flow b{grid-row:1/3;color:var(--lime);font:500 22px Georgia,serif}.flow span{font:500 19px Georgia,serif}.flow small{color:#a9b7b2}.line{height:25px;border-left:1px solid #45645b;margin:7px 0 7px 18px}.ticker{display:grid;grid-template-columns:1.3fr repeat(3,1fr) auto;gap:1px;background:var(--line);border-block:1px solid var(--line)}.ticker>div,.ticker>button{padding:18px 24px;background:white;border:0;text-align:left}.ticker strong{display:block;margin-top:6px;font:500 17px Georgia,serif}.workspace,.cream,.dark{padding:68px 7vw}.cream{background:var(--cream)}.dark{background:var(--forest);color:white}.section-head{display:flex;justify-content:space-between;align-items:end;gap:30px;margin-bottom:26px}.section-head h2{margin:0;font:500 clamp(30px,4vw,44px)/1 Georgia,serif}.section-head>span,.section-head>p{font-size:12px;color:var(--muted);max-width:390px}.light>p{color:#aabbb5}.metric-grid{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--line);margin-bottom:22px}.metric{padding:20px;background:white;border-right:1px solid var(--line)}.metric:last-child{border:0}.metric span{font-size:10px;letter-spacing:.1em;color:var(--muted);font-weight:800}.metric strong{display:block;font:500 25px Georgia,serif;margin:10px 0 5px}.metric small{font-size:11px}.up{color:var(--green)}.down{color:var(--danger)}.two-col{display:grid;grid-template-columns:1.45fr .75fr;gap:22px}.card{background:white;border:1px solid var(--line);color:var(--ink)}.card header{padding:20px 22px 0}.card h3{font:500 22px Georgia,serif}.chart{min-height:270px;padding:12px}.chart svg{width:100%;height:260px}.score-area{display:grid;grid-template-columns:110px 1fr;align-items:center;gap:18px;padding:22px}.ring{--score:0;width:105px;height:105px;border-radius:50%;display:grid;place-content:center;background:radial-gradient(circle,white 61%,transparent 62%),conic-gradient(var(--green) calc(var(--score)*1%),var(--mint) 0);font:500 30px Georgia,serif}.ring small{text-align:center;font:11px Inter}.score-area p{font-size:11px;line-height:1.5;color:var(--muted);margin-top:7px}.score-bars{padding:0 22px 22px}.score-row{display:grid;grid-template-columns:90px 1fr 30px;gap:9px;align-items:center;margin-top:10px;font-size:10px;color:var(--muted)}.track{height:5px;background:var(--mint)}.track i{display:block;height:100%;background:var(--green)}.section-tabs{display:flex;gap:8px;overflow:auto;margin:42px 0 16px;padding-bottom:4px}.tab{white-space:nowrap;border:1px solid var(--line);background:white;padding:10px 13px;font-size:11px;font-weight:800}.tab.active{background:var(--forest);color:white}.panel-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.panel-card{padding:20px;border:1px solid var(--line);background:white}.panel-card h4{margin:0 0 8px;font:500 18px Georgia,serif}.panel-card p{font-size:12px;line-height:1.55;color:var(--muted);margin:0}.panel-card strong{font-size:20px}.verdict-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:#45645b;border:1px solid #45645b}.verdict-grid article{padding:26px;background:var(--forest)}.verdict-grid h3{margin:14px 0 18px;font:500 22px Georgia,serif}.finding{padding:11px 0;border-top:1px solid #35574d;font-size:12px;line-height:1.55;color:#cad5d1}.finding b{color:white}.pill{display:inline-block;padding:5px 8px;font-size:9px;font-weight:900;letter-spacing:.12em}.good{background:#dcefe5;color:#1d594a}.bad{background:#f6dfdb;color:#8a342b}.watch{background:#f7ebcb;color:#855b10}.ai-summary{margin-top:20px;padding:28px;background:var(--lime);color:var(--ink)}.ai-summary h3{font:500 26px Georgia,serif;margin:10px 0}.ai-summary p{line-height:1.65;color:#28473f}.questions{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:18px}.question{padding:12px;background:rgba(255,255,255,.55);font-size:12px}.empty-state{padding:40px;border:1px dashed #9da7a3;color:var(--muted);text-align:center}.comparison-table{width:100%;border-collapse:collapse;background:white}.comparison-table th,.comparison-table td{padding:13px;border-bottom:1px solid var(--line);text-align:left;font-size:12px}.comparison-table th{font-size:10px;letter-spacing:.1em;color:var(--muted)}.winner{font-weight:800;color:var(--green)}.valuation-grid{display:grid;grid-template-columns:.7fr 1.3fr;gap:22px}.pad{padding:24px}.pad label,.modal-card label{display:block;font-size:11px;font-weight:800;margin:14px 0}.pad input,.modal-card input{display:block;width:100%;margin-top:6px;padding:11px;border:1px solid var(--line);background:white}.scenario{display:grid;grid-template-columns:1fr auto;gap:4px;padding:13px 0;border-bottom:1px solid var(--line)}.scenario small{grid-column:1/3;color:var(--muted)}.method-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:22px}.method-grid article b{color:var(--green);font:500 18px Georgia}.method-grid article h3{margin:14px 0 6px;font:500 19px Georgia}.method-grid article p{font-size:12px;color:var(--muted);line-height:1.6}.error{padding:13px;margin-bottom:16px;background:#f8e2dc;color:#7b2e27;border-left:4px solid var(--danger)}footer{padding:22px 5vw;background:#0c1d19;color:#81928c;display:flex;justify-content:space-between;font-size:11px}.modal{position:fixed;inset:0;background:rgba(12,29,25,.65);z-index:50;display:grid;place-items:center;padding:20px}.modal[hidden]{display:none}.modal-card{position:relative;width:min(500px,100%);padding:30px;background:var(--paper)}.close{position:absolute;right:15px;top:12px;border:0;background:none;font-size:26px}.text-btn{color:var(--green);font-weight:800}@media(max-width:900px){.topbar nav,.status{display:none}.hero,.two-col,.valuation-grid{grid-template-columns:1fr}.ticker{grid-template-columns:1fr 1fr}.metric-grid{grid-template-columns:repeat(2,1fr)}.panel-grid,.verdict-grid,.method-grid{grid-template-columns:1fr 1fr}}@media(max-width:600px){.hero,.workspace,.cream,.dark{padding:48px 20px}.ticker,.metric-grid,.panel-grid,.verdict-grid,.method-grid,.questions{grid-template-columns:1fr}.section-head{align-items:start;flex-direction:column}.ticker>div,.ticker>button{padding:14px 20px}}
-.ai-live{margin-top:22px}.ai-output{margin-top:16px;padding:16px;border:1px solid rgba(255,255,255,.18);white-space:pre-wrap;line-height:1.6;max-height:520px;overflow:auto}.cream .ai-output,.workspace .ai-output{border-color:var(--line);background:#fff}.ask-row{display:grid;grid-template-columns:1fr auto;gap:10px;margin-top:14px}.ask-row input{min-width:0;padding:13px;border:1px solid var(--line);font:inherit}.compare-ai{margin-top:24px}.ai-finding{padding:12px 0;border-bottom:1px solid rgba(255,255,255,.16)}.ai-finding:last-child{border-bottom:0}.ai-finding small{display:block;opacity:.72;margin-top:5px}.ai-output .group-title{margin:18px 0 8px;font-weight:800;letter-spacing:.08em;font-size:11px}.loading{opacity:.7}@media(max-width:620px){.ask-row{grid-template-columns:1fr}.ask-row button{width:100%}}
-.pad textarea{display:block;width:100%;margin-top:6px;padding:11px;border:1px solid var(--line);background:white;font:inherit;resize:vertical}
+/* ============================================================
+   FINSIGHT AI
+   Investor Research Copilot
+   Responsive UI — Desktop + iPad + Mobile
+   ============================================================ */
+
+
+/* ============================================================
+   1. DESIGN SYSTEM
+   ============================================================ */
+
+:root {
+  --ink: #10231f;
+  --forest: #173f35;
+  --forest-dark: #102f28;
+  --green: #2f7d68;
+  --mint: #dcebe5;
+  --lime: #b7df75;
+
+  --cream: #f5f2e9;
+  --paper: #fffdf7;
+  --white: #ffffff;
+
+  --line: #d9ddd5;
+  --line-dark: #45645b;
+
+  --muted: #63716c;
+
+  --danger: #a44135;
+  --warning: #9a6a15;
+
+  --content-width: 1440px;
+
+  --section-x: 7vw;
+  --section-y: 68px;
+
+  --radius: 4px;
+}
+
+
+/* ============================================================
+   2. RESET
+   ============================================================ */
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+
+  background: var(--paper);
+  color: var(--ink);
+
+  /*
+   * One typography system throughout the site.
+   * This removes the previous Georgia / Inter mismatch.
+   */
+  font-family:
+    Inter,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
+
+  font-size: 16px;
+  line-height: 1.5;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+button,
+label[for] {
+  cursor: pointer;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+input,
+textarea,
+select {
+  outline: none;
+}
+
+img,
+svg {
+  max-width: 100%;
+}
+
+h1,
+h2,
+h3,
+h4,
+p {
+  margin-top: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+strong {
+  color: inherit;
+}
+
+
+/* ============================================================
+   3. TYPOGRAPHY
+   ============================================================ */
+
+h1 {
+  margin-bottom: 24px;
+
+  font-size: clamp(44px, 6vw, 76px);
+  font-weight: 600;
+  line-height: 0.99;
+  letter-spacing: -0.045em;
+}
+
+h1 em {
+  color: var(--green);
+  font-style: normal;
+  font-weight: 600;
+}
+
+h2 {
+  margin: 0;
+
+  font-size: clamp(30px, 4vw, 44px);
+  font-weight: 600;
+  line-height: 1.08;
+  letter-spacing: -0.035em;
+}
+
+h3 {
+  font-size: 23px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+}
+
+h4 {
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.eyebrow,
+.kicker,
+.tiny {
+  margin-bottom: 10px;
+
+  color: var(--green);
+
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.3;
+
+  letter-spacing: 0.17em;
+  text-transform: uppercase;
+}
+
+.intro {
+  max-width: 760px;
+
+  margin-bottom: 0;
+
+  color: var(--muted);
+
+  font-size: 18px;
+  line-height: 1.65;
+}
+
+.note {
+  color: var(--muted);
+
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+
+/* ============================================================
+   4. TOP NAVIGATION
+   ============================================================ */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+
+  min-height: 72px;
+
+  padding: 0 5vw;
+
+  display: flex;
+  align-items: center;
+  gap: 36px;
+
+  background: rgba(255, 253, 247, 0.96);
+
+  border-bottom: 1px solid var(--line);
+
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+
+  color: var(--ink);
+
+  text-decoration: none;
+
+  font-size: 21px;
+  font-weight: 750;
+
+  white-space: nowrap;
+}
+
+.brand-mark {
+  width: 36px;
+  height: 36px;
+
+  display: grid;
+  place-items: center;
+
+  border-radius: 50% 50% 50% 9px;
+
+  background: var(--forest);
+  color: white;
+
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.topbar nav {
+  display: flex;
+  align-items: center;
+  gap: 26px;
+}
+
+.topbar nav a {
+  color: var(--muted);
+
+  text-decoration: none;
+
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.topbar nav a:hover {
+  color: var(--green);
+}
+
+.status {
+  margin-left: auto;
+
+  color: var(--muted);
+
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.status i {
+  width: 7px;
+  height: 7px;
+
+  margin-right: 7px;
+
+  display: inline-block;
+
+  border-radius: 50%;
+
+  background: var(--lime);
+}
+
+
+/* ============================================================
+   5. HERO
+   ============================================================ */
+
+.hero {
+  padding: 78px var(--section-x);
+
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+  gap: 7vw;
+  align-items: center;
+
+  background:
+    radial-gradient(
+      circle at 80% 5%,
+      rgba(183, 223, 117, 0.25),
+      transparent 28%
+    ),
+    var(--cream);
+}
+
+.hero-copy {
+  min-width: 0;
+}
+
+.hero-actions {
+  margin: 28px 0 14px;
+
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+
+/* ============================================================
+   6. BUTTONS
+   ============================================================ */
+
+.primary,
+.secondary,
+.text-btn {
+  min-height: 48px;
+
+  padding: 0 20px;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  border-radius: var(--radius);
+
+  font-size: 13px;
+  font-weight: 750;
+  line-height: 1;
+
+  text-decoration: none;
+
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    transform 0.1s ease;
+}
+
+.primary {
+  border: 1px solid var(--forest);
+
+  background: var(--forest);
+  color: white;
+}
+
+.primary:hover {
+  background: var(--forest-dark);
+}
+
+.secondary {
+  border: 1px solid #87938f;
+
+  background: transparent;
+  color: var(--forest);
+}
+
+.secondary:hover {
+  border-color: var(--green);
+
+  background: rgba(47, 125, 104, 0.06);
+}
+
+.primary:active,
+.secondary:active,
+.text-btn:active {
+  transform: translateY(1px);
+}
+
+
+/* ============================================================
+   7. INVESTOR WORKFLOW CARD
+   ============================================================ */
+
+.hero-card {
+  padding: 30px;
+
+  background: var(--forest);
+  color: white;
+
+  box-shadow: 0 20px 60px rgba(16, 35, 31, 0.1);
+}
+
+.hero-label {
+  margin-bottom: 24px;
+
+  color: var(--lime);
+
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.17em;
+}
+
+.flow {
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  gap: 4px 12px;
+}
+
+.flow b {
+  grid-row: 1 / 3;
+
+  color: var(--lime);
+
+  font-size: 22px;
+  font-weight: 500;
+}
+
+.flow span {
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.flow small {
+  color: #a9b7b2;
+
+  font-size: 13px;
+}
+
+.line {
+  height: 27px;
+
+  margin: 7px 0 7px 19px;
+
+  border-left: 1px solid #45645b;
+}
+
+
+/* ============================================================
+   8. COMPANY + MARKET STRIP
+   ============================================================ */
+
+/*
+ * FIX:
+ * Previous layout used five columns including the market button.
+ *
+ * New layout:
+ *
+ * Company | Price | Valuation | Confidence
+ * ----------------------------------------
+ *          Set market data →
+ */
+
+.ticker {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+
+  background: var(--line);
+
+  gap: 1px;
+}
+
+.ticker-item {
+  min-width: 0;
+
+  padding: 22px 28px;
+
+  background: white;
+}
+
+.ticker-item strong {
+  margin-top: 7px;
+
+  display: block;
+
+  font-size: 17px;
+  font-weight: 600;
+
+  overflow-wrap: anywhere;
+}
+
+.market-data-button {
+  grid-column: 1 / -1;
+
+  width: 100%;
+
+  min-height: 54px;
+
+  padding: 0 28px;
+
+  justify-content: flex-start;
+
+  border: 0;
+
+  background: #f0f3ed;
+  color: var(--green);
+
+  font-size: 14px;
+  font-weight: 800;
+
+  text-align: left;
+}
+
+.market-data-button:hover {
+  background: var(--mint);
+}
+
+
+/* ============================================================
+   9. STANDARD SECTIONS
+   ============================================================ */
+
+.workspace,
+.cream,
+.dark {
+  padding: var(--section-y) var(--section-x);
+}
+
+.cream {
+  background: var(--cream);
+}
+
+.dark {
+  background: var(--forest);
+  color: white;
+}
+
+.section-head {
+  margin-bottom: 30px;
+
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+
+  gap: 30px;
+}
+
+.section-head > span,
+.section-head > p {
+  max-width: 420px;
+
+  margin: 0;
+
+  color: var(--muted);
+
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.dark .section-head > p,
+.dark .section-head > span {
+  color: #aabbb5;
+}
+
+
+/* ============================================================
+   10. METRICS
+   ============================================================ */
+
+.metric-grid {
+  margin-bottom: 24px;
+
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+
+  border: 1px solid var(--line);
+
+  background: var(--line);
+
+  gap: 1px;
+}
+
+.metric {
+  min-width: 0;
+
+  padding: 22px;
+
+  background: white;
+}
+
+.metric span {
+  color: var(--muted);
+
+  font-size: 10px;
+  font-weight: 800;
+
+  letter-spacing: 0.11em;
+}
+
+.metric strong {
+  margin: 10px 0 5px;
+
+  display: block;
+
+  font-size: 25px;
+  font-weight: 600;
+}
+
+.metric small {
+  font-size: 11px;
+}
+
+.up {
+  color: var(--green);
+}
+
+.down {
+  color: var(--danger);
+}
+
+
+/* ============================================================
+   11. GENERAL CARDS
+   ============================================================ */
+
+.two-col {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(300px, 0.75fr);
+
+  gap: 22px;
+}
+
+.card {
+  min-width: 0;
+
+  border: 1px solid var(--line);
+
+  background: white;
+  color: var(--ink);
+}
+
+.card header {
+  padding: 22px 24px 0;
+}
+
+.card h3 {
+  margin-bottom: 16px;
+}
+
+.pad {
+  padding: 28px;
+}
+
+
+/* ============================================================
+   12. CHART
+   ============================================================ */
+
+.chart {
+  min-height: 270px;
+
+  padding: 12px 18px 18px;
+}
+
+.chart svg {
+  width: 100%;
+  height: 260px;
+
+  display: block;
+}
+
+
+/* ============================================================
+   13. SCORECARD
+   ============================================================ */
+
+.score-area {
+  padding: 24px;
+
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  align-items: center;
+
+  gap: 20px;
+}
+
+.ring {
+  --score: 0;
+
+  width: 105px;
+  height: 105px;
+
+  display: grid;
+  place-content: center;
+
+  border-radius: 50%;
+
+  background:
+    radial-gradient(circle, white 61%, transparent 62%),
+    conic-gradient(
+      var(--green) calc(var(--score) * 1%),
+      var(--mint) 0
+    );
+
+  font-size: 30px;
+  font-weight: 600;
+}
+
+.ring small {
+  text-align: center;
+
+  font-size: 11px;
+}
+
+.score-area p {
+  margin: 7px 0 0;
+
+  color: var(--muted);
+
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.score-bars {
+  padding: 0 24px 24px;
+}
+
+.score-row {
+  margin-top: 11px;
+
+  display: grid;
+  grid-template-columns: 92px 1fr 30px;
+  align-items: center;
+
+  gap: 9px;
+
+  color: var(--muted);
+
+  font-size: 10px;
+}
+
+.track {
+  height: 5px;
+
+  background: var(--mint);
+}
+
+.track i {
+  height: 100%;
+
+  display: block;
+
+  background: var(--green);
+}
+
+
+/* ============================================================
+   14. ANALYSIS TABS
+   ============================================================ */
+
+.section-tabs {
+  margin: 44px 0 18px;
+
+  padding-bottom: 4px;
+
+  display: flex;
+
+  gap: 8px;
+
+  overflow-x: auto;
+
+  -webkit-overflow-scrolling: touch;
+}
+
+.tab {
+  min-height: 42px;
+
+  padding: 0 14px;
+
+  flex: 0 0 auto;
+
+  border: 1px solid var(--line);
+
+  background: white;
+
+  font-size: 11px;
+  font-weight: 750;
+
+  white-space: nowrap;
+}
+
+.tab.active {
+  border-color: var(--forest);
+
+  background: var(--forest);
+  color: white;
+}
+
+
+/* ============================================================
+   15. FINANCIAL SECTION CARDS
+   ============================================================ */
+
+.panel-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+
+  gap: 14px;
+}
+
+.panel-card {
+  min-width: 0;
+
+  padding: 22px;
+
+  border: 1px solid var(--line);
+
+  background: white;
+}
+
+.panel-card h4 {
+  margin: 0 0 8px;
+}
+
+.panel-card strong {
+  margin-bottom: 7px;
+
+  display: block;
+
+  font-size: 20px;
+}
+
+.panel-card p {
+  margin: 0;
+
+  color: var(--muted);
+
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+
+/* ============================================================
+   16. GOOD / BAD / WATCH
+   ============================================================ */
+
+/*
+ * FIX:
+ * Each card sizes naturally.
+ * No forced extra grey/empty box underneath concerns.
+ */
+
+.verdict-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+
+  align-items: start;
+
+  gap: 1px;
+
+  border: 1px solid var(--line-dark);
+
+  background: var(--line-dark);
+}
+
+.verdict-grid article {
+  min-width: 0;
+
+  padding: 30px;
+
+  align-self: stretch;
+
+  background: var(--forest);
+}
+
+.verdict-grid h3 {
+  margin: 16px 0 20px;
+
+  font-size: 23px;
+  font-weight: 600;
+}
+
+.pill {
+  padding: 6px 9px;
+
+  display: inline-block;
+
+  font-size: 9px;
+  font-weight: 900;
+
+  letter-spacing: 0.13em;
+}
+
+.good {
+  background: #dcefe5;
+  color: #1d594a;
+}
+
+.bad {
+  background: #f6dfdb;
+  color: #8a342b;
+}
+
+.watch {
+  background: #f7ebcb;
+  color: #855b10;
+}
+
+.finding {
+  padding: 13px 0;
+
+  border-top: 1px solid #35574d;
+
+  color: #cad5d1;
+
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.finding b {
+  color: white;
+
+  font-weight: 700;
+}
+
+
+/* ============================================================
+   17. INVESTOR BRIEF
+   ============================================================ */
+
+.ai-summary {
+  margin-top: 24px;
+
+  padding: 32px;
+
+  background: var(--lime);
+  color: var(--ink);
+}
+
+.ai-summary h3 {
+  margin: 11px 0 12px;
+
+  font-size: 27px;
+  font-weight: 600;
+}
+
+.ai-summary p {
+  margin-bottom: 0;
+
+  color: #28473f;
+
+  line-height: 1.7;
+}
+
+.questions {
+  margin-top: 20px;
+
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+
+  gap: 9px;
+}
+
+.question {
+  padding: 14px;
+
+  background: rgba(255, 255, 255, 0.42);
+
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+
+/* ============================================================
+   18. AI SECTIONS
+   ============================================================ */
+
+.ai-live {
+  margin-top: 24px;
+}
+
+.ai-output {
+  margin-top: 18px;
+
+  padding: 18px;
+
+  border: 1px solid rgba(16, 35, 31, 0.18);
+
+  background: rgba(255, 255, 255, 0.16);
+
+  white-space: pre-wrap;
+
+  font-size: 13px;
+  line-height: 1.65;
+
+  max-height: 560px;
+
+  overflow: auto;
+}
+
+.dark .ai-output {
+  border-color: rgba(16, 35, 31, 0.18);
+}
+
+.cream .ai-output,
+.workspace .ai-output {
+  border-color: var(--line);
+
+  background: #f8f8f4;
+}
+
+.ai-finding {
+  padding: 13px 0;
+
+  border-bottom: 1px solid rgba(16, 35, 31, 0.15);
+}
+
+.ai-finding:last-child {
+  border-bottom: 0;
+}
+
+.ai-finding small {
+  margin-top: 6px;
+
+  display: block;
+
+  opacity: 0.72;
+}
+
+.ai-output .group-title,
+.group-title {
+  margin: 20px 0 9px;
+
+  color: var(--green);
+
+  font-size: 11px;
+  font-weight: 800;
+
+  letter-spacing: 0.1em;
+}
+
+.loading {
+  opacity: 0.7;
+}
+
+
+/* ============================================================
+   19. ASK FINSIGHT
+   ============================================================ */
+
+/*
+ * FIX:
+ * Removes the disconnected bright white input.
+ */
+
+.ask-finsight-card {
+  background: var(--lime);
+}
+
+.ask-row {
+  margin-top: 18px;
+
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+
+  gap: 12px;
+}
+
+.ask-row input,
+.ai-question-input {
+  width: 100%;
+  min-width: 0;
+  min-height: 50px;
+
+  padding: 0 16px;
+
+  border: 1px solid rgba(16, 35, 31, 0.28);
+
+  border-radius: var(--radius);
+
+  background: rgba(255, 255, 255, 0.35);
+
+  color: var(--ink);
+
+  font-size: 14px;
+}
+
+.ask-row input::placeholder {
+  color: #587169;
+
+  opacity: 0.85;
+}
+
+.ask-row input:focus {
+  border-color: var(--green);
+
+  background: rgba(255, 255, 255, 0.55);
+
+  box-shadow: 0 0 0 3px rgba(47, 125, 104, 0.1);
+}
+
+.ask-row .primary {
+  min-width: 105px;
+}
+
+
+/* ============================================================
+   20. COMPETITOR
+   ============================================================ */
+
+.empty-state {
+  padding: 44px;
+
+  border: 1px dashed #9da7a3;
+
+  color: var(--muted);
+
+  text-align: center;
+
+  line-height: 1.6;
+}
+
+.compare-ai {
+  margin-top: 26px;
+}
+
+.comparison-table {
+  width: 100%;
+
+  border-collapse: collapse;
+
+  background: white;
+}
+
+.comparison-table th,
+.comparison-table td {
+  padding: 14px;
+
+  border-bottom: 1px solid var(--line);
+
+  text-align: left;
+
+  font-size: 12px;
+}
+
+.comparison-table th {
+  color: var(--muted);
+
+  font-size: 10px;
+  font-weight: 800;
+
+  letter-spacing: 0.1em;
+}
+
+.winner {
+  color: var(--green);
+
+  font-weight: 800;
+}
+
+
+/* ============================================================
+   21. VALUATION + DCF LAYOUT
+   ============================================================ */
+
+.valuation-grid {
+  display: grid;
+  grid-template-columns:
+    minmax(320px, 0.82fr)
+    minmax(0, 1.18fr);
+
+  align-items: start;
+
+  gap: 24px;
+}
+
+.valuation-card {
+  padding: 30px;
+}
+
+.valuation-card > h3,
+.pad > h3 {
+  margin-bottom: 24px;
+
+  font-size: 25px;
+  font-weight: 600;
+}
+
+.pad label,
+.modal-card label {
+  margin: 0 0 18px;
+
+  display: block;
+
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.pad label small {
+  display: block;
+
+  color: var(--muted);
+
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.pad input,
+.pad textarea,
+.pad select,
+.modal-card input,
+.modal-card select {
+  width: 100%;
+
+  margin-top: 7px;
+
+  border: 1px solid var(--line);
+
+  border-radius: var(--radius);
+
+  background: #fafbf7;
+
+  color: var(--ink);
+
+  font-size: 14px;
+}
+
+.pad input,
+.pad select,
+.modal-card input,
+.modal-card select {
+  min-height: 48px;
+
+  padding: 0 14px;
+}
+
+.pad textarea {
+  padding: 13px 14px;
+
+  line-height: 1.55;
+
+  resize: vertical;
+}
+
+.pad input:focus,
+.pad textarea:focus,
+.pad select:focus,
+.modal-card input:focus,
+.modal-card select:focus {
+  border-color: var(--green);
+
+  background: white;
+
+  box-shadow: 0 0 0 3px rgba(47, 125, 104, 0.08);
+}
+
+.valuation-actions {
+  margin-top: 8px;
+
+  display: flex;
+  flex-wrap: wrap;
+
+  gap: 10px;
+}
+
+.market-note {
+  margin: 18px 0 0;
+}
+
+
+/* ============================================================
+   22. VALUATION SCENARIOS
+   ============================================================ */
+
+/*
+ * FIX:
+ * Uniform fonts, spacing and result hierarchy.
+ */
+
+.scenario-list {
+  margin-top: 4px;
+}
+
+.scenario-list > p {
+  margin: 0;
+
+  color: var(--muted);
+
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.scenario {
+  padding: 16px 0;
+
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+
+  align-items: center;
+
+  gap: 5px 20px;
+
+  border-bottom: 1px solid var(--line);
+}
+
+.scenario b {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.scenario strong {
+  font-size: 21px;
+  font-weight: 650;
+}
+
+.scenario small {
+  grid-column: 1 / -1;
+
+  color: var(--muted);
+
+  font-size: 11px;
+}
+
+.valuation-ai-section {
+  margin-top: 30px;
+
+  padding-top: 4px;
+}
+
+.valuation-ai-section .group-title {
+  margin-bottom: 12px;
+}
+
+
+/* ============================================================
+   23. METHODOLOGY
+   ============================================================ */
+
+.methodology-section {
+  padding-top: 76px;
+  padding-bottom: 76px;
+}
+
+.method-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+
+  gap: 28px;
+}
+
+.method-grid article b {
+  color: var(--green);
+
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.method-grid article h3 {
+  margin: 15px 0 7px;
+
+  font-size: 19px;
+}
+
+.method-grid article p {
+  margin: 0;
+
+  color: var(--muted);
+
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+
+/* ============================================================
+   24. ERROR
+   ============================================================ */
+
+.error {
+  margin-bottom: 18px;
+
+  padding: 14px 16px;
+
+  border-left: 4px solid var(--danger);
+
+  background: #f8e2dc;
+  color: #7b2e27;
+
+  font-size: 13px;
+}
+
+
+/* ============================================================
+   25. FOOTER
+   ============================================================ */
+
+footer {
+  padding: 24px 5vw;
+
+  display: flex;
+  justify-content: space-between;
+
+  gap: 20px;
+
+  background: #0c1d19;
+  color: #81928c;
+
+  font-size: 11px;
+}
+
+
+/* ============================================================
+   26. MARKET DATA MODAL
+   ============================================================ */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+
+  padding: 20px;
+
+  display: grid;
+  place-items: center;
+
+  background: rgba(12, 29, 25, 0.68);
+}
+
+.modal[hidden] {
+  display: none;
+}
+
+.modal-card {
+  position: relative;
+
+  width: min(520px, 100%);
+
+  padding: 32px;
+
+  background: var(--paper);
+
+  box-shadow: 0 25px 70px rgba(0, 0, 0, 0.2);
+}
+
+.modal-card h2 {
+  margin-bottom: 16px;
+
+  font-size: 32px;
+}
+
+.modal-card .note {
+  margin-bottom: 22px;
+}
+
+.close {
+  position: absolute;
+
+  top: 10px;
+  right: 14px;
+
+  width: 42px;
+  height: 42px;
+
+  border: 0;
+
+  background: transparent;
+
+  color: var(--ink);
+
+  font-size: 28px;
+  line-height: 1;
+}
+
+
+/* ============================================================
+   27. IPAD / TABLET
+   ============================================================ */
+
+@media (max-width: 1100px) {
+
+  :root {
+    --section-x: 7vw;
+    --section-y: 58px;
+  }
+
+  .topbar nav,
+  .status {
+    display: none;
+  }
+
+  .hero {
+    grid-template-columns: 1fr;
+
+    gap: 38px;
+
+    padding-top: 58px;
+    padding-bottom: 58px;
+  }
+
+  .hero-card {
+    width: 100%;
+  }
+
+
+  /*
+   * iPad:
+   * clean 2 × 2 market information
+   * followed by full-width market button.
+   */
+
+  .ticker {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .market-data-button {
+    grid-column: 1 / -1;
+  }
+
+
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .metric:last-child {
+    grid-column: 1 / -1;
+  }
+
+
+  .two-col {
+    grid-template-columns: 1fr;
+  }
+
+
+  .panel-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+
+  /*
+   * Important iPad fix:
+   * Good / Bad / Watch becomes one clean vertical stack.
+   * No dead box below concerns.
+   */
+
+  .verdict-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .verdict-grid article {
+    padding: 28px;
+  }
+
+
+  .valuation-grid {
+    grid-template-columns: 1fr;
+
+    gap: 22px;
+  }
+
+
+  .method-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+
+/* ============================================================
+   28. SMALL TABLET
+   ============================================================ */
+
+@media (max-width: 760px) {
+
+  .topbar {
+    min-height: 66px;
+
+    padding-left: 22px;
+    padding-right: 22px;
+  }
+
+  .brand {
+    font-size: 19px;
+  }
+
+  .brand-mark {
+    width: 34px;
+    height: 34px;
+  }
+
+  .hero,
+  .workspace,
+  .cream,
+  .dark {
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+
+  .section-head {
+    align-items: flex-start;
+    flex-direction: column;
+
+    gap: 10px;
+  }
+
+  .questions {
+    grid-template-columns: 1fr;
+  }
+
+  .ask-row {
+    grid-template-columns: 1fr;
+  }
+
+  .ask-row .primary {
+    width: 100%;
+  }
+
+  .valuation-actions {
+    flex-direction: column;
+  }
+
+  .valuation-actions .primary,
+  .valuation-actions .secondary {
+    width: 100%;
+  }
+}
+
+
+/* ============================================================
+   29. MOBILE
+   ============================================================ */
+
+@media (max-width: 600px) {
+
+  :root {
+    --section-x: 20px;
+    --section-y: 48px;
+  }
+
+  h1 {
+    font-size: 44px;
+  }
+
+  h2 {
+    font-size: 32px;
+  }
+
+  .hero {
+    padding: 48px 20px;
+  }
+
+  .hero-actions {
+    flex-direction: column;
+  }
+
+  .hero-actions .primary,
+  .hero-actions .secondary {
+    width: 100%;
+  }
+
+
+  .ticker {
+    grid-template-columns: 1fr;
+  }
+
+  .market-data-button {
+    grid-column: 1;
+  }
+
+  .ticker-item,
+  .market-data-button {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+
+
+  .metric-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .metric:last-child {
+    grid-column: auto;
+  }
+
+
+  .panel-grid {
+    grid-template-columns: 1fr;
+  }
+
+
+  .method-grid {
+    grid-template-columns: 1fr;
+  }
+
+
+  .score-area {
+    grid-template-columns: 95px 1fr;
+
+    padding: 20px;
+  }
+
+  .ring {
+    width: 90px;
+    height: 90px;
+
+    font-size: 26px;
+  }
+
+
+  .ai-summary,
+  .valuation-card,
+  .pad {
+    padding: 22px;
+  }
+
+
+  .scenario {
+    grid-template-columns: 1fr;
+  }
+
+  .scenario strong {
+    margin-top: 3px;
+  }
+
+  .scenario small {
+    grid-column: 1;
+  }
+
+
+  footer {
+    flex-direction: column;
+
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+
+
+  .modal {
+    padding: 12px;
+  }
+
+  .modal-card {
+    padding: 26px 20px;
+  }
+}
