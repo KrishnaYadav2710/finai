@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: finsight-free-edition
+    runtime: node
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash-lite
+      - key: ALPHA_VANTAGE_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_SSL
+        value: "true"
+      - key: FINSIGHT_USERNAME
+        sync: false
+      - key: FINSIGHT_PASSWORD
+        sync: false
