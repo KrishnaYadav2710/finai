@@ -1838,58 +1838,62 @@ financial statements.
 
         }
 
-        catch (
+        catch (error) {
+
+  console.error(
+    "Financial extraction full error:",
+    error
+  );
+
+  let message =
+    "Annual-report financial extraction failed.";
+
+  if (
+    typeof error === "string"
+  ) {
+
+    message =
+      error;
+
+  } else if (
+    error?.message &&
+    typeof error.message === "string"
+  ) {
+
+    message =
+      error.message;
+
+  } else if (
+    error &&
+    typeof error === "object"
+  ) {
+
+    try {
+
+      message =
+        JSON.stringify(
           error
-        ) {
+        );
 
-          console.error(
-            "Financial extraction persistence warning:",
-            error.message
-          );
-
-        }
-
-      }
-
-
-      return res.json({
-
-        ...result,
-
-        model:
-          GEMINI_MODEL,
-
-        persisted
-
-      });
-
-    }
-
-    catch (
-      error
-    ) {
-
-      console.error(
-        "Financial extraction:",
-        error
-      );
-
-
-      return res
-        .status(500)
-        .json({
-
-          error:
-            error.message ||
-            "Annual-report financial extraction failed."
-
-        });
-
+    } catch {
+      message =
+        "Unknown financial extraction error.";
     }
 
   }
-);
 
+  return res
+    .status(500)
+    .json({
+
+      ok: false,
+
+      error:
+        message
+
+    });
+
+}
 
 /* ============================================================
    15. ANNUAL REPORT AI
