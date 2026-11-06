@@ -861,122 +861,158 @@ function scoreMetric(
 
 }
 
-
 function buildScores(row) {
 
-  const profitability =
+  const scores = {};
 
-    row.operating_margin == null &&
-    row.roe == null
+  /*
+   * PROFITABILITY
+   */
 
-      ? 50
+  const profitabilityInputs = [];
 
-      : clamp(
+  if (row.operating_margin != null) {
 
-          40
+    profitabilityInputs.push(
+      clamp(
+        40 +
+        row.operating_margin * 180
+      )
+    );
 
-          +
+  }
 
-          scoreMetric(
-            row.operating_margin,
-            0
-          ) * 170
+  if (row.roe != null) {
 
-          +
+    profitabilityInputs.push(
+      clamp(
+        40 +
+        row.roe * 120
+      )
+    );
 
-          scoreMetric(
-            row.roe,
-            0
-          ) * 75
+  }
 
-        );
+  if (row.roce != null) {
 
+    profitabilityInputs.push(
+      clamp(
+        40 +
+        row.roce * 120
+      )
+    );
 
-  const liquidity =
+  }
 
-    row.current_ratio == null
+  if (profitabilityInputs.length) {
 
-      ? 50
-
-      : clamp(
-          25 +
-          row.current_ratio * 35
-        );
-
-
-  const leverage =
-
-    row.debt_equity == null
-
-      ? 50
-
-      : clamp(
-          100 -
-          row.debt_equity * 50
-        );
-
-
-  const cashQuality =
-
-    row.cash_conversion == null
-
-      ? 50
-
-      : clamp(
-          row.cash_conversion * 100
-        );
-
-
-  let efficiency =
-    70;
-
-
-  if (
-    row.receivable_days != null
-  ) {
-
-    efficiency -=
-
-      Math.max(
-        0,
-        row.receivable_days - 45
-      ) * 0.7;
+    scores.Profitability =
+      profitabilityInputs.reduce(
+        (sum, value) =>
+          sum + value,
+        0
+      ) /
+      profitabilityInputs.length;
 
   }
 
 
-  if (
-    row.inventory_days != null
-  ) {
+  /*
+   * LIQUIDITY
+   */
 
-    efficiency -=
+  if (row.current_ratio != null) {
 
-      Math.max(
-        0,
-        row.inventory_days - 60
-      ) * 0.3;
+    scores.Liquidity =
+      clamp(
+        row.current_ratio >= 2
+          ? 100
+          : row.current_ratio * 50
+      );
 
   }
 
 
-  return {
+  /*
+   * LEVERAGE
+   */
 
-    Profitability:
-      clamp(profitability),
+  if (row.debt_equity != null) {
 
-    Liquidity:
-      clamp(liquidity),
+    scores.Leverage =
+      clamp(
+        100 -
+        row.debt_equity * 55
+      );
 
-    Leverage:
-      clamp(leverage),
+  }
 
-    "CFO / net profit":
-  clamp(cashQuality),
 
-    Efficiency:
-      clamp(efficiency)
+  /*
+   * CASH QUALITY
+   */
 
-  };
+  if (row.cash_conversion != null) {
+
+    scores["CFO / net profit"] =
+      clamp(
+        row.cash_conversion * 75
+      );
+
+  }
+
+
+  /*
+   * EFFICIENCY
+   *
+   * IMPORTANT:
+   * Missing working-capital data is NOT scored as zero.
+   */
+
+  const efficiencyInputs = [];
+
+  if (row.receivable_days != null) {
+
+    efficiencyInputs.push(
+      clamp(
+        100 -
+        Math.max(
+          0,
+          row.receivable_days - 30
+        )
+      )
+    );
+
+  }
+
+  if (row.inventory_days != null) {
+
+    efficiencyInputs.push(
+      clamp(
+        100 -
+        Math.max(
+          0,
+          row.inventory_days - 45
+        ) * 0.6
+      )
+    );
+
+  }
+
+  if (efficiencyInputs.length) {
+
+    scores.Efficiency =
+      efficiencyInputs.reduce(
+        (sum, value) =>
+          sum + value,
+        0
+      ) /
+      efficiencyInputs.length;
+
+  }
+
+
+  return scores;
 
 }
 
