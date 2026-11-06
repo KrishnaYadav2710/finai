@@ -2148,7 +2148,6 @@ function renderChart() {
 /* ============================================================
    14. SCORE
    ============================================================ */
-
 function renderScore() {
 
   const row =
@@ -2163,91 +2162,154 @@ function renderScore() {
     buildScores(row);
 
 
-  const values =
-    Object.values(
-      scoreSet
+  /*
+   * Only available categories count.
+   * Missing information must NOT become zero.
+   */
+
+  const validEntries =
+    Object.entries(scoreSet)
+      .filter(
+        ([, value]) =>
+          Number.isFinite(value)
+      );
+
+
+  const validValues =
+    validEntries.map(
+      ([, value]) =>
+        value
     );
 
 
   const total =
-    Math.round(
 
-      values.reduce(
-        (sum, value) =>
-          sum + value,
-        0
-      )
+    validValues.length
 
-      /
+      ? Math.round(
+          validValues.reduce(
+            (sum, value) =>
+              sum + value,
+            0
+          ) /
+          validValues.length
+        )
 
-      values.length
+      : null;
 
-    );
 
+  /*
+   * SCORE RING
+   */
 
   $("#ring")
     .style
     .setProperty(
       "--score",
-      total
+      total ?? 0
     );
 
 
   $("#score").textContent =
-    total;
 
+    total == null
+      ? "N/A"
+      : total;
+
+
+  /*
+   * OVERALL LABEL
+   */
 
   $("#scoreLabel").textContent =
 
-    total >= 75
+    total == null
+
+      ? "Insufficient financial data"
+
+      : total >= 80
 
       ? "Strong financial profile"
 
-      : total >= 55
+      : total >= 65
+
+      ? "Good financial profile"
+
+      : total >= 50
 
       ? "Mixed financial profile"
 
       : "Elevated financial risk";
 
 
+  /*
+   * EXPLANATION
+   */
+
   $("#scoreCopy").textContent =
 
-    "Composite of available profitability, liquidity, leverage, cash-quality and efficiency indicators. Missing report fields are not fabricated.";
+    total == null
 
+      ?
+
+      "FinSight could not calculate a reliable financial-health score from the available annual-report data."
+
+      :
+
+      `Score calculated from ${validEntries.length} available financial-health categories. Missing categories are excluded rather than scored as zero.`;
+
+
+  /*
+   * INDIVIDUAL CATEGORY BARS
+   */
 
   $("#scoreBars").innerHTML =
 
-    Object.entries(
-      scoreSet
-    )
+    validEntries.length
 
-      .map(
-        ([name, value]) => `
+      ?
 
-          <div class="score-row">
+      validEntries
+        .map(
+          ([name, value]) => `
 
-            <span>
-              ${name}
-            </span>
+            <div class="score-row">
 
-            <div class="track">
+              <span>
+                ${name}
+              </span>
 
-              <i
-                style="width:${value}%"
-              ></i>
+              <div class="track">
+
+                <i
+                  style="width:${Math.round(
+                    value
+                  )}%"
+                ></i>
+
+              </div>
+
+              <b>
+                ${Math.round(
+                  value
+                )}
+              </b>
 
             </div>
 
-            <b>
-              ${Math.round(value)}
-            </b>
+          `
+        )
+        .join("")
 
-          </div>
+      :
 
-        `
-      )
+      `
 
-      .join("");
+        <div class="finding">
+          Insufficient annual-report data to calculate financial-health categories.
+        </div>
+
+      `;
 
 }
 
