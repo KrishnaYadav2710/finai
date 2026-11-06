@@ -2191,7 +2191,7 @@ section:not(.research-section):not(.company-header):not(.year-navigation) {
     1.7;
 
   white-space:
-    pre-wrap;
+    normal;
 
   overflow-wrap:
     anywhere;
