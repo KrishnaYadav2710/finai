@@ -923,7 +923,7 @@ function buildScores(row) {
       ? 50
 
       : clamp(
-          row.cash_conversion * 75
+          row.cash_conversion * 100
         );
 
 
@@ -970,8 +970,8 @@ function buildScores(row) {
     Leverage:
       clamp(leverage),
 
-    "Cash quality":
-      clamp(cashQuality),
+    "CFO / net profit":
+  clamp(cashQuality),
 
     Efficiency:
       clamp(efficiency)
