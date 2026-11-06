@@ -3867,15 +3867,54 @@ async function extractFinancialsFromPDF(
 
   if (!response.ok) {
 
-    throw new Error(
+  console.error(
+    "FinSight extraction error:",
+    payload
+  );
 
-      payload?.error ||
-      "Financial extraction failed."
+  let serverMessage =
+    `Financial extraction failed (${response.status}).`;
 
-    );
+  if (
+    typeof payload?.error === "string"
+  ) {
+
+    serverMessage =
+      payload.error;
+
+  } else if (
+    payload?.error?.message
+  ) {
+
+    serverMessage =
+      payload.error.message;
+
+  } else if (
+    typeof payload?.message === "string"
+  ) {
+
+    serverMessage =
+      payload.message;
+
+  } else if (
+    payload &&
+    typeof payload === "object"
+  ) {
+
+    serverMessage =
+      JSON.stringify(
+        payload,
+        null,
+        2
+      );
 
   }
 
+  throw new Error(
+    serverMessage
+  );
+
+}
 
   const rows =
     normalizeFinancialDataset(
