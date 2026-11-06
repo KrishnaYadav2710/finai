@@ -292,8 +292,44 @@ function showError(message) {
     return;
   }
 
+  let readableMessage =
+    "Unexpected error.";
+
+  if (
+    typeof message === "string"
+  ) {
+
+    readableMessage =
+      message;
+
+  } else if (
+    message instanceof Error
+  ) {
+
+    readableMessage =
+      message.message;
+
+  } else if (
+    message &&
+    typeof message === "object"
+  ) {
+
+    readableMessage =
+      message.error?.message ||
+      message.error ||
+      message.message ||
+      message.details ||
+      message.statusText ||
+      JSON.stringify(
+        message,
+        null,
+        2
+      );
+
+  }
+
   box.textContent =
-    message;
+    readableMessage;
 
   box.hidden =
     false;
