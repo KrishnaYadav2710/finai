@@ -409,19 +409,113 @@ async function initDatabase() {
 
   const optionalColumns = [
 
-    `
-    ALTER TABLE companies
-    ADD COLUMN IF NOT EXISTS
-    listing_status TEXT
-    `,
+  /*
+   * COMPANIES
+   */
 
-    `
-    ALTER TABLE companies
-    ADD COLUMN IF NOT EXISTS
-    isin TEXT
-    `
+  `
+  ALTER TABLE companies
+  ADD COLUMN IF NOT EXISTS
+  listing_status TEXT
+  `,
 
-  ];
+  `
+  ALTER TABLE companies
+  ADD COLUMN IF NOT EXISTS
+  isin TEXT
+  `,
+
+
+  /*
+   * REPORTS
+   *
+   * Older FinSight databases may already have
+   * this table without the newer columns.
+   */
+
+  `
+  ALTER TABLE reports
+  ADD COLUMN IF NOT EXISTS
+  filename TEXT
+  `,
+
+  `
+  ALTER TABLE reports
+  ADD COLUMN IF NOT EXISTS
+  report_year INTEGER
+  `,
+
+  `
+  ALTER TABLE reports
+  ADD COLUMN IF NOT EXISTS
+  metrics JSONB
+  DEFAULT '{}'::jsonb
+  `,
+
+  `
+  ALTER TABLE reports
+  ADD COLUMN IF NOT EXISTS
+  analysis JSONB
+  DEFAULT '{}'::jsonb
+  `,
+
+  `
+  ALTER TABLE reports
+  ADD COLUMN IF NOT EXISTS
+  source_hash TEXT
+  `,
+
+  `
+  ALTER TABLE reports
+  ADD COLUMN IF NOT EXISTS
+  created_at TIMESTAMPTZ
+  DEFAULT NOW()
+  `,
+
+
+  /*
+   * VALUATION SNAPSHOTS
+   */
+
+  `
+  ALTER TABLE valuation_snapshots
+  ADD COLUMN IF NOT EXISTS
+  created_at TIMESTAMPTZ
+  DEFAULT NOW()
+  `,
+
+
+  /*
+   * MANAGEMENT PROMISES
+   */
+
+  `
+  ALTER TABLE management_promises
+  ADD COLUMN IF NOT EXISTS
+  created_at TIMESTAMPTZ
+  DEFAULT NOW()
+  `,
+
+  `
+  ALTER TABLE management_promises
+  ADD COLUMN IF NOT EXISTS
+  updated_at TIMESTAMPTZ
+  DEFAULT NOW()
+  `,
+
+
+  /*
+   * MONITORING EVENTS
+   */
+
+  `
+  ALTER TABLE monitoring_events
+  ADD COLUMN IF NOT EXISTS
+  created_at TIMESTAMPTZ
+  DEFAULT NOW()
+  `
+
+];
 
 
   for (
