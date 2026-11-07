@@ -4437,7 +4437,6 @@ async function fetchAutomaticMarketData() {
   }
 
 }
-
 /* ============================================================
    MANUAL MARKET PRICE BUTTON
    ============================================================ */
@@ -4499,443 +4498,78 @@ $("#fetchMarketPrice")
 
 
         /*
-         * Market price is now available.
-         * Calculate valuation.
+         * Price successfully received.
+         * Now calculate valuation.
          */
 
-        function renderAutomaticValuation() {
-
-  const valuationStatus =
-    $("#valuationStatus");
-
-  const valuationView =
-    $("#valuationView");
-
-  const metricsContainer =
-    $("#autoValuationMetrics");
-
-  const resultsContainer =
-    $("#valuationResults");
+        renderAutomaticValuation();
 
 
-  /*
-   * No company uploaded yet.
-   */
-
-  if (!extractedCompany) {
-
-    valuationState =
-      null;
+        button.disabled =
+          false;
 
 
-    if (valuationStatus) {
-
-      valuationStatus.textContent =
-        "Waiting for company data";
-
-    }
+        button.textContent =
+          "Refresh price & valuation";
 
 
-    if (valuationView) {
+        /*
+         * Notify AI valuation that market
+         * information is now available.
+         */
 
-      valuationView.textContent =
-        "Upload an annual report to begin";
+        window.dispatchEvent(
 
-    }
+          new CustomEvent(
+            "finsight:market-ready",
+            {
+              detail: {
 
+                market:
+                  marketData,
 
-    if (metricsContainer) {
+                valuation:
+                  valuationState
 
-      metricsContainer.innerHTML =
-        "";
+              }
+            }
+          )
 
-    }
+        );
 
+      }
 
-    if (resultsContainer) {
+      catch (
+        error
+      ) {
 
-      resultsContainer.innerHTML =
-        "";
-
-    }
-
-
-    return;
-
-  }
-
-
-  /*
-   * Company exists but user has not fetched
-   * a market price yet.
-   */
-
-  if (!marketData) {
-
-    valuationState =
-      null;
+        console.error(
+          "Manual market price:",
+          error
+        );
 
 
-    if (valuationStatus) {
+        $("#priceDisplay").textContent =
+          "Market price unavailable";
 
-      valuationStatus.textContent =
-        "Price required";
+
+        $("#marketNote").textContent =
+          error?.message ||
+          "Could not retrieve market price.";
+
+
+        button.disabled =
+          false;
+
+
+        button.textContent =
+          "Retry price & valuation";
+
+      }
 
     }
+  );
 
-
-    if (valuationView) {
-
-      valuationView.textContent =
-        "Fetch market price to calculate valuation";
-
-    }
-
-
-    if (metricsContainer) {
-
-      metricsContainer.innerHTML =
-        "";
-
-    }
-
-
-    if (resultsContainer) {
-
-      resultsContainer.innerHTML = `
-
-        <div class="scenario">
-
-          <b>
-            Market valuation not calculated
-          </b>
-
-          <small>
-            Press “Fetch price & calculate valuation”
-            to retrieve market data and calculate
-            valuation multiples.
-          </small>
-
-        </div>
-
-      `;
-
-    }
-
-
-    return;
-
-  }
-
-
-  /*
-   * We have market data.
-   * Calculate valuation.
-   */
-
-  const valuation =
-    calculateAutomaticMultiples();
-
-
-  valuationState =
-    valuation;
-
-
-  if (!valuation) {
-
-    if (valuationStatus) {
-
-      valuationStatus.textContent =
-        "Valuation unavailable";
-
-    }
-
-
-    if (valuationView) {
-
-      valuationView.textContent =
-        "Insufficient financial data";
-
-    }
-
-
-    return;
-
-  }
-
-
-  /*
-   * Update shared AI/research context.
-   */
-
-  if (
-    window.finSightResearchContext
-  ) {
-
-    window
-      .finSightResearchContext
-      .market =
-      marketData;
-
-
-    window
-      .finSightResearchContext
-      .valuation =
-      valuation;
-
-  }
-
-
-  /*
-   * Main valuation cards.
-   */
-
-  const valuationCards = [
-
-    [
-      "Share price",
-
-      priceMoney(
-        valuation.price
-      ),
-
-      "Verified market quote"
-    ],
-
-    [
-      "Market cap",
-
-      valuation.marketCap == null
-
-        ? "N/A"
-
-        : money(
-            valuation.marketCap
-          ),
-
-      "Share price × shares outstanding"
-    ],
-
-    [
-      "P/E",
-
-      multiple(
-        valuation.pe
-      ),
-
-      "Market price relative to earnings"
-    ],
-
-    [
-      "P/B",
-
-      multiple(
-        valuation.priceToBook
-      ),
-
-      "Market price relative to book value"
-    ],
-
-    [
-      "EV / EBITDA",
-
-      multiple(
-        valuation.evEbitda
-      ),
-
-      "Enterprise value relative to EBITDA"
-    ]
-
-  ];
-
-
-  if (metricsContainer) {
-
-    metricsContainer.innerHTML =
-
-      valuationCards
-
-        .map(
-          (
-            [
-              label,
-              value,
-              copy
-            ]
-          ) => `
-
-            <article class="metric">
-
-              <span>
-                ${label}
-              </span>
-
-              <strong>
-                ${value}
-              </strong>
-
-              <small class="neutral">
-                ${copy}
-              </small>
-
-            </article>
-
-          `
-        )
-
-        .join("");
-
-  }
-
-
-  /*
-   * Secondary valuation metrics.
-   */
-
-  const secondaryMetrics = [
-
-    [
-      "Earnings yield",
-
-      valuation.earningsYield == null
-
-        ? "N/A"
-
-        : percentage(
-            valuation.earningsYield
-          ),
-
-      "Net profit / market capitalization"
-    ],
-
-    [
-      "FCF yield",
-
-      valuation.fcfYield == null
-
-        ? "N/A"
-
-        : percentage(
-            valuation.fcfYield
-          ),
-
-      "Free cash flow / market capitalization"
-    ],
-
-    [
-      "EV / Sales",
-
-      multiple(
-        valuation.evSales
-      ),
-
-      "Enterprise value / revenue"
-    ],
-
-    [
-      "Net debt / EBITDA",
-
-      multiple(
-        getCalculatedRows()
-          .at(-1)
-          ?.net_debt_ebitda
-      ),
-
-      "Balance-sheet leverage"
-    ]
-
-  ];
-
-
-  if (resultsContainer) {
-
-    resultsContainer.innerHTML =
-
-      secondaryMetrics
-
-        .map(
-          (
-            [
-              title,
-              value,
-              copy
-            ]
-          ) => `
-
-            <div class="scenario">
-
-              <b>
-                ${title}
-              </b>
-
-              <strong>
-                ${value}
-              </strong>
-
-              <small>
-                ${copy}
-              </small>
-
-            </div>
-
-          `
-        )
-
-        .join("");
-
-  }
-
-
-  /*
-   * Price exists but shares outstanding
-   * are unavailable.
-   */
-
-  if (
-    valuation.marketCap == null
-  ) {
-
-    if (valuationStatus) {
-
-      valuationStatus.textContent =
-        "Partial valuation";
-
-    }
-
-
-    if (valuationView) {
-
-      valuationView.textContent =
-        "Market price found";
-
-    }
-
-
-    return;
-
-  }
-
-
-  /*
-   * Complete automatic valuation.
-   */
-
-  if (valuationStatus) {
-
-    valuationStatus.textContent =
-      "Valuation calculated";
-
-  }
-
-
-  if (valuationView) {
-
-    valuationView.textContent =
-      "Market valuation ready";
-
-  }
-
-}
 /* ============================================================
    21. AUTOMATIC VALUATION
    ============================================================ */
