@@ -1943,50 +1943,41 @@ function renderComparison(
    ============================================================ */
 
 /*
- * IMPORTANT ARCHITECTURE
+ * New comparison architecture:
  *
- * We do NOT send two large PDFs to Gemini in one request.
+ * Company A PDF
+ *      ↓
+ * prepare-comparison-report
+ *      ↓
+ * JSON A
  *
- * Flow:
- *
- * PDF A
- *   ↓
- * /api/ai/prepare-comparison-report
- *   ↓
- * compact structured JSON A
- *
- * PDF B
- *   ↓
- * /api/ai/prepare-comparison-report
- *   ↓
- * compact structured JSON B
+ * Company B PDF
+ *      ↓
+ * prepare-comparison-report
+ *      ↓
+ * JSON B
  *
  * JSON A + JSON B
- *   ↓
- * /api/ai/compare
- *   ↓
- * final comparison
+ *      ↓
+ * compare
  */
 
 
 let comparisonCompanyA =
   null;
 
-
 let comparisonCompanyB =
   null;
 
-
 let comparisonFileA =
   null;
-
 
 let comparisonFileB =
   null;
 
 
 /* ============================================================
-   15. PREPARE ONE COMPARISON REPORT
+   15. PREPARE ONE COMPANY
    ============================================================ */
 
 async function prepareComparisonReport(
@@ -2039,9 +2030,7 @@ async function prepareComparisonReport(
 
 
   const research =
-    payload.research ||
-    payload.analysis ||
-    payload;
+    payload.research;
 
 
   if (
@@ -2051,7 +2040,7 @@ async function prepareComparisonReport(
   ) {
 
     throw new Error(
-      `${label} did not return usable comparison data.`
+      `${label} returned no usable comparison research.`
     );
 
   }
@@ -2063,7 +2052,7 @@ async function prepareComparisonReport(
 
 
 /* ============================================================
-   16. COMPANY A FILE
+   16. COMPANY A
    ============================================================ */
 
 aiElement(
@@ -2085,7 +2074,6 @@ aiElement(
 
       comparisonFileA =
         file;
-
 
       comparisonCompanyA =
         null;
@@ -2112,21 +2100,11 @@ aiElement(
           );
 
 
-        const name =
+        const companyName =
 
           comparisonCompanyA
             ?.company
             ?.name
-
-          ||
-
-          comparisonCompanyA
-            ?.company_name
-
-          ||
-
-          comparisonCompanyA
-            ?.company
 
           ||
 
@@ -2135,8 +2113,21 @@ aiElement(
 
         if (output) {
 
-          output.textContent =
-            `${name} is ready for comparison. Select Company B.`;
+          if (
+            comparisonCompanyB
+          ) {
+
+            output.textContent =
+              `${companyName} is ready. Both companies are ready — tap Compare with AI.`;
+
+          }
+
+          else {
+
+            output.textContent =
+              `${companyName} is ready. Select Company B annual report.`;
+
+          }
 
         }
 
@@ -2178,7 +2169,7 @@ aiElement(
 
 
 /* ============================================================
-   17. COMPANY B FILE
+   17. COMPANY B
    ============================================================ */
 
 aiElement(
@@ -2200,7 +2191,6 @@ aiElement(
 
       comparisonFileB =
         file;
-
 
       comparisonCompanyB =
         null;
@@ -2227,21 +2217,11 @@ aiElement(
           );
 
 
-        const name =
+        const companyName =
 
           comparisonCompanyB
             ?.company
             ?.name
-
-          ||
-
-          comparisonCompanyB
-            ?.company_name
-
-          ||
-
-          comparisonCompanyB
-            ?.company
 
           ||
 
@@ -2255,14 +2235,14 @@ aiElement(
           ) {
 
             output.textContent =
-              `${name} is ready. Both companies are ready — tap Compare with AI.`;
+              `${companyName} is ready. Both companies are ready — tap Compare with AI.`;
 
           }
 
           else {
 
             output.textContent =
-              `${name} is ready. Select Company A.`;
+              `${companyName} is ready. Select Company A annual report.`;
 
           }
 
@@ -2306,7 +2286,7 @@ aiElement(
 
 
 /* ============================================================
-   18. FINAL LIGHTWEIGHT COMPARISON
+   18. FINAL JSON-ONLY COMPARISON
    ============================================================ */
 
 async function compareReports() {
@@ -2325,7 +2305,7 @@ async function compareReports() {
     if (output) {
 
       output.textContent =
-        "Select both annual-report PDFs first.";
+        "Select both company annual-report PDFs first.";
 
     }
 
@@ -2342,7 +2322,7 @@ async function compareReports() {
     if (output) {
 
       output.textContent =
-        "Wait until both annual reports have finished processing.";
+        "Wait until both annual reports finish processing.";
 
     }
 
@@ -2353,7 +2333,7 @@ async function compareReports() {
 
   setLoading(
     output,
-    "Comparing the two companies…"
+    "FinSight AI is comparing the prepared company research…"
   );
 
 
@@ -2362,9 +2342,8 @@ async function compareReports() {
     /*
      * IMPORTANT:
      *
-     * Only JSON is sent here.
-     *
-     * No PDF.
+     * No PDFs are sent here.
+     * Only the compact JSON profiles.
      */
 
     const response =
@@ -2400,8 +2379,16 @@ async function compareReports() {
 
 
     const comparison =
-      payload.comparison ||
-      payload;
+      payload.comparison;
+
+
+    if (!comparison) {
+
+      throw new Error(
+        "FinSight returned no usable company comparison."
+      );
+
+    }
 
 
     if (output) {
@@ -2455,4 +2442,42 @@ aiElement(
   ?.addEventListener(
     "click",
     compareReports
+  );
+
+
+/* ============================================================
+   20. ANNUAL REPORT FILE LABEL
+   ============================================================ */
+
+aiElement(
+  "aiReportFile"
+)
+  ?.addEventListener(
+    "change",
+    event => {
+
+      const file =
+        event.target
+          .files?.[0];
+
+
+      if (!file) {
+        return;
+      }
+
+
+      const output =
+        aiElement(
+          "aiReportResult"
+        );
+
+
+      if (output) {
+
+        output.textContent =
+          `${file.name} selected. Tap Run AI analysis.`;
+
+      }
+
+    }
   );
