@@ -2722,189 +2722,192 @@ Return:
 /* ============================================================
    COMPARE TWO ANNUAL REPORTS
    ============================================================ */
+/* ============================================================
+   PREPARE ONE REPORT FOR COMPANY COMPARISON
+   ============================================================ */
 
 app.post(
-  "/api/ai/compare",
+  "/api/ai/prepare-comparison-report",
 
-  upload.fields([
-    {
-      name: "companyA",
-      maxCount: 1
-    },
-    {
-      name: "companyB",
-      maxCount: 1
-    }
-  ]),
+  upload.single(
+    "report"
+  ),
 
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
 
     try {
 
-      const reportA =
-        req.files?.companyA?.[0];
-
-      const reportB =
-        req.files?.companyB?.[0];
+      const report =
+        req.file;
 
 
-      if (!reportA || !reportB) {
+      const label =
+        String(
+          req.body?.label ||
+          "Company"
+        );
+
+
+      if (!report) {
 
         return res
           .status(400)
           .json({
             ok: false,
+
             error:
-              "Please upload both annual-report PDFs."
+              "Annual-report PDF is required."
           });
 
       }
 
 
       console.log(
-        "Comparison started:",
-        reportA.originalname,
-        "vs",
-        reportB.originalname
+        `Preparing comparison research for ${label}:`,
+        report.originalname
       );
 
 
       /*
-       * STEP 1
+       * Keep this extraction intentionally compact.
        *
-       * Analyze each report separately.
-       *
-       * This avoids sending two very large PDFs
-       * in one Gemini request.
+       * We do NOT need another giant annual-report
+       * analysis here.
        */
 
-      async function summarizeCompanyReport(
-        file,
-        label
-      ) {
-
-        const prompt = `
+      const prompt = `
 
 You are FinSight AI.
 
-Analyze this annual report for the purpose of comparing
-the company with another business.
+Read the attached annual report and create a COMPACT,
+evidence-first company profile for comparison with another company.
 
-This is ${label}.
+This is:
 
-Use the attached annual report as the source of truth.
+${label}
 
-Prefer audited CONSOLIDATED financial statements.
+IMPORTANT:
 
-IMPORTANT UNIT RULE:
+1. Prefer AUDITED CONSOLIDATED financial statements.
 
-Read the unit printed on the audited financial statements.
+2. Do not use standalone statements when consolidated statements
+   are available.
 
-Examples:
+3. Preserve the actual reporting year.
 
-₹ in million:
-divide by 10 to convert to ₹ crore.
+4. Carefully read the unit printed on the financial statements.
 
-₹ in crore:
-keep the value unchanged.
+NORMALIZE FINANCIAL VALUES TO ₹ CRORE.
 
-₹ in billion:
-multiply by 100 to convert to ₹ crore.
+Conversion examples:
 
-Never treat:
+₹ million:
+divide by 10.
 
-166.7 billion
+₹ crore:
+leave unchanged.
 
-as:
+₹ billion:
+multiply by 100.
 
-166.7 crore.
+Example:
 
-Do not invent missing numbers.
+166,762 ₹ million
+=
+₹16,676.2 crore.
 
-Do not guess ticker symbols.
+Never treat a billion figure as though it were crore.
 
-Do not provide a buy/sell recommendation.
+5. Do not invent missing values.
 
-Extract the latest available financial year and useful
-multi-year context where available.
+6. Do not guess a ticker.
+
+7. Do not give a buy/sell recommendation.
+
+8. Keep qualitative explanations concise.
 
 Return VALID JSON ONLY:
 
 {
   "company": {
     "name": "",
-    "legal_name": "",
-    "ticker": null,
-    "exchange": null,
     "financial_year": "",
     "statement_basis": "",
-    "source_unit": "",
-    "normalized_unit": "crore"
+    "original_unit": "",
+    "normalized_unit": "₹ crore"
   },
 
   "financials": {
     "revenue": null,
+    "revenue_growth": null,
+
     "ebitda": null,
     "ebitda_margin": null,
+
     "operating_profit": null,
+
     "net_profit": null,
+    "net_margin": null,
+
     "operating_cash_flow": null,
+    "cash_conversion": null,
+
     "free_cash_flow": null,
+
     "total_assets": null,
     "total_equity": null,
+
     "total_debt": null,
     "cash": null,
     "net_debt": null,
+
+    "debt_equity": null,
+
     "current_assets": null,
     "current_liabilities": null,
+    "current_ratio": null,
+
     "receivables": null,
     "inventory": null,
+
     "finance_cost": null,
-    "shares_outstanding": null
+
+    "roe": null,
+    "roce": null
   },
 
   "business": {
     "business_model": "",
     "major_segments": [],
-    "revenue_drivers": [],
     "competitive_strengths": [],
-    "competitive_risks": []
+    "growth_drivers": []
   },
 
-  "financial_quality": {
-    "revenue_trend": "",
-    "margin_trend": "",
-    "profit_trend": "",
-    "cash_conversion": "",
-    "working_capital": "",
-    "leverage": "",
-    "liquidity": "",
-    "returns": ""
-  },
+  "cash_quality": "",
+
+  "balance_sheet_assessment": "",
 
   "management": {
     "strategy": "",
     "capital_allocation": "",
-    "execution": "",
-    "important_promises": []
+    "execution": ""
   },
 
   "governance": {
     "assessment": "",
-    "related_party_observations": [],
-    "important_issues": []
+    "important_observations": []
   },
 
   "auditor": {
     "opinion": "",
     "key_audit_matters": [],
-    "qualifications": [],
-    "internal_control_observations": []
+    "qualifications": []
   },
 
   "risks": [],
-
-  "growth_drivers": [],
 
   "strengths": [],
 
@@ -2915,55 +2918,97 @@ Return VALID JSON ONLY:
   "confidence": "High|Medium|Low"
 }
 
-If information cannot be established from the report,
-return null, an empty array, or:
-
-"Not established from supplied report."
-
 `;
 
-        console.log(
-          `Analyzing ${label}:`,
-          file.originalname
-        );
 
+      const resultText =
+        await geminiGenerate(
 
-        const text =
-          await geminiGenerate(
-            [
-              {
-                text: prompt
-              },
+          [
 
-              pdfPart(file)
-            ],
             {
-              json: true
-            }
-          );
+              text:
+                prompt
+            },
 
+            pdfPart(
+              report
+            )
 
-        const result =
-          safeJSON(text);
+          ],
 
+          {
+            json:
+              true
+          }
 
-        if (!result) {
-
-          throw new Error(
-            `${label} could not be converted into structured comparison data.`
-          );
-
-        }
-
-
-        console.log(
-          `${label} analysis complete.`
         );
 
 
-        return result;
+      const research =
+        safeJSON(
+          resultText
+        );
+
+
+      if (
+        !research ||
+        typeof research !==
+          "object"
+      ) {
+
+        throw new Error(
+          "Gemini returned unusable structured comparison data."
+        );
 
       }
+
+
+      console.log(
+        `${label} comparison research ready:`,
+        research.company?.name ||
+        report.originalname
+      );
+
+
+      return res.json({
+
+        ok:
+          true,
+
+        research
+
+      });
+
+    }
+
+    catch (
+      error
+    ) {
+
+      console.error(
+        "Prepare comparison report:",
+        error
+      );
+
+
+      return res
+        .status(500)
+        .json({
+
+          ok:
+            false,
+
+          error:
+            error?.message ||
+            "Could not prepare annual report for comparison."
+
+        });
+
+    }
+
+  }
+);
 
 
       /*
