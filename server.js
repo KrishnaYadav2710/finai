@@ -2719,76 +2719,519 @@ Return:
   return result;
 }
 
+/* ============================================================
+   COMPARE TWO ANNUAL REPORTS
+   ============================================================ */
 
 app.post(
   "/api/ai/compare",
+
   upload.fields([
-    { name: "companyA", maxCount: 1 },
-    { name: "companyB", maxCount: 1 }
+    {
+      name: "companyA",
+      maxCount: 1
+    },
+    {
+      name: "companyB",
+      maxCount: 1
+    }
   ]),
+
   async (req, res) => {
+
     try {
-      const reportA = req.files?.companyA?.[0];
-      const reportB = req.files?.companyB?.[0];
+
+      const reportA =
+        req.files?.companyA?.[0];
+
+      const reportB =
+        req.files?.companyB?.[0];
+
 
       if (!reportA || !reportB) {
-        return res.status(400).json({ error: "Upload both annual-report PDFs." });
+
+        return res
+          .status(400)
+          .json({
+            ok: false,
+            error:
+              "Please upload both annual-report PDFs."
+          });
+
       }
 
-      // Process each large PDF separately. This avoids one oversized two-PDF Gemini request.
-      const [companyA, companyB] = await Promise.all([
-        summarizeReportForComparison(reportA, "Company A report"),
-        summarizeReportForComparison(reportB, "Company B report")
-      ]);
 
-      const prompt = `
-Compare these two structured annual-report analyses for a long-term investor.
-Do not declare a simplistic winner. Explain trade-offs and do not invent data.
+      console.log(
+        "Comparison started:",
+        reportA.originalname,
+        "vs",
+        reportB.originalname
+      );
 
-COMPANY A:
-${JSON.stringify(companyA, null, 2)}
 
-COMPANY B:
-${JSON.stringify(companyB, null, 2)}
+      /*
+       * STEP 1
+       *
+       * Analyze each report separately.
+       *
+       * This avoids sending two very large PDFs
+       * in one Gemini request.
+       */
 
-Return valid JSON only:
+      async function summarizeCompanyReport(
+        file,
+        label
+      ) {
+
+        const prompt = `
+
+You are FinSight AI.
+
+Analyze this annual report for the purpose of comparing
+the company with another business.
+
+This is ${label}.
+
+Use the attached annual report as the source of truth.
+
+Prefer audited CONSOLIDATED financial statements.
+
+IMPORTANT UNIT RULE:
+
+Read the unit printed on the audited financial statements.
+
+Examples:
+
+₹ in million:
+divide by 10 to convert to ₹ crore.
+
+₹ in crore:
+keep the value unchanged.
+
+₹ in billion:
+multiply by 100 to convert to ₹ crore.
+
+Never treat:
+
+166.7 billion
+
+as:
+
+166.7 crore.
+
+Do not invent missing numbers.
+
+Do not guess ticker symbols.
+
+Do not provide a buy/sell recommendation.
+
+Extract the latest available financial year and useful
+multi-year context where available.
+
+Return VALID JSON ONLY:
+
+{
+  "company": {
+    "name": "",
+    "legal_name": "",
+    "ticker": null,
+    "exchange": null,
+    "financial_year": "",
+    "statement_basis": "",
+    "source_unit": "",
+    "normalized_unit": "crore"
+  },
+
+  "financials": {
+    "revenue": null,
+    "ebitda": null,
+    "ebitda_margin": null,
+    "operating_profit": null,
+    "net_profit": null,
+    "operating_cash_flow": null,
+    "free_cash_flow": null,
+    "total_assets": null,
+    "total_equity": null,
+    "total_debt": null,
+    "cash": null,
+    "net_debt": null,
+    "current_assets": null,
+    "current_liabilities": null,
+    "receivables": null,
+    "inventory": null,
+    "finance_cost": null,
+    "shares_outstanding": null
+  },
+
+  "business": {
+    "business_model": "",
+    "major_segments": [],
+    "revenue_drivers": [],
+    "competitive_strengths": [],
+    "competitive_risks": []
+  },
+
+  "financial_quality": {
+    "revenue_trend": "",
+    "margin_trend": "",
+    "profit_trend": "",
+    "cash_conversion": "",
+    "working_capital": "",
+    "leverage": "",
+    "liquidity": "",
+    "returns": ""
+  },
+
+  "management": {
+    "strategy": "",
+    "capital_allocation": "",
+    "execution": "",
+    "important_promises": []
+  },
+
+  "governance": {
+    "assessment": "",
+    "related_party_observations": [],
+    "important_issues": []
+  },
+
+  "auditor": {
+    "opinion": "",
+    "key_audit_matters": [],
+    "qualifications": [],
+    "internal_control_observations": []
+  },
+
+  "risks": [],
+
+  "growth_drivers": [],
+
+  "strengths": [],
+
+  "weaknesses": [],
+
+  "investor_questions": [],
+
+  "confidence": "High|Medium|Low"
+}
+
+If information cannot be established from the report,
+return null, an empty array, or:
+
+"Not established from supplied report."
+
+`;
+
+        console.log(
+          `Analyzing ${label}:`,
+          file.originalname
+        );
+
+
+        const text =
+          await geminiGenerate(
+            [
+              {
+                text: prompt
+              },
+
+              pdfPart(file)
+            ],
+            {
+              json: true
+            }
+          );
+
+
+        const result =
+          safeJSON(text);
+
+
+        if (!result) {
+
+          throw new Error(
+            `${label} could not be converted into structured comparison data.`
+          );
+
+        }
+
+
+        console.log(
+          `${label} analysis complete.`
+        );
+
+
+        return result;
+
+      }
+
+
+      /*
+       * Analyze ONE report at a time.
+       *
+       * Sequential processing is deliberate.
+       * It reduces memory pressure and avoids
+       * simultaneous huge Gemini PDF requests.
+       */
+
+      const companyA =
+        await summarizeCompanyReport(
+          reportA,
+          "Company A"
+        );
+
+
+      const companyB =
+        await summarizeCompanyReport(
+          reportB,
+          "Company B"
+        );
+
+
+      /*
+       * STEP 2
+       *
+       * Compare only the compact structured results.
+       *
+       * No PDFs are included in this request.
+       */
+
+      console.log(
+        "Individual reports analyzed. Starting comparison."
+      );
+
+
+      const comparisonPrompt = `
+
+You are FinSight AI.
+
+Compare two companies using ONLY the structured annual-report
+research supplied below.
+
+Do not invent information that is absent.
+
+Do not simply declare one company the winner.
+
+Explain the investment trade-offs.
+
+Do not provide personalized buy/sell advice.
+
+
+============================================================
+COMPANY A
+============================================================
+
+${JSON.stringify(
+  companyA,
+  null,
+  2
+)}
+
+
+============================================================
+COMPANY B
+============================================================
+
+${JSON.stringify(
+  companyB,
+  null,
+  2
+)}
+
+
+============================================================
+COMPARISON REQUIREMENTS
+============================================================
+
+Compare:
+
+1. Business model
+2. Revenue growth and durability
+3. EBITDA and operating margins
+4. Profitability
+5. Operating cash generation
+6. Earnings quality
+7. Working capital
+8. Debt and leverage
+9. Liquidity
+10. ROE / ROCE where supported
+11. Capital allocation
+12. Management strategy and execution
+13. Governance
+14. Auditor observations
+15. Related-party issues
+16. Major risks
+17. Growth opportunities
+
+When numbers are available, state them.
+
+When they are unavailable, do not fabricate them.
+
+Return VALID JSON ONLY:
+
 {
   "company_a": "",
   "company_b": "",
+
   "summary": "",
-  "business_quality": {"company_a":"","company_b":"","edge":""},
-  "growth": {"company_a":"","company_b":"","edge":""},
-  "profitability": {"company_a":"","company_b":"","edge":""},
-  "cash_generation": {"company_a":"","company_b":"","edge":""},
-  "balance_sheet": {"company_a":"","company_b":"","edge":""},
-  "management": {"company_a":"","company_b":"","edge":""},
-  "governance": {"company_a":"","company_b":"","edge":""},
-  "risk": {"company_a":"","company_b":"","edge":""},
-  "valuation": {"company_a":"","company_b":"","edge":""},
+
+  "business_quality": {
+    "company_a": "",
+    "company_b": "",
+    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+  },
+
+  "growth": {
+    "company_a": "",
+    "company_b": "",
+    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+  },
+
+  "profitability": {
+    "company_a": "",
+    "company_b": "",
+    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+  },
+
+  "cash_generation": {
+    "company_a": "",
+    "company_b": "",
+    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+  },
+
+  "balance_sheet": {
+    "company_a": "",
+    "company_b": "",
+    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+  },
+
+  "capital_allocation": {
+    "company_a": "",
+    "company_b": "",
+    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+  },
+
+  "management": {
+    "company_a": "",
+    "company_b": "",
+    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+  },
+
+  "governance": {
+    "company_a": "",
+    "company_b": "",
+    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+  },
+
+  "auditor": {
+    "company_a": "",
+    "company_b": "",
+    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+  },
+
+  "risk": {
+    "company_a": "",
+    "company_b": "",
+    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+  },
+
   "company_a_strengths": [],
   "company_a_weaknesses": [],
+
   "company_b_strengths": [],
   "company_b_weaknesses": [],
+
   "important_tradeoffs": [],
+
   "questions_before_choosing_a": [],
-  "questions_before_choosing_b": []
-}`;
+  "questions_before_choosing_b": [],
 
-      const text = await geminiGenerate([{ text: prompt }], { json: true });
-      const comparison = safeJSON(text);
-      if (!comparison) throw new Error("Gemini returned an unreadable comparison.");
+  "overall_interpretation": ""
+}
 
-      return res.json({ comparison, model: GEMINI_MODEL });
-    } catch (error) {
-      console.error("AI comparison:", error);
-      const status = Number(error?.status);
-      return res.status(status >= 400 && status < 600 ? status : 500).json({
-        error: error?.message || "Company comparison failed."
+`;
+
+
+      const comparisonText =
+        await geminiGenerate(
+          [
+            {
+              text:
+                comparisonPrompt
+            }
+          ],
+          {
+            json: true
+          }
+        );
+
+
+      const comparison =
+        safeJSON(
+          comparisonText
+        );
+
+
+      if (!comparison) {
+
+        throw new Error(
+          "FinSight could not create the final comparison."
+        );
+
+      }
+
+
+      console.log(
+        "Company comparison complete."
+      );
+
+
+      return res.json({
+        ok: true,
+
+        comparison,
+
+        sources: {
+          companyA:
+            companyA,
+
+          companyB:
+            companyB
+        },
+
+        model:
+          GEMINI_MODEL
       });
+
     }
+
+    catch (error) {
+
+      console.error(
+        "AI comparison failed:",
+        error
+      );
+
+
+      /*
+       * Use 500 instead of hiding the underlying
+       * problem behind a generic 502.
+       */
+
+      return res
+        .status(500)
+        .json({
+          ok: false,
+
+          error:
+            error?.message ||
+            "Annual-report comparison failed."
+        });
+
+    }
+
   }
 );
-
 
 /* ============================================================
    18. ALPHA VANTAGE MARKET QUOTE
