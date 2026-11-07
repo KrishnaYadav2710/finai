@@ -1938,26 +1938,378 @@ function renderComparison(
 
 }
 
+/* ============================================================
+   14. LIGHTWEIGHT COMPETITOR COMPARISON
+   ============================================================ */
+
+/*
+ * IMPORTANT ARCHITECTURE
+ *
+ * We do NOT send two large PDFs to Gemini in one request.
+ *
+ * Flow:
+ *
+ * PDF A
+ *   ↓
+ * /api/ai/prepare-comparison-report
+ *   ↓
+ * compact structured JSON A
+ *
+ * PDF B
+ *   ↓
+ * /api/ai/prepare-comparison-report
+ *   ↓
+ * compact structured JSON B
+ *
+ * JSON A + JSON B
+ *   ↓
+ * /api/ai/compare
+ *   ↓
+ * final comparison
+ */
+
+
+let comparisonCompanyA =
+  null;
+
+
+let comparisonCompanyB =
+  null;
+
+
+let comparisonFileA =
+  null;
+
+
+let comparisonFileB =
+  null;
+
 
 /* ============================================================
-   14. COMPARE TWO REPORTS
+   15. PREPARE ONE COMPARISON REPORT
+   ============================================================ */
+
+async function prepareComparisonReport(
+  file,
+  label
+) {
+
+  if (!file) {
+
+    throw new Error(
+      `${label} annual report is required.`
+    );
+
+  }
+
+
+  const formData =
+    new FormData();
+
+
+  formData.append(
+    "report",
+    file
+  );
+
+
+  formData.append(
+    "label",
+    label
+  );
+
+
+  const response =
+    await fetch(
+      "/api/ai/prepare-comparison-report",
+      {
+        method:
+          "POST",
+
+        body:
+          formData
+      }
+    );
+
+
+  const payload =
+    await readJSONResponse(
+      response
+    );
+
+
+  const research =
+    payload.research ||
+    payload.analysis ||
+    payload;
+
+
+  if (
+    !research ||
+    typeof research !==
+      "object"
+  ) {
+
+    throw new Error(
+      `${label} did not return usable comparison data.`
+    );
+
+  }
+
+
+  return research;
+
+}
+
+
+/* ============================================================
+   16. COMPANY A FILE
+   ============================================================ */
+
+aiElement(
+  "aiCompareA"
+)
+  ?.addEventListener(
+    "change",
+    async event => {
+
+      const file =
+        event.target
+          .files?.[0];
+
+
+      if (!file) {
+        return;
+      }
+
+
+      comparisonFileA =
+        file;
+
+
+      comparisonCompanyA =
+        null;
+
+
+      const output =
+        aiElement(
+          "aiCompareResult"
+        );
+
+
+      setLoading(
+        output,
+        `Analyzing Company A · ${file.name}…`
+      );
+
+
+      try {
+
+        comparisonCompanyA =
+          await prepareComparisonReport(
+            file,
+            "Company A"
+          );
+
+
+        const name =
+
+          comparisonCompanyA
+            ?.company
+            ?.name
+
+          ||
+
+          comparisonCompanyA
+            ?.company_name
+
+          ||
+
+          comparisonCompanyA
+            ?.company
+
+          ||
+
+          "Company A";
+
+
+        if (output) {
+
+          output.textContent =
+            `${name} is ready for comparison. Select Company B.`;
+
+        }
+
+      }
+
+      catch (
+        error
+      ) {
+
+        console.error(
+          "Company A preparation:",
+          error
+        );
+
+
+        comparisonCompanyA =
+          null;
+
+
+        if (output) {
+
+          output.textContent =
+            `Company A failed: ${error.message}`;
+
+        }
+
+      }
+
+      finally {
+
+        clearLoading(
+          output
+        );
+
+      }
+
+    }
+  );
+
+
+/* ============================================================
+   17. COMPANY B FILE
+   ============================================================ */
+
+aiElement(
+  "aiCompareB"
+)
+  ?.addEventListener(
+    "change",
+    async event => {
+
+      const file =
+        event.target
+          .files?.[0];
+
+
+      if (!file) {
+        return;
+      }
+
+
+      comparisonFileB =
+        file;
+
+
+      comparisonCompanyB =
+        null;
+
+
+      const output =
+        aiElement(
+          "aiCompareResult"
+        );
+
+
+      setLoading(
+        output,
+        `Analyzing Company B · ${file.name}…`
+      );
+
+
+      try {
+
+        comparisonCompanyB =
+          await prepareComparisonReport(
+            file,
+            "Company B"
+          );
+
+
+        const name =
+
+          comparisonCompanyB
+            ?.company
+            ?.name
+
+          ||
+
+          comparisonCompanyB
+            ?.company_name
+
+          ||
+
+          comparisonCompanyB
+            ?.company
+
+          ||
+
+          "Company B";
+
+
+        if (output) {
+
+          if (
+            comparisonCompanyA
+          ) {
+
+            output.textContent =
+              `${name} is ready. Both companies are ready — tap Compare with AI.`;
+
+          }
+
+          else {
+
+            output.textContent =
+              `${name} is ready. Select Company A.`;
+
+          }
+
+        }
+
+      }
+
+      catch (
+        error
+      ) {
+
+        console.error(
+          "Company B preparation:",
+          error
+        );
+
+
+        comparisonCompanyB =
+          null;
+
+
+        if (output) {
+
+          output.textContent =
+            `Company B failed: ${error.message}`;
+
+        }
+
+      }
+
+      finally {
+
+        clearLoading(
+          output
+        );
+
+      }
+
+    }
+  );
+
+
+/* ============================================================
+   18. FINAL LIGHTWEIGHT COMPARISON
    ============================================================ */
 
 async function compareReports() {
-
-  const fileA =
-    aiElement(
-      "aiCompareA"
-    )
-      ?.files?.[0];
-
-
-  const fileB =
-    aiElement(
-      "aiCompareB"
-    )
-      ?.files?.[0];
-
 
   const output =
     aiElement(
@@ -1966,14 +2318,31 @@ async function compareReports() {
 
 
   if (
-    !fileA ||
-    !fileB
+    !comparisonFileA ||
+    !comparisonFileB
   ) {
 
     if (output) {
 
       output.textContent =
-        "Select both company annual-report PDFs.";
+        "Select both annual-report PDFs first.";
+
+    }
+
+    return;
+
+  }
+
+
+  if (
+    !comparisonCompanyA ||
+    !comparisonCompanyB
+  ) {
+
+    if (output) {
+
+      output.textContent =
+        "Wait until both annual reports have finished processing.";
 
     }
 
@@ -1984,27 +2353,19 @@ async function compareReports() {
 
   setLoading(
     output,
-    "FinSight AI is comparing the two companies and their annual-report evidence…"
+    "Comparing the two companies…"
   );
 
 
   try {
 
-    const formData =
-      new FormData();
-
-
-    formData.append(
-      "companyA",
-      fileA
-    );
-
-
-    formData.append(
-      "companyB",
-      fileB
-    );
-
+    /*
+     * IMPORTANT:
+     *
+     * Only JSON is sent here.
+     *
+     * No PDF.
+     */
 
     const response =
       await fetch(
@@ -2013,8 +2374,21 @@ async function compareReports() {
           method:
             "POST",
 
+          headers: {
+            "Content-Type":
+              "application/json"
+          },
+
           body:
-            formData
+            JSON.stringify({
+
+              companyA:
+                comparisonCompanyA,
+
+              companyB:
+                comparisonCompanyB
+
+            })
         }
       );
 
@@ -2072,7 +2446,7 @@ async function compareReports() {
 
 
 /* ============================================================
-   15. COMPARISON BUTTON
+   19. COMPARISON BUTTON
    ============================================================ */
 
 aiElement(
@@ -2081,125 +2455,4 @@ aiElement(
   ?.addEventListener(
     "click",
     compareReports
-  );
-
-
-/* ============================================================
-   16. FILE LABEL FEEDBACK
-   ============================================================ */
-
-aiElement(
-  "aiReportFile"
-)
-  ?.addEventListener(
-    "change",
-    event => {
-
-      const file =
-        event.target
-          .files?.[0];
-
-
-      if (!file) {
-        return;
-      }
-
-
-      const output =
-        aiElement(
-          "aiReportResult"
-        );
-
-
-      if (output) {
-
-        output.textContent =
-          `${file.name} selected. Tap Run AI analysis.`;
-
-      }
-
-    }
-  );
-
-
-aiElement(
-  "aiCompareA"
-)
-  ?.addEventListener(
-    "change",
-    event => {
-
-      const file =
-        event.target
-          .files?.[0];
-
-
-      if (!file) {
-        return;
-      }
-
-
-      const output =
-        aiElement(
-          "aiCompareResult"
-        );
-
-
-      if (output) {
-
-        output.textContent =
-          `Company A: ${file.name}`;
-
-      }
-
-    }
-  );
-
-
-aiElement(
-  "aiCompareB"
-)
-  ?.addEventListener(
-    "change",
-    event => {
-
-      const file =
-        event.target
-          .files?.[0];
-
-
-      if (!file) {
-        return;
-      }
-
-
-      const output =
-        aiElement(
-          "aiCompareResult"
-        );
-
-
-      if (output) {
-
-        const current =
-          output.textContent || "";
-
-
-        output.textContent =
-
-          current.includes(
-            "Company A:"
-          )
-
-            ?
-
-            `${current}\nCompany B: ${file.name}`
-
-            :
-
-            `Company B: ${file.name}`;
-
-      }
-
-    }
   );
