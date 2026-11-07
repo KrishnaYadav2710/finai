@@ -2679,51 +2679,37 @@ Return valid JSON only:
 
 
 /* ============================================================
-   17. COMPARE TWO REPORTS
+   17. COMPETITOR ANNUAL-REPORT COMPARISON
    ============================================================ */
 
-async function summarizeReportForComparison(file, label) {
+/*
+ * Architecture:
+ *
+ * Company A PDF
+ *      ↓
+ * /api/ai/prepare-comparison-report
+ *      ↓
+ * compact JSON A
+ *
+ * Company B PDF
+ *      ↓
+ * /api/ai/prepare-comparison-report
+ *      ↓
+ * compact JSON B
+ *
+ * JSON A + JSON B
+ *      ↓
+ * /api/ai/compare
+ *      ↓
+ * final AI comparison
+ *
+ * IMPORTANT:
+ * /api/ai/compare NEVER receives PDFs.
+ */
 
-  const prompt = `
-Analyze ${label} as a long-term investor. Return valid JSON only.
-Extract the company name and concise evidence-based assessments of: business model,
-competitive position, multi-year growth, profitability, cash generation, balance sheet,
-management, governance, auditor observations, risks, capital allocation and valuation
-inputs disclosed in the report. Prefer consolidated figures. Do not invent missing data.
-
-Return:
-{
-  "company": "",
-  "business_quality": "",
-  "growth": "",
-  "profitability": "",
-  "cash_generation": "",
-  "balance_sheet": "",
-  "management": "",
-  "governance": "",
-  "auditor": "",
-  "risk": "",
-  "valuation": "",
-  "strengths": [],
-  "weaknesses": [],
-  "important_questions": []
-}`;
-
-  const text = await geminiGenerate(
-    [{ text: prompt }, pdfPart(file)],
-    { json: true }
-  );
-
-  const result = safeJSON(text);
-  if (!result) throw new Error(`${label} could not be summarized for comparison.`);
-  return result;
-}
 
 /* ============================================================
-   COMPARE TWO ANNUAL REPORTS
-   ============================================================ */
-/* ============================================================
-   PREPARE ONE REPORT FOR COMPANY COMPARISON
+   17A. PREPARE ONE REPORT
    ============================================================ */
 
 app.post(
@@ -2748,7 +2734,7 @@ app.post(
         String(
           req.body?.label ||
           "Company"
-        );
+        ).trim();
 
 
       if (!report) {
@@ -2756,10 +2742,34 @@ app.post(
         return res
           .status(400)
           .json({
-            ok: false,
+
+            ok:
+              false,
 
             error:
               "Annual-report PDF is required."
+
+          });
+
+      }
+
+
+      if (
+        report.mimetype &&
+        report.mimetype !==
+          "application/pdf"
+      ) {
+
+        return res
+          .status(400)
+          .json({
+
+            ok:
+              false,
+
+            error:
+              "Comparison currently requires an annual-report PDF."
+
           });
 
       }
@@ -2767,69 +2777,229 @@ app.post(
 
       console.log(
         `Preparing comparison research for ${label}:`,
-        report.originalname
+        report.originalname,
+        `(${Math.round(
+          report.size /
+          1024 /
+          1024 *
+          10
+        ) / 10} MB)`
       );
 
-
-      /*
-       * Keep this extraction intentionally compact.
-       *
-       * We do NOT need another giant annual-report
-       * analysis here.
-       */
 
       const prompt = `
 
 You are FinSight AI.
 
-Read the attached annual report and create a COMPACT,
-evidence-first company profile for comparison with another company.
+Create a COMPACT, evidence-first investor profile from
+the attached annual report.
 
-This is:
+This profile will later be compared with another company.
+
+LABEL:
 
 ${label}
 
-IMPORTANT:
 
-1. Prefer AUDITED CONSOLIDATED financial statements.
+============================================================
+SOURCE RULES
+============================================================
 
-2. Do not use standalone statements when consolidated statements
-   are available.
+1. The attached annual report is the source of truth.
 
-3. Preserve the actual reporting year.
+2. Prefer AUDITED CONSOLIDATED financial statements.
 
-4. Carefully read the unit printed on the financial statements.
+3. Do not use standalone financial statements when
+   consolidated statements are available for group-level
+   investor analysis.
 
-NORMALIZE FINANCIAL VALUES TO ₹ CRORE.
+4. Do not mix standalone and consolidated numbers.
 
-Conversion examples:
+5. Preserve the actual financial year.
 
-₹ million:
-divide by 10.
+6. Do not invent missing information.
 
-₹ crore:
+7. Do not guess ticker symbols, exchanges or market prices.
+
+8. Do not issue a personalized buy/sell recommendation.
+
+9. Keep explanations concise because this JSON will be sent
+   into a later comparison request.
+
+
+============================================================
+FINANCIAL UNIT RULE — CRITICAL
+============================================================
+
+Read the unit printed on the audited financial statements.
+
+Normalize monetary financial-statement values to:
+
+₹ CRORE
+
+Conversions:
+
+If source is INR / ₹ million:
+
+value in crore =
+value in million ÷ 10
+
+
+If source is INR / ₹ billion:
+
+value in crore =
+value in billion × 100
+
+
+If source is INR / ₹ crore:
+
 leave unchanged.
 
-₹ billion:
-multiply by 100.
 
 Example:
 
-166,762 ₹ million
+166,762 INR million
+
 =
-₹16,676.2 crore.
 
-Never treat a billion figure as though it were crore.
+₹16,676.2 crore
 
-5. Do not invent missing values.
 
-6. Do not guess a ticker.
+Never treat:
 
-7. Do not give a buy/sell recommendation.
+166.7 billion
 
-8. Keep qualitative explanations concise.
+as:
 
-Return VALID JSON ONLY:
+₹166.7 crore.
+
+
+============================================================
+FINANCIAL SOURCE PRIORITY
+============================================================
+
+First locate:
+
+- Consolidated Balance Sheet
+- Consolidated Statement of Profit and Loss
+- Consolidated Cash Flow Statement
+
+Use their audited numbers where available.
+
+Do NOT substitute:
+
+- Year in Review
+- highlights
+- investor presentation KPIs
+- pre-sales
+- bookings
+- adjusted PAT
+- adjusted EBITDA
+
+for audited consolidated financial-statement values.
+
+An explicitly disclosed adjusted/non-GAAP metric may be
+mentioned qualitatively, but identify it as adjusted.
+
+
+============================================================
+FINANCIAL ANALYSIS
+============================================================
+
+Where reliably available extract:
+
+- revenue
+- revenue growth
+- EBITDA
+- EBITDA margin
+- operating profit
+- net profit
+- net margin
+- operating cash flow
+- free cash flow
+- total assets
+- total equity
+- total debt
+- cash
+- net debt
+- debt/equity
+- current assets
+- current liabilities
+- current ratio
+- receivables
+- inventory
+- finance cost
+- ROE
+- ROCE
+
+Return null for unsupported figures.
+
+Never use zero to mean missing information.
+
+
+============================================================
+QUALITATIVE ANALYSIS
+============================================================
+
+Analyze concisely:
+
+BUSINESS
+
+- business model
+- major operating segments
+- revenue drivers
+- competitive strengths
+- growth drivers
+
+CASH QUALITY
+
+- operating cash generation
+- profit-to-cash conversion
+- important cash-flow concerns
+
+BALANCE SHEET
+
+- leverage
+- liquidity
+- debt
+- financial flexibility
+
+MANAGEMENT
+
+- strategy
+- execution
+- capital allocation
+
+GOVERNANCE
+
+- governance observations
+- related-party issues where relevant
+
+AUDITOR
+
+- audit opinion
+- qualifications
+- key audit matters
+
+RISKS
+
+- business
+- regulatory
+- leverage
+- execution
+- concentration
+- litigation
+- governance
+- other material risks
+
+
+============================================================
+OUTPUT
+============================================================
+
+Return VALID JSON ONLY.
+
+Use exactly this structure:
 
 {
   "company": {
@@ -2923,9 +3093,7 @@ Return VALID JSON ONLY:
 
       const resultText =
         await geminiGenerate(
-
           [
-
             {
               text:
                 prompt
@@ -2934,14 +3102,11 @@ Return VALID JSON ONLY:
             pdfPart(
               report
             )
-
           ],
-
           {
             json:
               true
           }
-
         );
 
 
@@ -2954,7 +3119,10 @@ Return VALID JSON ONLY:
       if (
         !research ||
         typeof research !==
-          "object"
+          "object" ||
+        Array.isArray(
+          research
+        )
       ) {
 
         throw new Error(
@@ -2962,6 +3130,72 @@ Return VALID JSON ONLY:
         );
 
       }
+
+
+      /*
+       * Ensure predictable structure.
+       */
+
+      research.company =
+        research.company ||
+        {};
+
+
+      research.financials =
+        research.financials ||
+        {};
+
+
+      research.business =
+        research.business ||
+        {};
+
+
+      research.management =
+        research.management ||
+        {};
+
+
+      research.governance =
+        research.governance ||
+        {};
+
+
+      research.auditor =
+        research.auditor ||
+        {};
+
+
+      research.risks =
+        Array.isArray(
+          research.risks
+        )
+          ? research.risks
+          : [];
+
+
+      research.strengths =
+        Array.isArray(
+          research.strengths
+        )
+          ? research.strengths
+          : [];
+
+
+      research.weaknesses =
+        Array.isArray(
+          research.weaknesses
+        )
+          ? research.weaknesses
+          : [];
+
+
+      research.investor_questions =
+        Array.isArray(
+          research.investor_questions
+        )
+          ? research.investor_questions
+          : [];
 
 
       console.log(
@@ -2976,7 +3210,15 @@ Return VALID JSON ONLY:
         ok:
           true,
 
-        research
+        label,
+
+        fileName:
+          report.originalname,
+
+        research,
+
+        model:
+          GEMINI_MODEL
 
       });
 
@@ -2992,8 +3234,21 @@ Return VALID JSON ONLY:
       );
 
 
+      const status =
+
+        Number.isInteger(
+          error?.status
+        ) &&
+        error.status >= 400 &&
+        error.status < 600
+
+          ? error.status
+
+          : 500;
+
+
       return res
-        .status(500)
+        .status(status)
         .json({
 
           ok:
@@ -3001,7 +3256,11 @@ Return VALID JSON ONLY:
 
           error:
             error?.message ||
-            "Could not prepare annual report for comparison."
+            "Could not prepare annual report for comparison.",
+
+          providerStatus:
+            error?.providerStatus ||
+            null
 
         });
 
@@ -3011,55 +3270,162 @@ Return VALID JSON ONLY:
 );
 
 
-      /*
-       * Analyze ONE report at a time.
-       *
-       * Sequential processing is deliberate.
-       * It reduces memory pressure and avoids
-       * simultaneous huge Gemini PDF requests.
-       */
+/* ============================================================
+   17B. COMPARE PREPARED COMPANY PROFILES
+   ============================================================ */
+
+app.post(
+  "/api/ai/compare",
+
+  async (
+    req,
+    res
+  ) => {
+
+    try {
 
       const companyA =
-        await summarizeCompanyReport(
-          reportA,
-          "Company A"
-        );
+        req.body?.companyA;
 
 
       const companyB =
-        await summarizeCompanyReport(
-          reportB,
-          "Company B"
-        );
+        req.body?.companyB;
+
+
+      if (
+        !companyA ||
+        typeof companyA !==
+          "object"
+      ) {
+
+        return res
+          .status(400)
+          .json({
+
+            ok:
+              false,
+
+            error:
+              "Prepared Company A research is required."
+
+          });
+
+      }
+
+
+      if (
+        !companyB ||
+        typeof companyB !==
+          "object"
+      ) {
+
+        return res
+          .status(400)
+          .json({
+
+            ok:
+              false,
+
+            error:
+              "Prepared Company B research is required."
+
+          });
+
+      }
 
 
       /*
-       * STEP 2
+       * This route must remain lightweight.
        *
-       * Compare only the compact structured results.
-       *
-       * No PDFs are included in this request.
+       * If PDFs accidentally reach this route,
+       * something is wrong in the frontend.
        */
 
+      const serializedA =
+        JSON.stringify(
+          companyA
+        );
+
+
+      const serializedB =
+        JSON.stringify(
+          companyB
+        );
+
+
+      const MAX_PROFILE_SIZE =
+        250000;
+
+
+      if (
+        serializedA.length >
+          MAX_PROFILE_SIZE ||
+        serializedB.length >
+          MAX_PROFILE_SIZE
+      ) {
+
+        return res
+          .status(413)
+          .json({
+
+            ok:
+              false,
+
+            error:
+              "Prepared company research is unexpectedly large. Re-process the annual reports before comparing them."
+
+          });
+
+      }
+
+
+      const companyAName =
+
+        companyA
+          ?.company
+          ?.name
+
+        ||
+
+        "Company A";
+
+
+      const companyBName =
+
+        companyB
+          ?.company
+          ?.name
+
+        ||
+
+        "Company B";
+
+
       console.log(
-        "Individual reports analyzed. Starting comparison."
+        "Lightweight comparison started:",
+        companyAName,
+        "vs",
+        companyBName
       );
 
 
-      const comparisonPrompt = `
+      const prompt = `
 
 You are FinSight AI.
 
 Compare two companies using ONLY the structured annual-report
 research supplied below.
 
-Do not invent information that is absent.
+Do not invent missing information.
 
-Do not simply declare one company the winner.
+Do not supplement the supplied evidence with unsourced general
+knowledge.
 
-Explain the investment trade-offs.
+Do not automatically declare one company the winner.
 
 Do not provide personalized buy/sell advice.
+
+Your job is to explain the INVESTOR TRADE-OFFS.
 
 
 ============================================================
@@ -3085,34 +3451,95 @@ ${JSON.stringify(
 
 
 ============================================================
-COMPARISON REQUIREMENTS
+COMPARISON FRAMEWORK
 ============================================================
 
-Compare:
+Compare the companies on:
 
-1. Business model
-2. Revenue growth and durability
-3. EBITDA and operating margins
+1. Business model and business quality
+
+2. Growth
+
+3. Revenue durability
+
 4. Profitability
-5. Operating cash generation
-6. Earnings quality
-7. Working capital
-8. Debt and leverage
-9. Liquidity
-10. ROE / ROCE where supported
-11. Capital allocation
-12. Management strategy and execution
-13. Governance
-14. Auditor observations
-15. Related-party issues
-16. Major risks
-17. Growth opportunities
 
-When numbers are available, state them.
+5. EBITDA and operating margins
 
-When they are unavailable, do not fabricate them.
+6. Operating cash generation
 
-Return VALID JSON ONLY:
+7. Earnings quality
+
+8. Working capital
+
+9. Balance-sheet strength
+
+10. Debt and leverage
+
+11. Liquidity
+
+12. ROE / ROCE where supported
+
+13. Capital allocation
+
+14. Management strategy
+
+15. Management execution
+
+16. Governance
+
+17. Auditor observations
+
+18. Key audit matters
+
+19. Major risks
+
+20. Growth opportunities
+
+
+============================================================
+EDGE RULE
+============================================================
+
+For each category, edge must be one of:
+
+"Company A"
+"Company B"
+"Mixed"
+"Similar"
+"Insufficient evidence"
+
+
+Do not award an edge merely because one company has more
+disclosure.
+
+Do not treat missing information as a negative financial
+result.
+
+Do not treat null as zero.
+
+
+============================================================
+VALUATION
+============================================================
+
+These profiles are primarily annual-report based.
+
+If neither profile contains sufficient public-market valuation
+evidence, state:
+
+"Insufficient evidence"
+
+Do not invent market prices or valuation multiples.
+
+
+============================================================
+OUTPUT
+============================================================
+
+Return VALID JSON ONLY.
+
+Use exactly:
 
 {
   "company_a": "",
@@ -3123,72 +3550,81 @@ Return VALID JSON ONLY:
   "business_quality": {
     "company_a": "",
     "company_b": "",
-    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+    "edge": "Company A|Company B|Mixed|Similar|Insufficient evidence"
   },
 
   "growth": {
     "company_a": "",
     "company_b": "",
-    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+    "edge": "Company A|Company B|Mixed|Similar|Insufficient evidence"
   },
 
   "profitability": {
     "company_a": "",
     "company_b": "",
-    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+    "edge": "Company A|Company B|Mixed|Similar|Insufficient evidence"
   },
 
   "cash_generation": {
     "company_a": "",
     "company_b": "",
-    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+    "edge": "Company A|Company B|Mixed|Similar|Insufficient evidence"
   },
 
   "balance_sheet": {
     "company_a": "",
     "company_b": "",
-    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+    "edge": "Company A|Company B|Mixed|Similar|Insufficient evidence"
   },
 
   "capital_allocation": {
     "company_a": "",
     "company_b": "",
-    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+    "edge": "Company A|Company B|Mixed|Similar|Insufficient evidence"
   },
 
   "management": {
     "company_a": "",
     "company_b": "",
-    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+    "edge": "Company A|Company B|Mixed|Similar|Insufficient evidence"
   },
 
   "governance": {
     "company_a": "",
     "company_b": "",
-    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+    "edge": "Company A|Company B|Mixed|Similar|Insufficient evidence"
   },
 
   "auditor": {
     "company_a": "",
     "company_b": "",
-    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+    "edge": "Company A|Company B|Mixed|Similar|Insufficient evidence"
   },
 
   "risk": {
     "company_a": "",
     "company_b": "",
-    "edge": "Company A|Company B|Mixed|Insufficient evidence"
+    "edge": "Company A|Company B|Mixed|Similar|Insufficient evidence"
+  },
+
+  "valuation": {
+    "company_a": "",
+    "company_b": "",
+    "edge": "Company A|Company B|Mixed|Similar|Insufficient evidence"
   },
 
   "company_a_strengths": [],
+
   "company_a_weaknesses": [],
 
   "company_b_strengths": [],
+
   "company_b_weaknesses": [],
 
   "important_tradeoffs": [],
 
   "questions_before_choosing_a": [],
+
   "questions_before_choosing_b": [],
 
   "overall_interpretation": ""
@@ -3197,16 +3633,24 @@ Return VALID JSON ONLY:
 `;
 
 
+      /*
+       * IMPORTANT:
+       *
+       * Only text/JSON goes to Gemini here.
+       * No PDF is included.
+       */
+
       const comparisonText =
         await geminiGenerate(
           [
             {
               text:
-                comparisonPrompt
+                prompt
             }
           ],
           {
-            json: true
+            json:
+              true
           }
         );
 
@@ -3217,60 +3661,106 @@ Return VALID JSON ONLY:
         );
 
 
-      if (!comparison) {
+      if (
+        !comparison ||
+        typeof comparison !==
+          "object" ||
+        Array.isArray(
+          comparison
+        )
+      ) {
 
         throw new Error(
-          "FinSight could not create the final comparison."
+          "Gemini returned an unusable company comparison."
         );
 
       }
 
 
+      /*
+       * Defensive company names.
+       */
+
+      if (
+        !comparison.company_a
+      ) {
+
+        comparison.company_a =
+          companyAName;
+
+      }
+
+
+      if (
+        !comparison.company_b
+      ) {
+
+        comparison.company_b =
+          companyBName;
+
+      }
+
+
       console.log(
-        "Company comparison complete."
+        "Lightweight comparison complete:",
+        comparison.company_a,
+        "vs",
+        comparison.company_b
       );
 
 
       return res.json({
-        ok: true,
+
+        ok:
+          true,
 
         comparison,
 
-        sources: {
-          companyA:
-            companyA,
-
-          companyB:
-            companyB
-        },
-
         model:
           GEMINI_MODEL
+
       });
 
     }
 
-    catch (error) {
+    catch (
+      error
+    ) {
 
       console.error(
-        "AI comparison failed:",
+        "Lightweight comparison failed:",
         error
       );
 
 
-      /*
-       * Use 500 instead of hiding the underlying
-       * problem behind a generic 502.
-       */
+      const status =
+
+        Number.isInteger(
+          error?.status
+        ) &&
+        error.status >= 400 &&
+        error.status < 600
+
+          ? error.status
+
+          : 500;
+
 
       return res
-        .status(500)
+        .status(status)
         .json({
-          ok: false,
+
+          ok:
+            false,
 
           error:
             error?.message ||
-            "Annual-report comparison failed."
+            "Company comparison failed.",
+
+          providerStatus:
+            error?.providerStatus ||
+            null
+
         });
 
     }
