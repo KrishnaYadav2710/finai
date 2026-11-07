@@ -3915,9 +3915,7 @@ async function extractFinancialsFromPDF(
 
 async function fetchAutomaticMarketData() {
 
-  marketData =
-    null;
-
+  marketData = null;
 
   const company =
     extractedCompany;
@@ -3929,12 +3927,16 @@ async function fetchAutomaticMarketData() {
 
 
   const status =
-
     String(
-      company.listing_status ||
-      ""
+      company.listing_status || ""
     ).toLowerCase();
 
+
+  /*
+   * Do not attempt public pricing for companies
+   * that the annual report does not establish
+   * as currently listed.
+   */
 
   if (
     status.includes("unlisted") ||
@@ -3943,47 +3945,95 @@ async function fetchAutomaticMarketData() {
     status.includes("proposed")
   ) {
 
-    $("#priceDisplay")
-      .textContent =
+    $("#priceDisplay").textContent =
       "Public share price unavailable";
 
 
-    $("#marketNote")
-      .textContent =
-
-      "The uploaded report does not establish a currently listed public equity ticker. FinSight will not guess a market symbol.";
+    $("#marketNote").textContent =
+      "The uploaded annual report does not establish a currently listed public company.";
 
 
-    $("#valuationStatus")
-      .textContent =
-
-      "Public-market valuation is unavailable because the company is not verified as currently listed. Fundamental report analysis remains available.";
+    $("#valuationStatus").textContent =
+      "Public-market valuation is unavailable. Fundamental annual-report analysis remains available.";
 
 
-    $("#valuationView")
-      .textContent =
-      "Unlisted / pre-IPO";
+    const valuationView =
+      $("#valuationView");
+
+
+    if (valuationView) {
+
+      valuationView.textContent =
+        "Unlisted / pre-IPO";
+
+    }
 
 
     return null;
 
   }
+
+
+  /*
+   * IDENTIFIER-FIRST PRICING
+   *
+   * FinSight can proceed if ANY verified market
+   * identifier was extracted from the report:
+   *
+   * BSE security code
+   * NSE code
+   * ticker + exchange
+   *
+   * We no longer require ticker + exchange before
+   * attempting market lookup.
+   */
+
+  const ticker =
+    String(
+      company.ticker || ""
+    ).trim();
+
+
+  const nseCode =
+    String(
+      company.nse_code || ""
+    ).trim();
+
+
+  const bseCode =
+    String(
+      company.bse_code || ""
+    ).trim();
+
+
+  const exchange =
+    String(
+      company.exchange || ""
+    ).trim();
+
+
+  const isin =
+    String(
+      company.isin || ""
+    ).trim();
 
 
   if (
-    !company.ticker ||
-    !company.exchange
+    !ticker &&
+    !nseCode &&
+    !bseCode
   ) {
 
-    $("#priceDisplay")
-      .textContent =
-      "Ticker not verified";
+    $("#priceDisplay").textContent =
+      "Market identifier unavailable";
 
 
-    $("#marketNote")
-      .textContent =
+    $("#marketNote").textContent =
+      "The annual report did not provide a verified BSE code, NSE code or public ticker. FinSight will not guess one.";
 
-      "FinSight could not verify both ticker and exchange from the supplied evidence, so automatic market pricing was withheld.";
+
+    $("#valuationStatus").textContent =
+      "Automatic valuation requires a verified public-market identifier and market price.";
 
 
     return null;
@@ -3991,33 +4041,198 @@ async function fetchAutomaticMarketData() {
   }
 
 
-  $("#priceDisplay")
-    .textContent =
+  $("#priceDisplay").textContent =
     "Fetching market price…";
+
+
+  /*
+   * Express route still requires a path parameter.
+   *
+   * This identifier is only used to reach the endpoint.
+   * The SERVER decides the actual lookup priority:
+   *
+   * BSE code
+   * ↓
+   * NSE code
+   * ↓
+   * ticker
+   */
+
+  const routeIdentifier =
+
+    ticker
+
+    ||
+
+    nseCode
+
+    ||
+
+    bseCode;
 
 
   try {
 
+    const params =
+      new URLSearchParams();
+
+
+    if (exchange) {
+
+      params.set(
+        "exchange",
+        exchange
+      );
+
+    }
+
+
+    if (company.name) {
+
+      params.set(
+        "company",
+        company.name
+      );
+
+    }
+
+
+    if (bseCode) {
+
+      params.set(
+        "bseCode",
+        bseCode
+      );
+
+    }
+
+
+    if (nseCode) {
+
+      params.set(
+        "nseCode",
+        nseCode
+      );
+
+    }
+
+
+    if (isin) {
+
+      params.set(
+        "isin",
+        isin
+      );
+
+    }
+
+
     const url =
-      `/api/market/${encodeURIComponent(company.ticker)}` +
-      `?exchange=${encodeURIComponent(company.exchange || "")}` +
-      `&company=${encodeURIComponent(company.name || "")}` +
-      `&bseCode=${encodeURIComponent(company.bse_code || "")}`;
+
+      `/api/market/${encodeURIComponent(
+        routeIdentifier
+      )}?${params.toString()}`;
+
+
+    console.log(
+      "FinSight market lookup:",
+      {
+        company:
+          company.name,
+
+        ticker,
+
+        exchange,
+
+        bseCode,
+
+        nseCode,
+
+        isin
+      }
+    );
 
 
     const response =
-      await fetch(url);
+      await fetch(
+        url,
+        {
+          method:
+            "GET",
+
+          headers: {
+            Accept:
+              "application/json"
+          }
+        }
+      );
 
 
-    const payload =
-      await response.json();
+    const text =
+      await response.text();
+
+
+    let payload;
+
+
+    try {
+
+      payload =
+        text
+          ? JSON.parse(text)
+          : {};
+
+    }
+
+    catch {
+
+      throw new Error(
+        "Market-data server returned an unreadable response."
+      );
+
+    }
 
 
     if (!response.ok) {
 
+      /*
+       * Give a useful message for Alpha Vantage
+       * request limits.
+       */
+
+      if (
+        response.status === 429
+      ) {
+
+        throw new Error(
+          payload?.error ||
+          "Alpha Vantage request limit has been reached. Try again after the provider limit resets."
+        );
+
+      }
+
+
       throw new Error(
         payload?.error ||
-        "Market price unavailable."
+        `Market-price request failed (${response.status}).`
+      );
+
+    }
+
+
+    const price =
+      finite(
+        payload.price
+      );
+
+
+    if (
+      price == null ||
+      price <= 0
+    ) {
+
+      throw new Error(
+        "The market provider returned no usable share price."
       );
 
     }
@@ -4028,7 +4243,7 @@ async function fetchAutomaticMarketData() {
 
 
     /*
-     * Server may later return a verified currency.
+     * Use server-confirmed currency.
      */
 
     if (
@@ -4041,27 +4256,140 @@ async function fetchAutomaticMarketData() {
     }
 
 
-    $("#priceDisplay")
-      .textContent =
+    /*
+     * Display the ACTUAL identifier that produced
+     * the quote rather than always displaying the
+     * originally extracted ticker.
+     */
+
+    const resolvedIdentifier =
+
+      payload.symbol
+
+      ||
+
+      ticker
+
+      ||
+
+      nseCode
+
+      ||
+
+      bseCode;
+
+
+    $("#priceDisplay").textContent =
 
       `${priceMoney(
-        payload.price
-      )} · ${company.ticker}`;
+        price
+      )} · ${resolvedIdentifier}`;
 
 
-    $("#marketNote")
-      .textContent =
+    /*
+     * Show how the price was resolved.
+     *
+     * Example:
+     *
+     * Alpha Vantage · BSE security code ·
+     * 543287.BSE · 2026-11-06
+     */
 
-      `${payload.provider || "Market provider"} · ${payload.asOf || "last available session"} · ${payload.live ? "live" : "delayed / last available"}`;
+    const noteParts =
+      [];
 
 
-    window
-      .finSightResearchContext
-      .market =
-      marketData;
+    noteParts.push(
+      payload.provider ||
+      "Market provider"
+    );
 
 
-    return payload;
+    if (
+      payload.identifierSource
+    ) {
+
+      noteParts.push(
+        payload.identifierSource
+      );
+
+    }
+
+
+    if (
+      payload.symbol
+    ) {
+
+      noteParts.push(
+        payload.symbol
+      );
+
+    }
+
+
+    if (
+      payload.asOf
+    ) {
+
+      noteParts.push(
+        payload.asOf
+      );
+
+    }
+
+
+    noteParts.push(
+
+      payload.live
+
+        ? "live"
+
+        : "last available / end-of-day"
+
+    );
+
+
+    if (
+      payload.cached
+    ) {
+
+      noteParts.push(
+        "cached"
+      );
+
+    }
+
+
+    $("#marketNote").textContent =
+      noteParts.join(
+        " · "
+      );
+
+
+    /*
+     * Make market data available to valuation
+     * and Ask FinSight.
+     */
+
+    if (
+      window.finSightResearchContext
+    ) {
+
+      window
+        .finSightResearchContext
+        .market =
+        marketData;
+
+    }
+
+
+    console.log(
+      "FinSight market quote resolved:",
+      marketData
+    );
+
+
+    return marketData;
 
   }
 
@@ -4069,14 +4397,39 @@ async function fetchAutomaticMarketData() {
     error
   ) {
 
-    $("#priceDisplay")
-      .textContent =
+    console.error(
+      "Automatic market data:",
+      error
+    );
+
+
+    marketData =
+      null;
+
+
+    $("#priceDisplay").textContent =
       "Market price unavailable";
 
 
-    $("#marketNote")
-      .textContent =
-      error.message;
+    $("#marketNote").textContent =
+      error?.message ||
+      "Automatic market-price lookup failed.";
+
+
+    $("#valuationStatus").textContent =
+      "Automatic valuation could not run because a verified market price was not returned.";
+
+
+    if (
+      window.finSightResearchContext
+    ) {
+
+      window
+        .finSightResearchContext
+        .market =
+        null;
+
+    }
 
 
     return null;
@@ -4089,18 +4442,20 @@ async function fetchAutomaticMarketData() {
 /* ============================================================
    21. AUTOMATIC VALUATION
    ============================================================ */
-
 function calculateAutomaticMultiples() {
 
   const row =
-    getCalculatedRows().at(-1);
+    getCalculatedRows()
+      .at(-1);
 
 
   if (
     !row ||
     !marketData
   ) {
+
     return null;
+
   }
 
 
@@ -4110,139 +4465,203 @@ function calculateAutomaticMultiples() {
     );
 
 
+  if (
+    price == null ||
+    price <= 0
+  ) {
+
+    return null;
+
+  }
+
+
+  /*
+   * Annual-report extraction is required to
+   * return shares outstanding in CRORE SHARES.
+   */
+
   const shares =
     finite(
       row.shares_outstanding
     );
 
 
-  if (
-    price == null ||
-    shares == null ||
-    shares <= 0
-  ) {
+  const validShares =
 
-    return {
+    shares != null &&
+    shares > 0
 
-      price,
+      ? shares
 
-      shares,
-
-      marketCap:
-        null,
-
-      pe:
-        null,
-
-      priceToBook:
-        null,
-
-      ev:
-        null,
-
-      evEbitda:
-        null,
-
-      evSales:
-        null,
-
-      earningsYield:
-        null,
-
-      fcfYield:
-        null
-
-    };
-
-  }
+      : null;
 
 
   /*
-   * IMPORTANT:
-   *
-   * Financial statements are expected in ₹ crore.
-   * shares_outstanding is expected in crore shares.
-   *
-   * price × crore shares = ₹ crore market cap.
+   * ₹ per share × crore shares
+   * =
+   * ₹ crore market capitalization.
    */
 
   const marketCap =
-    price * shares;
 
+    validShares != null
+
+      ? price *
+        validShares
+
+      : null;
+
+
+  /*
+   * Net income is ₹ crore.
+   * Shares are crore shares.
+   *
+   * Therefore EPS is ₹ per share.
+   */
 
   const eps =
-    safeDiv(
-      row.net_income,
-      shares
-    );
+
+    validShares != null &&
+    row.net_income != null
+
+      ? safeDiv(
+          row.net_income,
+          validShares
+        )
+
+      : null;
 
 
   const bookValuePerShare =
-    safeDiv(
-      row.total_equity,
-      shares
-    );
 
+    validShares != null &&
+    row.total_equity != null
+
+      ? safeDiv(
+          row.total_equity,
+          validShares
+        )
+
+      : null;
+
+
+  /*
+   * Do not produce meaningless negative
+   * P/E or P/B ratios.
+   */
 
   const pe =
-    safeDiv(
-      price,
-      eps
-    );
+
+    eps != null &&
+    eps > 0
+
+      ? safeDiv(
+          price,
+          eps
+        )
+
+      : null;
 
 
   const priceToBook =
-    safeDiv(
-      price,
-      bookValuePerShare
+
+    bookValuePerShare != null &&
+    bookValuePerShare > 0
+
+      ? safeDiv(
+          price,
+          bookValuePerShare
+        )
+
+      : null;
+
+
+  const netDebt =
+    finite(
+      row.net_debt
     );
 
+
+  /*
+   * Enterprise value requires market cap.
+   *
+   * Missing net debt is NOT automatically zero
+   * unless both debt and cash evidence permit it.
+   */
 
   const enterpriseValue =
 
-    marketCap
+    marketCap != null &&
+    netDebt != null
 
-    +
+      ? marketCap +
+        netDebt
 
-    (
-      row.net_debt ||
-      0
-    );
+      : null;
 
 
   const evEbitda =
-    safeDiv(
-      enterpriseValue,
-      row.ebitda
-    );
+
+    enterpriseValue != null &&
+    row.ebitda != null &&
+    row.ebitda > 0
+
+      ? safeDiv(
+          enterpriseValue,
+          row.ebitda
+        )
+
+      : null;
 
 
   const evSales =
-    safeDiv(
-      enterpriseValue,
-      row.revenue
-    );
+
+    enterpriseValue != null &&
+    row.revenue != null &&
+    row.revenue > 0
+
+      ? safeDiv(
+          enterpriseValue,
+          row.revenue
+        )
+
+      : null;
 
 
   const earningsYield =
-    safeDiv(
-      row.net_income,
-      marketCap
-    );
+
+    marketCap != null &&
+    marketCap > 0 &&
+    row.net_income != null
+
+      ? safeDiv(
+          row.net_income,
+          marketCap
+        )
+
+      : null;
 
 
   const fcfYield =
-    safeDiv(
-      row.free_cash_flow,
-      marketCap
-    );
+
+    marketCap != null &&
+    marketCap > 0 &&
+    row.free_cash_flow != null
+
+      ? safeDiv(
+          row.free_cash_flow,
+          marketCap
+        )
+
+      : null;
 
 
   return {
 
     price,
 
-    shares,
+    shares:
+      validShares,
 
     marketCap,
 
@@ -4253,6 +4672,10 @@ function calculateAutomaticMultiples() {
     pe,
 
     priceToBook,
+
+    netDebt,
+
+    enterpriseValue,
 
     ev:
       enterpriseValue,
@@ -4269,8 +4692,75 @@ function calculateAutomaticMultiples() {
 
 }
 
-
 function renderAutomaticValuation() {
+
+  const metricsBox =
+    $("#autoValuationMetrics");
+
+
+  const resultsBox =
+    $("#valuationResults");
+
+
+  const statusBox =
+    $("#valuationStatus");
+
+
+  /*
+   * No verified market price.
+   */
+
+  if (
+    !marketData ||
+    finite(
+      marketData.price
+    ) == null
+  ) {
+
+    valuationState =
+      null;
+
+
+    if (metricsBox) {
+
+      metricsBox.innerHTML =
+        "";
+
+    }
+
+
+    if (resultsBox) {
+
+      resultsBox.innerHTML =
+        "";
+
+    }
+
+
+    if (statusBox) {
+
+      statusBox.textContent =
+        "Automatic valuation is waiting for a verified market price.";
+
+    }
+
+
+    if (
+      window.finSightResearchContext
+    ) {
+
+      window
+        .finSightResearchContext
+        .valuation =
+        null;
+
+    }
+
+
+    return;
+
+  }
+
 
   const valuation =
     calculateAutomaticMultiples();
@@ -4280,207 +4770,344 @@ function renderAutomaticValuation() {
     valuation;
 
 
-  if (
-    !marketData
-  ) {
-
-    $("#autoValuationMetrics")
-      .innerHTML =
-      "";
-
-
-    $("#valuationResults")
-      .innerHTML =
-      "";
-
-
-    return;
-
-  }
-
-
   if (!valuation) {
+
+    if (statusBox) {
+
+      statusBox.textContent =
+        "Automatic valuation could not be calculated from the available annual-report and market data.";
+
+    }
+
     return;
+
   }
 
 
-  const cards = [
+  /*
+   * MAIN VALUATION CARDS
+   */
+
+  const valuationCards = [
 
     [
       "Share price",
+
       priceMoney(
         valuation.price
       ),
-      "Verified market quote"
+
+      marketData.asOf
+        ? `Last available · ${marketData.asOf}`
+        : "Verified market quote"
     ],
 
     [
       "Market cap",
+
       valuation.marketCap == null
+
         ? "N/A"
+
         : money(
             valuation.marketCap
           ),
-      "Price × extracted shares"
+
+      valuation.shares == null
+        ? "Period-end shares unavailable"
+        : "Price × period-end shares"
     ],
 
     [
       "P/E",
+
       multiple(
         valuation.pe
       ),
-      "Price relative to earnings"
+
+      valuation.pe == null
+        ? "Requires positive earnings and reliable shares"
+        : "Market price / EPS"
     ],
 
     [
       "P/B",
+
       multiple(
         valuation.priceToBook
       ),
-      "Price relative to book value"
+
+      valuation.priceToBook == null
+        ? "Requires positive book value and reliable shares"
+        : "Market price / book value per share"
     ],
 
     [
       "EV / EBITDA",
+
       multiple(
         valuation.evEbitda
       ),
-      "Enterprise valuation multiple"
+
+      valuation.evEbitda == null
+        ? "Requires market cap, net debt and positive EBITDA"
+        : "Enterprise value / EBITDA"
     ]
 
   ];
 
 
-  $("#autoValuationMetrics")
-    .innerHTML =
+  if (metricsBox) {
 
-    cards
+    metricsBox.innerHTML =
 
-      .map(
-        (
-          [
-            label,
-            value,
-            copy
-          ]
-        ) => `
+      valuationCards
 
-          <article class="metric">
+        .map(
+          (
+            [
+              label,
+              value,
+              copy
+            ]
+          ) => `
 
-            <span>
-              ${label}
-            </span>
+            <article class="metric">
 
-            <strong>
-              ${value}
-            </strong>
+              <span>
+                ${label}
+              </span>
 
-            <small class="neutral">
-              ${copy}
-            </small>
+              <strong>
+                ${value}
+              </strong>
 
-          </article>
+              <small class="neutral">
+                ${copy}
+              </small>
 
-        `
-      )
+            </article>
 
-      .join("");
+          `
+        )
+
+        .join("");
+
+  }
 
 
-  $("#valuationResults")
-    .innerHTML =
+  /*
+   * SECONDARY VALUATION METRICS
+   */
+
+  const secondaryMetrics = [
 
     [
+      "EPS",
 
-      [
-        "Earnings yield",
-        valuation.earningsYield == null
-          ? "N/A"
-          : percentage(
-              valuation.earningsYield
-            ),
-        "Net income / market cap"
-      ],
+      valuation.eps == null
 
-      [
-        "FCF yield",
-        valuation.fcfYield == null
-          ? "N/A"
-          : percentage(
-              valuation.fcfYield
-            ),
-        "Free cash flow / market cap"
-      ],
+        ? "N/A"
 
-      [
-        "EV / Sales",
-        multiple(
-          valuation.evSales
-        ),
-        "Enterprise value / revenue"
-      ],
+        : priceMoney(
+            valuation.eps
+          ),
 
-      [
-        "Net debt / EBITDA",
-        multiple(
-          getCalculatedRows()
-            .at(-1)
-            ?.net_debt_ebitda
-        ),
-        "Balance-sheet leverage"
-      ]
+      "Net profit / period-end shares"
+    ],
 
+    [
+      "Book value / share",
+
+      valuation.bookValuePerShare == null
+
+        ? "N/A"
+
+        : priceMoney(
+            valuation.bookValuePerShare
+          ),
+
+      "Equity / period-end shares"
+    ],
+
+    [
+      "Enterprise value",
+
+      valuation.enterpriseValue == null
+
+        ? "N/A"
+
+        : money(
+            valuation.enterpriseValue
+          ),
+
+      "Market cap + net debt"
+    ],
+
+    [
+      "EV / Sales",
+
+      multiple(
+        valuation.evSales
+      ),
+
+      "Enterprise value / revenue"
+    ],
+
+    [
+      "Earnings yield",
+
+      valuation.earningsYield == null
+
+        ? "N/A"
+
+        : percentage(
+            valuation.earningsYield
+          ),
+
+      "Net profit / market cap"
+    ],
+
+    [
+      "FCF yield",
+
+      valuation.fcfYield == null
+
+        ? "N/A"
+
+        : percentage(
+            valuation.fcfYield
+          ),
+
+      "Free cash flow / market cap"
+    ],
+
+    [
+      "Net debt / EBITDA",
+
+      multiple(
+        getCalculatedRows()
+          .at(-1)
+          ?.net_debt_ebitda
+      ),
+
+      "Balance-sheet leverage"
     ]
 
-      .map(
-        (
-          [
-            title,
-            value,
-            copy
-          ]
-        ) => `
-
-          <div class="scenario">
-
-            <b>
-              ${title}
-            </b>
-
-            <strong>
-              ${value}
-            </strong>
-
-            <small>
-              ${copy}
-            </small>
-
-          </div>
-
-        `
-      )
-
-      .join("");
+  ];
 
 
-  $("#valuationStatus")
-    .textContent =
+  if (resultsBox) {
 
-    valuation.marketCap == null
+    resultsBox.innerHTML =
 
-      ?
+      secondaryMetrics
 
-      "Market price was found, but shares outstanding could not be reliably extracted. Multiples requiring market capitalization remain unavailable."
+        .map(
+          (
+            [
+              title,
+              value,
+              copy
+            ]
+          ) => `
 
-      :
+            <div class="scenario">
 
-      `Automatic valuation uses ${extractedCompany.ticker} market data and the latest extracted financial year.`;
+              <b>
+                ${title}
+              </b>
+
+              <strong>
+                ${value}
+              </strong>
+
+              <small>
+                ${copy}
+              </small>
+
+            </div>
+
+          `
+        )
+
+        .join("");
+
+  }
 
 
-  window
-    .finSightResearchContext
-    .valuation =
-    valuation;
+  /*
+   * Explain exactly which identifier generated
+   * the market price.
+   */
+
+  const identifier =
+
+    marketData.symbol
+
+    ||
+
+    extractedCompany?.bse_code
+
+    ||
+
+    extractedCompany?.nse_code
+
+    ||
+
+    extractedCompany?.ticker
+
+    ||
+
+    "verified market identifier";
+
+
+  const identifierSource =
+
+    marketData.identifierSource
+
+    ||
+
+    "verified annual-report identifier";
+
+
+  if (statusBox) {
+
+    if (
+      valuation.shares == null
+    ) {
+
+      statusBox.textContent =
+
+        `${priceMoney(
+          valuation.price
+        )} was resolved using ${identifier} (${identifierSource}), but period-end shares outstanding could not be reliably established from the annual report. Market-cap-based valuation multiples are therefore withheld.`;
+
+    }
+
+    else {
+
+      statusBox.textContent =
+
+        `Automatic valuation uses ${identifier} (${identifierSource}) at ${priceMoney(
+          valuation.price
+        )}, as of ${marketData.asOf || "the last available trading session"}, together with the latest extracted consolidated annual-report financials.`;
+
+    }
+
+  }
+
+
+  if (
+    window.finSightResearchContext
+  ) {
+
+    window
+      .finSightResearchContext
+      .valuation =
+      valuation;
+
+  }
 
 }
 
