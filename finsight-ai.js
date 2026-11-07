@@ -1695,52 +1695,62 @@ function renderComparison(
 
   const comparisonKeys = [
 
-    [
-      "business_quality",
-      "Business quality"
-    ],
+  [
+    "business_quality",
+    "Business quality"
+  ],
 
-    [
-      "growth",
-      "Growth"
-    ],
+  [
+    "growth",
+    "Growth"
+  ],
 
-    [
-      "profitability",
-      "Profitability"
-    ],
+  [
+    "profitability",
+    "Profitability"
+  ],
 
-    [
-      "cash_generation",
-      "Cash generation"
-    ],
+  [
+    "cash_generation",
+    "Cash generation"
+  ],
 
-    [
-      "balance_sheet",
-      "Balance sheet"
-    ],
+  [
+    "balance_sheet",
+    "Balance sheet"
+  ],
 
-    [
-      "management",
-      "Management"
-    ],
+  [
+    "capital_allocation",
+    "Capital allocation"
+  ],
 
-    [
-      "governance",
-      "Governance"
-    ],
+  [
+    "management",
+    "Management"
+  ],
 
-    [
-      "risk",
-      "Risk"
-    ],
+  [
+    "governance",
+    "Governance"
+  ],
 
-    [
-      "valuation",
-      "Valuation"
-    ]
+  [
+    "auditor",
+    "Auditor"
+  ],
 
-  ];
+  [
+    "risk",
+    "Risk"
+  ],
+
+  [
+    "valuation",
+    "Valuation"
+  ]
+
+];
 
 
   for (
@@ -1902,6 +1912,26 @@ function renderComparison(
     )
 
   );
+   if (
+  comparison.overall_interpretation
+) {
+
+  sections.push(`
+
+    <div class="group-title">
+      Overall interpretation
+    </div>
+
+    <div class="ai-finding">
+      ${escapeHTML(
+        comparison.overall_interpretation
+      )}
+    </div>
+
+  `);
+
+}
+ 
 
 
   return sections.join("");
