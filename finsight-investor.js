@@ -5209,49 +5209,285 @@ $("#loadMemory")
     "click",
     async () => {
 
-      if (!extractedCompany?.name && !extractedCompany?.ticker) {
-        $("#memoryResult").textContent =
+      const resultBox =
+        $("#memoryResult");
+
+
+      /*
+       * A company must first be identified from
+       * the uploaded annual report.
+       */
+
+      if (
+        !extractedCompany?.name &&
+        !extractedCompany?.ticker
+      ) {
+
+        resultBox.textContent =
           "Load a company report before loading research memory.";
+
         return;
+
       }
 
 
-      $("#memoryResult")
-        .textContent =
+      resultBox.textContent =
         "Loading research memory…";
 
 
       try {
 
-        const response =
-          await fetch(
-            `/api/research?company=${encodeURIComponent(extractedCompany.name || "")}` +
-            `&ticker=${encodeURIComponent(extractedCompany.ticker || "")}` +
-            `&exchange=${encodeURIComponent(extractedCompany.exchange || "")}`
-          );
+        /*
+         * Use the SAME working backend route
+         * that currently returns the JSON shown
+         * in your screenshot.
+         */
+
+        const params =
+          new URLSearchParams();
 
 
-        const result =
-          await response.json();
+        if (
+          extractedCompany.name
+        ) {
 
-
-        if (!response.ok) {
-
-          throw new Error(
-            result?.error ||
-            "Research memory unavailable."
+          params.set(
+            "company",
+            extractedCompany.name
           );
 
         }
 
 
-        $("#memoryResult")
-          .textContent =
-          JSON.stringify(
-            result,
-            null,
-            2
+        if (
+          extractedCompany.ticker
+        ) {
+
+          params.set(
+            "ticker",
+            extractedCompany.ticker
           );
+
+        }
+
+
+        if (
+          extractedCompany.exchange
+        ) {
+
+          params.set(
+            "exchange",
+            extractedCompany.exchange
+          );
+
+        }
+
+
+        const response =
+          await fetch(
+            `/api/research?${params.toString()}`,
+            {
+              method:
+                "GET",
+
+              headers: {
+                Accept:
+                  "application/json"
+              }
+            }
+          );
+
+
+        const text =
+          await response.text();
+
+
+        let result;
+
+
+        try {
+
+          result =
+            text
+              ? JSON.parse(text)
+              : {};
+
+        }
+
+        catch {
+
+          throw new Error(
+            "Research memory returned an unreadable response."
+          );
+
+        }
+
+
+        if (!response.ok) {
+
+          throw new Error(
+            typeof result?.error === "string"
+              ? result.error
+              : `Research memory request failed (${response.status}).`
+          );
+
+        }
+
+
+        /*
+         * Your current backend returns:
+         *
+         * {
+         *   company: {...},
+         *   reports: [],
+         *   theses: [...],
+         *   valuations: [],
+         *   promises: [],
+         *   events: []
+         * }
+         */
+
+        const theses =
+          Array.isArray(
+            result.theses
+          )
+            ? result.theses
+            : [];
+
+
+        /*
+         * Find the newest active thesis.
+         *
+         * If no active thesis exists, use the
+         * newest available thesis.
+         */
+
+        const savedThesis =
+
+          theses.find(
+            item =>
+              String(
+                item.status || ""
+              ).toLowerCase() ===
+              "active"
+          )
+
+          ||
+
+          theses[0]
+
+          ||
+
+          null;
+
+
+        if (!savedThesis) {
+
+          $("#thesisText").value =
+            "";
+
+          $("#bullCase").value =
+            "";
+
+          $("#bearCase").value =
+            "";
+
+
+          resultBox.textContent =
+            `No saved investment thesis was found for ${
+              result.company?.name ||
+              extractedCompany.name ||
+              extractedCompany.ticker ||
+              "this company"
+            }.`;
+
+          return;
+
+        }
+
+
+        /*
+         * LOAD SAVED VALUES INTO EXISTING BOXES
+         */
+
+        $("#thesisText").value =
+          savedThesis.thesis ||
+          "";
+
+
+        $("#bullCase").value =
+          savedThesis.bull_case ||
+          savedThesis.bullCase ||
+          "";
+
+
+        $("#bearCase").value =
+          savedThesis.bear_case ||
+          savedThesis.bearCase ||
+          "";
+
+
+        /*
+         * Friendly confirmation.
+         * Do NOT dump JSON into the page.
+         */
+
+        const companyName =
+
+          result.company?.name
+
+          ||
+
+          extractedCompany.name
+
+          ||
+
+          extractedCompany.ticker
+
+          ||
+
+          "company";
+
+
+        let savedDate =
+          "";
+
+
+        const dateValue =
+
+          savedThesis.updated_at
+
+          ||
+
+          savedThesis.created_at;
+
+
+        if (dateValue) {
+
+          const parsedDate =
+            new Date(
+              dateValue
+            );
+
+
+          if (
+            !Number.isNaN(
+              parsedDate.getTime()
+            )
+          ) {
+
+            savedDate =
+              ` · saved ${parsedDate.toLocaleDateString(
+                "en-IN"
+              )}`;
+
+          }
+
+        }
+
+
+        resultBox.textContent =
+          `Research memory loaded for ${companyName}${savedDate}.`;
 
       }
 
@@ -5259,9 +5495,15 @@ $("#loadMemory")
         error
       ) {
 
-        $("#memoryResult")
-          .textContent =
-          error.message;
+        console.error(
+          "Load research memory error:",
+          error
+        );
+
+
+        resultBox.textContent =
+          error?.message ||
+          "Could not load research memory.";
 
       }
 
