@@ -4564,15 +4564,33 @@ $("#fetchMarketPrice")
 
         button.textContent =
           "Retry price & valuation";
-
-      }
+            }
 
     }
   );
 
-/* ============================================================
+   /* ============================================================
    21. AUTOMATIC VALUATION
    ============================================================ */
+
+
+/*
+ * Calculate valuation multiples only when:
+ *
+ * 1. Annual-report financials are available.
+ * 2. A verified market price has been fetched manually.
+ *
+ * Expected units:
+ *
+ * Financial statement values = ₹ crore
+ * Shares outstanding = crore shares
+ * Share price = ₹ per share
+ *
+ * Therefore:
+ *
+ * price × crore shares = ₹ crore market cap
+ */
+
 function calculateAutomaticMultiples() {
 
   const row =
@@ -4607,8 +4625,11 @@ function calculateAutomaticMultiples() {
 
 
   /*
-   * Annual-report extraction is required to
-   * return shares outstanding in CRORE SHARES.
+   * Shares outstanding must come from the
+   * uploaded annual report.
+   *
+   * Expected unit:
+   * crore shares.
    */
 
   const shares =
@@ -4628,9 +4649,11 @@ function calculateAutomaticMultiples() {
 
 
   /*
+   * MARKET CAPITALIZATION
+   *
    * ₹ per share × crore shares
    * =
-   * ₹ crore market capitalization.
+   * ₹ crore
    */
 
   const marketCap =
@@ -4644,10 +4667,12 @@ function calculateAutomaticMultiples() {
 
 
   /*
-   * Net income is ₹ crore.
-   * Shares are crore shares.
+   * EPS
    *
-   * Therefore EPS is ₹ per share.
+   * ₹ crore profit /
+   * crore shares
+   * =
+   * ₹ per share
    */
 
   const eps =
@@ -4663,6 +4688,10 @@ function calculateAutomaticMultiples() {
       : null;
 
 
+  /*
+   * BOOK VALUE PER SHARE
+   */
+
   const bookValuePerShare =
 
     validShares != null &&
@@ -4677,8 +4706,9 @@ function calculateAutomaticMultiples() {
 
 
   /*
-   * Do not produce meaningless negative
-   * P/E or P/B ratios.
+   * P/E
+   *
+   * Do not calculate negative P/E.
    */
 
   const pe =
@@ -4694,6 +4724,13 @@ function calculateAutomaticMultiples() {
       : null;
 
 
+  /*
+   * PRICE / BOOK
+   *
+   * Do not calculate against
+   * negative book value.
+   */
+
   const priceToBook =
 
     bookValuePerShare != null &&
@@ -4707,6 +4744,13 @@ function calculateAutomaticMultiples() {
       : null;
 
 
+  /*
+   * NET DEBT
+   *
+   * Use the calculated annual-report
+   * value only.
+   */
+
   const netDebt =
     finite(
       row.net_debt
@@ -4714,10 +4758,12 @@ function calculateAutomaticMultiples() {
 
 
   /*
-   * Enterprise value requires market cap.
+   * ENTERPRISE VALUE
    *
-   * Missing net debt is NOT automatically zero
-   * unless both debt and cash evidence permit it.
+   * Market cap + net debt.
+   *
+   * If net debt is unavailable,
+   * EV is unavailable.
    */
 
   const enterpriseValue =
@@ -4730,6 +4776,10 @@ function calculateAutomaticMultiples() {
 
       : null;
 
+
+  /*
+   * EV / EBITDA
+   */
 
   const evEbitda =
 
@@ -4745,6 +4795,10 @@ function calculateAutomaticMultiples() {
       : null;
 
 
+  /*
+   * EV / SALES
+   */
+
   const evSales =
 
     enterpriseValue != null &&
@@ -4759,6 +4813,10 @@ function calculateAutomaticMultiples() {
       : null;
 
 
+  /*
+   * EARNINGS YIELD
+   */
+
   const earningsYield =
 
     marketCap != null &&
@@ -4772,6 +4830,10 @@ function calculateAutomaticMultiples() {
 
       : null;
 
+
+  /*
+   * FREE-CASH-FLOW YIELD
+   */
 
   const fcfYield =
 
@@ -4823,22 +4885,84 @@ function calculateAutomaticMultiples() {
 
 }
 
+
+/* ============================================================
+   RENDER AUTOMATIC VALUATION
+   ============================================================ */
+
 function renderAutomaticValuation() {
 
-  const metricsBox =
-    $("#autoValuationMetrics");
-
-
-  const resultsBox =
-    $("#valuationResults");
-
-
-  const statusBox =
+  const valuationStatus =
     $("#valuationStatus");
 
 
+  const valuationView =
+    $("#valuationView");
+
+
+  const metricsContainer =
+    $("#autoValuationMetrics");
+
+
+  const resultsContainer =
+    $("#valuationResults");
+
+
   /*
-   * No verified market price.
+   * STATE 1
+   *
+   * No company/report loaded.
+   */
+
+  if (!extractedCompany) {
+
+    valuationState =
+      null;
+
+
+    if (valuationStatus) {
+
+      valuationStatus.textContent =
+        "Waiting for company data.";
+
+    }
+
+
+    if (valuationView) {
+
+      valuationView.textContent =
+        "Waiting for company data";
+
+    }
+
+
+    if (metricsContainer) {
+
+      metricsContainer.innerHTML =
+        "";
+
+    }
+
+
+    if (resultsContainer) {
+
+      resultsContainer.innerHTML =
+        "";
+
+    }
+
+
+    return;
+
+  }
+
+
+  /*
+   * STATE 2
+   *
+   * Company report is loaded,
+   * but user has NOT requested
+   * market data.
    */
 
   if (
@@ -4852,38 +4976,49 @@ function renderAutomaticValuation() {
       null;
 
 
-    if (metricsBox) {
+    if (valuationStatus) {
 
-      metricsBox.innerHTML =
+      valuationStatus.textContent =
+        "Market valuation has not been requested yet.";
+
+    }
+
+
+    if (valuationView) {
+
+      valuationView.textContent =
+        "Price required";
+
+    }
+
+
+    if (metricsContainer) {
+
+      metricsContainer.innerHTML =
         "";
 
     }
 
 
-    if (resultsBox) {
+    if (resultsContainer) {
 
-      resultsBox.innerHTML =
-        "";
+      resultsContainer.innerHTML = `
 
-    }
+        <div class="scenario">
 
+          <b>
+            Market valuation not calculated
+          </b>
 
-    if (statusBox) {
+          <small>
+            Press “Fetch price & calculate valuation”
+            when you want FinSight to retrieve the
+            market price and calculate valuation.
+          </small>
 
-      statusBox.textContent =
-        "Automatic valuation is waiting for a verified market price.";
+        </div>
 
-    }
-
-
-    if (
-      window.finSightResearchContext
-    ) {
-
-      window
-        .finSightResearchContext
-        .valuation =
-        null;
+      `;
 
     }
 
@@ -4892,6 +5027,13 @@ function renderAutomaticValuation() {
 
   }
 
+
+  /*
+   * STATE 3
+   *
+   * Market price exists.
+   * Calculate valuation.
+   */
 
   const valuation =
     calculateAutomaticMultiples();
@@ -4903,12 +5045,21 @@ function renderAutomaticValuation() {
 
   if (!valuation) {
 
-    if (statusBox) {
+    if (valuationStatus) {
 
-      statusBox.textContent =
-        "Automatic valuation could not be calculated from the available annual-report and market data.";
+      valuationStatus.textContent =
+        "Valuation could not be calculated from the available data.";
 
     }
+
+
+    if (valuationView) {
+
+      valuationView.textContent =
+        "Valuation unavailable";
+
+    }
+
 
     return;
 
@@ -4929,9 +5080,10 @@ function renderAutomaticValuation() {
       ),
 
       marketData.asOf
-        ? `Last available · ${marketData.asOf}`
+        ? `Market quote · ${marketData.asOf}`
         : "Verified market quote"
     ],
+
 
     [
       "Market cap",
@@ -4945,9 +5097,12 @@ function renderAutomaticValuation() {
           ),
 
       valuation.shares == null
-        ? "Period-end shares unavailable"
-        : "Price × period-end shares"
+
+        ? "Shares outstanding unavailable"
+
+        : "Share price × shares outstanding"
     ],
+
 
     [
       "P/E",
@@ -4957,9 +5112,12 @@ function renderAutomaticValuation() {
       ),
 
       valuation.pe == null
+
         ? "Requires positive earnings and reliable shares"
-        : "Market price / EPS"
+
+        : "Market price / earnings per share"
     ],
+
 
     [
       "P/B",
@@ -4969,9 +5127,12 @@ function renderAutomaticValuation() {
       ),
 
       valuation.priceToBook == null
+
         ? "Requires positive book value and reliable shares"
+
         : "Market price / book value per share"
     ],
+
 
     [
       "EV / EBITDA",
@@ -4981,16 +5142,18 @@ function renderAutomaticValuation() {
       ),
 
       valuation.evEbitda == null
+
         ? "Requires market cap, net debt and positive EBITDA"
+
         : "Enterprise value / EBITDA"
     ]
 
   ];
 
 
-  if (metricsBox) {
+  if (metricsContainer) {
 
-    metricsBox.innerHTML =
+    metricsContainer.innerHTML =
 
       valuationCards
 
@@ -5044,8 +5207,9 @@ function renderAutomaticValuation() {
             valuation.eps
           ),
 
-      "Net profit / period-end shares"
+      "Net profit / shares outstanding"
     ],
+
 
     [
       "Book value / share",
@@ -5058,8 +5222,9 @@ function renderAutomaticValuation() {
             valuation.bookValuePerShare
           ),
 
-      "Equity / period-end shares"
+      "Shareholder equity / shares outstanding"
     ],
+
 
     [
       "Enterprise value",
@@ -5072,8 +5237,9 @@ function renderAutomaticValuation() {
             valuation.enterpriseValue
           ),
 
-      "Market cap + net debt"
+      "Market capitalization + net debt"
     ],
+
 
     [
       "EV / Sales",
@@ -5084,6 +5250,7 @@ function renderAutomaticValuation() {
 
       "Enterprise value / revenue"
     ],
+
 
     [
       "Earnings yield",
@@ -5096,8 +5263,9 @@ function renderAutomaticValuation() {
             valuation.earningsYield
           ),
 
-      "Net profit / market cap"
+      "Net profit / market capitalization"
     ],
+
 
     [
       "FCF yield",
@@ -5110,8 +5278,9 @@ function renderAutomaticValuation() {
             valuation.fcfYield
           ),
 
-      "Free cash flow / market cap"
+      "Free cash flow / market capitalization"
     ],
+
 
     [
       "Net debt / EBITDA",
@@ -5128,9 +5297,9 @@ function renderAutomaticValuation() {
   ];
 
 
-  if (resultsBox) {
+  if (resultsContainer) {
 
-    resultsBox.innerHTML =
+    resultsContainer.innerHTML =
 
       secondaryMetrics
 
@@ -5168,8 +5337,7 @@ function renderAutomaticValuation() {
 
 
   /*
-   * Explain exactly which identifier generated
-   * the market price.
+   * IDENTIFIER USED FOR MARKET PRICE
    */
 
   const identifier =
@@ -5199,39 +5367,106 @@ function renderAutomaticValuation() {
 
     ||
 
-    "verified annual-report identifier";
+    "verified company identifier";
 
 
-  if (statusBox) {
+  /*
+   * STATE 4
+   *
+   * Price exists but shares outstanding
+   * could not be reliably extracted.
+   */
 
-    if (
-      valuation.shares == null
-    ) {
+  if (
+    valuation.marketCap == null
+  ) {
 
-      statusBox.textContent =
+    if (valuationView) {
+
+      valuationView.textContent =
+        "Partial valuation";
+
+    }
+
+
+    if (valuationStatus) {
+
+      valuationStatus.textContent =
 
         `${priceMoney(
           valuation.price
-        )} was resolved using ${identifier} (${identifierSource}), but period-end shares outstanding could not be reliably established from the annual report. Market-cap-based valuation multiples are therefore withheld.`;
+        )} was fetched using ${identifier} (${identifierSource}), but reliable period-end shares outstanding were not available from the annual report. Market-cap-based valuation multiples are therefore unavailable.`;
 
     }
 
-    else {
 
-      statusBox.textContent =
+    /*
+     * Still expose the partial valuation
+     * to Ask FinSight.
+     */
 
-        `Automatic valuation uses ${identifier} (${identifierSource}) at ${priceMoney(
-          valuation.price
-        )}, as of ${marketData.asOf || "the last available trading session"}, together with the latest extracted consolidated annual-report financials.`;
+    if (
+      window.finSightResearchContext
+    ) {
+
+      window
+        .finSightResearchContext
+        .market =
+        marketData;
+
+
+      window
+        .finSightResearchContext
+        .valuation =
+        valuation;
 
     }
+
+
+    return;
 
   }
 
 
+  /*
+   * STATE 5
+   *
+   * Complete market valuation.
+   */
+
+  if (valuationView) {
+
+    valuationView.textContent =
+      "Market valuation ready";
+
+  }
+
+
+  if (valuationStatus) {
+
+    valuationStatus.textContent =
+
+      `Valuation calculated using ${identifier} (${identifierSource}) at ${priceMoney(
+        valuation.price
+      )}, as of ${marketData.asOf || "the last available trading session"}, together with the latest extracted annual-report financials.`;
+
+  }
+
+
+  /*
+   * Share final valuation with
+   * Ask FinSight / AI valuation.
+   */
+
   if (
     window.finSightResearchContext
   ) {
+
+    window
+      .finSightResearchContext
+      .market =
+      marketData;
+
 
     window
       .finSightResearchContext
@@ -5240,7 +5475,7 @@ function renderAutomaticValuation() {
 
   }
 
-}
+}      
 
 
 /* ============================================================
