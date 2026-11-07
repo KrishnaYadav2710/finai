@@ -4438,6 +4438,136 @@ async function fetchAutomaticMarketData() {
 
 }
 
+/* ============================================================
+   MANUAL MARKET PRICE BUTTON
+   ============================================================ */
+
+$("#fetchMarketPrice")
+  ?.addEventListener(
+    "click",
+    async () => {
+
+      const button =
+        $("#fetchMarketPrice");
+
+
+      if (!extractedCompany) {
+
+        $("#marketNote").textContent =
+          "Upload an annual report first.";
+
+        return;
+
+      }
+
+
+      button.disabled =
+        true;
+
+
+      button.textContent =
+        "Fetching price…";
+
+
+      $("#priceDisplay").textContent =
+        "Fetching market price…";
+
+
+      $("#marketNote").textContent =
+        "Contacting market data provider…";
+
+
+      try {
+
+        const result =
+          await fetchAutomaticMarketData();
+
+
+        if (!result) {
+
+          button.disabled =
+            false;
+
+
+          button.textContent =
+            "Retry price & valuation";
+
+
+          return;
+
+        }
+
+
+        /*
+         * Market price is now available.
+         * Calculate valuation.
+         */
+
+        renderAutomaticValuation();
+
+
+        button.disabled =
+          false;
+
+
+        button.textContent =
+          "Refresh price & valuation";
+
+
+        /*
+         * Tell finsight-ai.js that market
+         * data and valuation are ready.
+         */
+
+        window.dispatchEvent(
+
+          new CustomEvent(
+            "finsight:market-ready",
+            {
+              detail: {
+
+                market:
+                  marketData,
+
+                valuation:
+                  valuationState
+
+              }
+            }
+          )
+
+        );
+
+      }
+
+      catch (error) {
+
+        console.error(
+          "Market price fetch:",
+          error
+        );
+
+
+        $("#priceDisplay").textContent =
+          "Market price unavailable";
+
+
+        $("#marketNote").textContent =
+          error?.message ||
+          "Could not retrieve market price.";
+
+
+        button.disabled =
+          false;
+
+
+        button.textContent =
+          "Retry price & valuation";
+
+      }
+
+    }
+  );
 
 /* ============================================================
    21. AUTOMATIC VALUATION
@@ -5253,10 +5383,51 @@ async function handleReportUpload(file) {
       `${extractedCompany.name}: extracted ${primary.length} reporting year${primary.length === 1 ? "" : "s"}. Checking listing status and market data…`;
 
 
-    await fetchAutomaticMarketData();
+  marketData = null;
+
+valuationState = null;
 
 
-    renderAutomaticValuation();
+const fetchMarketButton =
+  $("#fetchMarketPrice");
+
+
+if (fetchMarketButton) {
+
+  fetchMarketButton.hidden =
+    false;
+
+  fetchMarketButton.disabled =
+    false;
+
+  fetchMarketButton.textContent =
+    "Fetch price & calculate valuation";
+
+}
+
+
+if ($("#priceDisplay")) {
+
+  $("#priceDisplay").textContent =
+    "Price not fetched";
+
+}
+
+
+if ($("#marketNote")) {
+
+  $("#marketNote").textContent =
+    "Press the button below when you want to fetch the latest available market price.";
+
+}
+
+
+if ($("#valuationStatus")) {
+
+  $("#valuationStatus").textContent =
+    "Market valuation has not been requested yet.";
+
+}
 
 
     $("#uploadStatus")
