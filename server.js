@@ -1558,6 +1558,187 @@ function pdfPart(file) {
 
 }
 
+/* ============================================================
+   FINANCIAL UNIT NORMALIZATION
+   All frontend financial values must be INR crore.
+   ============================================================ */
+
+function normalizeFinancialUnitsToCrore(financials) {
+
+  if (!Array.isArray(financials)) {
+    return [];
+  }
+
+  const monetaryFields = [
+    "revenue",
+    "ebitda",
+    "cogs",
+    "operating_income",
+    "net_income",
+    "total_assets",
+    "current_assets",
+    "current_liabilities",
+    "total_debt",
+    "cash",
+    "total_equity",
+    "operating_cash_flow",
+    "capex",
+    "inventory",
+    "accounts_receivable",
+    "accounts_payable",
+    "finance_cost"
+  ];
+
+
+  return financials.map(row => {
+
+    const normalized = {
+      ...row
+    };
+
+
+    const unit =
+      String(
+        row.source_unit || ""
+      )
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .trim();
+
+
+    let divisor = 1;
+
+
+    /*
+     * INR million -> INR crore
+     *
+     * 10 million = 1 crore
+     */
+
+    if (
+      unit.includes("million") ||
+      unit.includes("mn")
+    ) {
+
+      divisor = 10;
+
+    }
+
+
+    /*
+     * INR lakh -> INR crore
+     *
+     * 100 lakh = 1 crore
+     */
+
+    else if (
+      unit.includes("lakh") ||
+      unit.includes("lac")
+    ) {
+
+      divisor = 100;
+
+    }
+
+
+    /*
+     * INR billion -> INR crore
+     *
+     * 1 billion = 100 crore
+     *
+     * Therefore multiply by 100.
+     */
+
+    else if (
+      unit.includes("billion") ||
+      /\bbn\b/.test(unit)
+    ) {
+
+      divisor = 0.01;
+
+    }
+
+
+    /*
+     * Crore already requires no conversion.
+     */
+
+    else if (
+      unit.includes("crore") ||
+      unit.includes("cr")
+    ) {
+
+      divisor = 1;
+
+    }
+
+
+    /*
+     * Unknown unit:
+     * DO NOT guess.
+     */
+
+    else {
+
+      normalized.extraction_notes =
+        [
+          row.extraction_notes,
+          `Unit normalization not applied because source_unit "${row.source_unit || "unknown"}" was not recognized.`
+        ]
+          .filter(Boolean)
+          .join(" ");
+
+      return normalized;
+
+    }
+
+
+    for (const field of monetaryFields) {
+
+      const value =
+        Number(
+          row[field]
+        );
+
+
+      if (
+        Number.isFinite(value)
+      ) {
+
+        normalized[field] =
+          value / divisor;
+
+      }
+
+    }
+
+
+    normalized.original_source_unit =
+      row.source_unit || null;
+
+
+    normalized.source_unit =
+      "INR crore";
+
+
+    normalized.extraction_notes =
+      [
+        row.extraction_notes,
+
+        divisor !== 1
+          ? `Server normalized monetary values from ${row.source_unit} to INR crore.`
+          : null
+      ]
+        .filter(Boolean)
+        .join(" ");
+
+
+    return normalized;
+
+  });
+
+}
+
 
 /* ============================================================
    14. FINANCIAL EXTRACTION
