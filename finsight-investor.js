@@ -472,7 +472,7 @@ function normalizeFinancialRow(row) {
 
     year:
       finite(
-        row.year ||
+        row.year ??
         row.end_year
       ),
 
@@ -513,7 +513,7 @@ function normalizeFinancialRow(row) {
 
     cash:
       finite(
-        row.cash ||
+        row.cash ??
         row.cash_and_equivalents
       ),
 
