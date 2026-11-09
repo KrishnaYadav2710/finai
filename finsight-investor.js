@@ -75,8 +75,38 @@ const compactFormatter =
 
 function finite(value) {
 
+  /*
+   * Missing financial data must remain missing.
+   *
+   * JavaScript normally converts:
+   *
+   * Number(null) = 0
+   * Number("")   = 0
+   *
+   * That is dangerous for financial analysis because
+   * unavailable annual-report values would become
+   * artificial zeros.
+   */
+
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return null;
+  }
+
+
+  if (
+    typeof value === "string" &&
+    value.trim() === ""
+  ) {
+    return null;
+  }
+
+
   const number =
     Number(value);
+
 
   return Number.isFinite(number)
     ? number
