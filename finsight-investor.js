@@ -478,7 +478,23 @@ function normalizeFinancialRow(row) {
 
     statement_basis:
       row.statement_basis ||
-      "Consolidated",
+      "Unknown",
+
+    /*
+     * Server-normalized financial values are expected
+     * to be INR crore.
+     *
+     * Preserve the original unit metadata so the
+     * extraction remains auditable.
+     */
+
+    source_unit:
+      row.source_unit ||
+      null,
+
+    original_source_unit:
+      row.original_source_unit ||
+      null,
 
     revenue:
       finite(row.revenue),
@@ -490,9 +506,7 @@ function normalizeFinancialRow(row) {
       finite(row.cogs),
 
     operating_income:
-      finite(
-        row.operating_income
-      ),
+      finite(row.operating_income),
 
     net_income:
       finite(row.net_income),
@@ -504,9 +518,7 @@ function normalizeFinancialRow(row) {
       finite(row.current_assets),
 
     current_liabilities:
-      finite(
-        row.current_liabilities
-      ),
+      finite(row.current_liabilities),
 
     total_debt:
       finite(row.total_debt),
@@ -521,9 +533,7 @@ function normalizeFinancialRow(row) {
       finite(row.total_equity),
 
     operating_cash_flow:
-      finite(
-        row.operating_cash_flow
-      ),
+      finite(row.operating_cash_flow),
 
     capex:
       finite(row.capex),
@@ -532,27 +542,37 @@ function normalizeFinancialRow(row) {
       finite(row.inventory),
 
     accounts_receivable:
-      finite(
-        row.accounts_receivable
-      ),
+      finite(row.accounts_receivable),
 
     accounts_payable:
-      finite(
-        row.accounts_payable
-      ),
+      finite(row.accounts_payable),
 
     finance_cost:
       finite(row.finance_cost),
 
+    /*
+     * The SERVER must already have converted this
+     * to crore shares.
+     */
+
     shares_outstanding:
+      finite(row.shares_outstanding),
+
+    shares_outstanding_unit:
+      row.shares_outstanding_unit ||
+      null,
+
+    original_shares_outstanding:
       finite(
-        row.shares_outstanding
+        row.original_shares_outstanding
       ),
 
+    original_shares_outstanding_unit:
+      row.original_shares_outstanding_unit ||
+      null,
+
     source_pages:
-      Array.isArray(
-        row.source_pages
-      )
+      Array.isArray(row.source_pages)
         ? row.source_pages
         : [],
 
@@ -2525,16 +2545,13 @@ function renderFinancialHistory() {
 /* ============================================================
    13. MULTI-YEAR CHART
    ============================================================ */
-
 function renderChart() {
 
   const rows =
     getCalculatedRows();
 
-
   const chart =
     $("#chart");
-
 
   if (
     !chart ||
@@ -2547,45 +2564,33 @@ function renderChart() {
   const series = [
 
     {
-      key:
-        "revenue",
-      label:
-        "Revenue",
-      stroke:
-        "#2f7d68"
+      key: "revenue",
+      label: "Revenue",
+      stroke: "#2f7d68"
     },
 
     {
-      key:
-        "ebitda",
-      label:
-        "EBITDA",
-      stroke:
-        "#879c57"
+      key: "ebitda",
+      label: "EBITDA",
+      stroke: "#879c57"
     },
 
     {
-      key:
-        "net_income",
-      label:
-        "Net profit",
-      stroke:
-        "#17332d"
+      key: "net_income",
+      label: "Net profit",
+      stroke: "#17332d"
     }
 
   ];
 
 
   const availableValues =
-
     rows.flatMap(
       row =>
         series
           .map(
             item =>
-              finite(
-                row[item.key]
-              )
+              finite(row[item.key])
           )
           .filter(
             value =>
@@ -2594,9 +2599,7 @@ function renderChart() {
     );
 
 
-  if (
-    !availableValues.length
-  ) {
+  if (!availableValues.length) {
 
     chart.innerHTML =
       "<p>No comparable financial series was extracted.</p>";
@@ -2605,29 +2608,75 @@ function renderChart() {
   }
 
 
-  const width =
-    900;
+  const width = 900;
+  const height = 330;
 
-  const height =
-    330;
-
-  const left =
-    72;
-
-  const right =
-    28;
-
-  const top =
-    30;
-
-  const bottom =
-    58;
+  const left = 72;
+  const right = 28;
+  const top = 30;
+  const bottom = 58;
 
 
-  const max =
-    Math.max(
+  /*
+   * IMPORTANT:
+   * Include zero in the scale so positive and
+   * negative financial values render correctly.
+   */
+
+  const rawMin =
+    Math.min(
+      0,
       ...availableValues
-    ) * 1.12;
+    );
+
+  const rawMax =
+    Math.max(
+      0,
+      ...availableValues
+    );
+
+
+  let range =
+    rawMax - rawMin;
+
+
+  /*
+   * Prevent division by zero if every value
+   * happens to be identical.
+   */
+
+  if (
+    !Number.isFinite(range) ||
+    range === 0
+  ) {
+
+    range =
+      Math.max(
+        Math.abs(rawMax),
+        1
+      );
+
+  }
+
+
+  const padding =
+    range * 0.10;
+
+
+  const minValue =
+    rawMin < 0
+      ? rawMin - padding
+      : 0;
+
+
+  const maxValue =
+    rawMax > 0
+      ? rawMax + padding
+      : 0;
+
+
+  const chartRange =
+    maxValue - minValue || 1;
 
 
   const x =
@@ -2636,8 +2685,11 @@ function renderChart() {
       if (
         rows.length === 1
       ) {
+
         return width / 2;
+
       }
+
 
       return (
 
@@ -2674,8 +2726,14 @@ function renderChart() {
       +
 
       (
-        1 -
-        value / max
+        (
+          maxValue -
+          value
+        )
+
+        /
+
+        chartRange
       )
 
       *
@@ -2685,6 +2743,254 @@ function renderChart() {
         top -
         bottom
       );
+
+
+  function pathFor(key) {
+
+    let path = "";
+    let started = false;
+
+
+    rows.forEach(
+      (row, index) => {
+
+        const value =
+          finite(
+            row[key]
+          );
+
+
+        if (
+          value == null
+        ) {
+
+          started = false;
+          return;
+
+        }
+
+
+        path +=
+
+          `${started ? " L" : " M"}`
+
+          +
+
+          `${x(index)} ${y(value)}`;
+
+
+        started = true;
+
+      }
+    );
+
+
+    return path;
+
+  }
+
+
+  /*
+   * Generate evenly spaced Y-axis values.
+   */
+
+  const horizontalGrid =
+    [0, 0.25, 0.5, 0.75, 1]
+
+      .map(
+        ratio => {
+
+          const value =
+            minValue +
+            chartRange * ratio;
+
+
+          const py =
+            y(value);
+
+
+          return `
+
+            <line
+              x1="${left}"
+              x2="${width - right}"
+              y1="${py}"
+              y2="${py}"
+              stroke="rgba(22,49,43,.10)"
+              stroke-width="1"
+            />
+
+            <text
+              x="${left - 12}"
+              y="${py + 4}"
+              text-anchor="end"
+              fill="#76847f"
+              font-size="10"
+            >
+              ${compactFormatter.format(value)}
+            </text>
+
+          `;
+
+        }
+      )
+
+      .join("");
+
+
+  /*
+   * Draw a stronger zero line when the chart
+   * contains negative values.
+   */
+
+  const zeroLine =
+
+    minValue < 0 &&
+    maxValue > 0
+
+      ? `
+
+        <line
+          x1="${left}"
+          x2="${width - right}"
+          y1="${y(0)}"
+          y2="${y(0)}"
+          stroke="rgba(22,49,43,.32)"
+          stroke-width="1.5"
+        />
+
+      `
+
+      : "";
+
+
+  const yearLabels =
+    rows
+
+      .map(
+        (row, index) => `
+
+          <text
+            x="${x(index)}"
+            y="${height - 18}"
+            text-anchor="middle"
+            fill="#52645f"
+            font-size="11"
+          >
+            ${yearLabel(row)}
+          </text>
+
+        `
+      )
+
+      .join("");
+
+
+  const paths =
+    series
+
+      .map(
+        item => {
+
+          const path =
+            pathFor(item.key);
+
+
+          return `
+
+            ${
+              path
+                ? `
+
+                  <path
+                    d="${path}"
+                    fill="none"
+                    stroke="${item.stroke}"
+                    stroke-width="3"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  />
+
+                `
+                : ""
+            }
+
+            ${
+
+              rows
+
+                .map(
+                  (row, index) => {
+
+                    const value =
+                      finite(
+                        row[item.key]
+                      );
+
+
+                    if (
+                      value == null
+                    ) {
+
+                      return "";
+
+                    }
+
+
+                    return `
+
+                      <circle
+                        cx="${x(index)}"
+                        cy="${y(value)}"
+                        r="4"
+                        fill="${item.stroke}"
+                      >
+
+                        <title>
+                          ${item.label} · ${yearLabel(row)} · ${money(value)}
+                        </title>
+
+                      </circle>
+
+                    `;
+
+                  }
+                )
+
+                .join("")
+
+            }
+
+          `;
+
+        }
+      )
+
+      .join("");
+
+
+  chart.innerHTML = `
+
+    <svg
+      viewBox="0 0 ${width} ${height}"
+      role="img"
+      aria-label="Multi-year revenue, EBITDA and net profit trend"
+    >
+
+      ${horizontalGrid}
+
+      ${zeroLine}
+
+      ${paths}
+
+      ${yearLabels}
+
+    </svg>
+
+  `;
+
+}
+
 
 
   function pathFor(key) {
