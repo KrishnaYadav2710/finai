@@ -4095,6 +4095,13 @@ async function fetchAutomaticMarketData() {
       );
 
     }
+     if (ticker) {
+        params.set(
+           "ticker",
+           ticker
+       );
+
+    }
 
 
     if (bseCode) {
