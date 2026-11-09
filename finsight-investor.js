@@ -2545,13 +2545,16 @@ function renderFinancialHistory() {
 /* ============================================================
    13. MULTI-YEAR CHART
    ============================================================ */
+
 function renderChart() {
 
   const rows =
     getCalculatedRows();
 
+
   const chart =
     $("#chart");
+
 
   if (
     !chart ||
@@ -2564,34 +2567,62 @@ function renderChart() {
   const series = [
 
     {
-      key: "revenue",
-      label: "Revenue",
-      stroke: "#2f7d68"
+      key:
+        "revenue",
+
+      label:
+        "Revenue",
+
+      stroke:
+        "#2f7d68"
     },
 
     {
-      key: "ebitda",
-      label: "EBITDA",
-      stroke: "#879c57"
+      key:
+        "ebitda",
+
+      label:
+        "EBITDA",
+
+      stroke:
+        "#879c57"
     },
 
     {
-      key: "net_income",
-      label: "Net profit",
-      stroke: "#17332d"
+      key:
+        "net_income",
+
+      label:
+        "Net profit",
+
+      stroke:
+        "#17332d"
     }
 
   ];
 
 
+  /*
+   * Collect every usable chart value.
+   *
+   * Missing values remain missing.
+   * Negative profit / EBITDA values are allowed.
+   */
+
   const availableValues =
+
     rows.flatMap(
       row =>
+
         series
+
           .map(
             item =>
-              finite(row[item.key])
+              finite(
+                row[item.key]
+              )
           )
+
           .filter(
             value =>
               value != null
@@ -2599,28 +2630,47 @@ function renderChart() {
     );
 
 
-  if (!availableValues.length) {
+  if (
+    !availableValues.length
+  ) {
 
     chart.innerHTML =
       "<p>No comparable financial series was extracted.</p>";
 
     return;
+
   }
 
 
-  const width = 900;
-  const height = 330;
+  const width =
+    900;
 
-  const left = 72;
-  const right = 28;
-  const top = 30;
-  const bottom = 58;
+
+  const height =
+    330;
+
+
+  const left =
+    72;
+
+
+  const right =
+    28;
+
+
+  const top =
+    30;
+
+
+  const bottom =
+    58;
 
 
   /*
-   * IMPORTANT:
-   * Include zero in the scale so positive and
-   * negative financial values render correctly.
+   * Include zero in the Y-axis range.
+   *
+   * This prevents negative EBITDA / profit from
+   * being plotted incorrectly.
    */
 
   const rawMin =
@@ -2628,6 +2678,7 @@ function renderChart() {
       0,
       ...availableValues
     );
+
 
   const rawMax =
     Math.max(
@@ -2637,22 +2688,29 @@ function renderChart() {
 
 
   let range =
-    rawMax - rawMin;
+    rawMax -
+    rawMin;
 
 
   /*
-   * Prevent division by zero if every value
-   * happens to be identical.
+   * Protect against an all-zero or identical dataset.
    */
 
   if (
-    !Number.isFinite(range) ||
+    !Number.isFinite(
+      range
+    ) ||
     range === 0
   ) {
 
     range =
       Math.max(
-        Math.abs(rawMax),
+        Math.abs(
+          rawMax
+        ),
+        Math.abs(
+          rawMin
+        ),
         1
       );
 
@@ -2660,24 +2718,39 @@ function renderChart() {
 
 
   const padding =
-    range * 0.10;
+    range *
+    0.10;
 
 
   const minValue =
+
     rawMin < 0
-      ? rawMin - padding
+
+      ? rawMin -
+        padding
+
       : 0;
 
 
   const maxValue =
+
     rawMax > 0
-      ? rawMax + padding
+
+      ? rawMax +
+        padding
+
       : 0;
 
 
   const chartRange =
-    maxValue - minValue || 1;
+    maxValue -
+    minValue ||
+    1;
 
+
+  /*
+   * X position.
+   */
 
   const x =
     index => {
@@ -2686,7 +2759,14 @@ function renderChart() {
         rows.length === 1
       ) {
 
-        return width / 2;
+        return (
+          left +
+          (
+            width -
+            left -
+            right
+          ) / 2
+        );
 
       }
 
@@ -2709,7 +2789,8 @@ function renderChart() {
           /
 
           (
-            rows.length - 1
+            rows.length -
+            1
           )
         )
 
@@ -2717,6 +2798,10 @@ function renderChart() {
 
     };
 
+
+  /*
+   * Y position.
+   */
 
   const y =
     value =>
@@ -2745,14 +2830,30 @@ function renderChart() {
       );
 
 
-  function pathFor(key) {
+  /*
+   * Build one SVG path.
+   *
+   * A missing year breaks the line instead of
+   * pretending data exists.
+   */
 
-    let path = "";
-    let started = false;
+  function pathFor(
+    key
+  ) {
+
+    let path =
+      "";
+
+
+    let started =
+      false;
 
 
     rows.forEach(
-      (row, index) => {
+      (
+        row,
+        index
+      ) => {
 
         const value =
           finite(
@@ -2764,7 +2865,9 @@ function renderChart() {
           value == null
         ) {
 
-          started = false;
+          started =
+            false;
+
           return;
 
         }
@@ -2779,7 +2882,8 @@ function renderChart() {
           `${x(index)} ${y(value)}`;
 
 
-        started = true;
+        started =
+          true;
 
       }
     );
@@ -2791,22 +2895,32 @@ function renderChart() {
 
 
   /*
-   * Generate evenly spaced Y-axis values.
+   * Horizontal grid.
    */
 
   const horizontalGrid =
-    [0, 0.25, 0.5, 0.75, 1]
+
+    [
+      0,
+      0.25,
+      0.5,
+      0.75,
+      1
+    ]
 
       .map(
         ratio => {
 
           const value =
             minValue +
-            chartRange * ratio;
+            chartRange *
+            ratio;
 
 
           const py =
-            y(value);
+            y(
+              value
+            );
 
 
           return `
@@ -2827,7 +2941,9 @@ function renderChart() {
               fill="#76847f"
               font-size="10"
             >
-              ${compactFormatter.format(value)}
+              ${compactFormatter.format(
+                value
+              )}
             </text>
 
           `;
@@ -2839,8 +2955,8 @@ function renderChart() {
 
 
   /*
-   * Draw a stronger zero line when the chart
-   * contains negative values.
+   * Stronger zero line when both positive
+   * and negative values are present.
    */
 
   const zeroLine =
@@ -2864,11 +2980,19 @@ function renderChart() {
       : "";
 
 
+  /*
+   * Financial-year labels.
+   */
+
   const yearLabels =
+
     rows
 
       .map(
-        (row, index) => `
+        (
+          row,
+          index
+        ) => `
 
           <text
             x="${x(index)}"
@@ -2886,20 +3010,29 @@ function renderChart() {
       .join("");
 
 
+  /*
+   * Series paths and data points.
+   */
+
   const paths =
+
     series
 
       .map(
         item => {
 
           const path =
-            pathFor(item.key);
+            pathFor(
+              item.key
+            );
 
 
           return `
 
             ${
+
               path
+
                 ? `
 
                   <path
@@ -2912,19 +3045,27 @@ function renderChart() {
                   />
 
                 `
+
                 : ""
+
             }
+
 
             ${
 
               rows
 
                 .map(
-                  (row, index) => {
+                  (
+                    row,
+                    index
+                  ) => {
 
                     const value =
                       finite(
-                        row[item.key]
+                        row[
+                          item.key
+                        ]
                       );
 
 
@@ -2980,211 +3121,6 @@ function renderChart() {
       ${horizontalGrid}
 
       ${zeroLine}
-
-      ${paths}
-
-      ${yearLabels}
-
-    </svg>
-
-  `;
-
-}
-
-
-
-  function pathFor(key) {
-
-    let path =
-      "";
-
-    let started =
-      false;
-
-
-    rows.forEach(
-      (row, index) => {
-
-        const value =
-          finite(
-            row[key]
-          );
-
-
-        if (
-          value == null
-        ) {
-          started = false;
-          return;
-        }
-
-
-        path +=
-
-          `${started ? " L" : " M"}`
-
-          +
-
-          `${x(index)} ${y(value)}`;
-
-
-        started =
-          true;
-
-      }
-    );
-
-
-    return path;
-
-  }
-
-
-  const horizontalGrid =
-
-    [0, 0.25, 0.5, 0.75, 1]
-
-      .map(
-        ratio => {
-
-          const value =
-            max * ratio;
-
-          const py =
-            y(value);
-
-
-          return `
-
-            <line
-              x1="${left}"
-              x2="${width - right}"
-              y1="${py}"
-              y2="${py}"
-              stroke="rgba(22,49,43,.10)"
-              stroke-width="1"
-            />
-
-            <text
-              x="${left - 12}"
-              y="${py + 4}"
-              text-anchor="end"
-              fill="#76847f"
-              font-size="10"
-            >
-              ${compactFormatter.format(
-                value
-              )}
-            </text>
-
-          `;
-
-        }
-      )
-
-      .join("");
-
-
-  const yearLabels =
-
-    rows
-
-      .map(
-        (row, index) => `
-
-          <text
-            x="${x(index)}"
-            y="${height - 18}"
-            text-anchor="middle"
-            fill="#52645f"
-            font-size="11"
-          >
-            ${yearLabel(row)}
-          </text>
-
-        `
-      )
-
-      .join("");
-
-
-  const paths =
-
-    series
-
-      .map(
-        item => `
-
-          <path
-            d="${pathFor(
-              item.key
-            )}"
-            fill="none"
-            stroke="${item.stroke}"
-            stroke-width="3"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-
-          ${
-
-            rows
-
-              .map(
-                (row, index) => {
-
-                  const value =
-                    finite(
-                      row[item.key]
-                    );
-
-
-                  if (
-                    value == null
-                  ) {
-                    return "";
-                  }
-
-
-                  return `
-
-                    <circle
-                      cx="${x(index)}"
-                      cy="${y(value)}"
-                      r="4"
-                      fill="${item.stroke}"
-                    >
-
-                      <title>
-                        ${item.label} · ${yearLabel(row)} · ${money(value)}
-                      </title>
-
-                    </circle>
-
-                  `;
-
-                }
-              )
-
-              .join("")
-
-          }
-
-        `
-      )
-
-      .join("");
-
-
-  chart.innerHTML = `
-
-    <svg
-      viewBox="0 0 ${width} ${height}"
-      role="img"
-      aria-label="Multi-year revenue, EBITDA and net profit trend"
-    >
-
-      ${horizontalGrid}
 
       ${paths}
 
@@ -7114,11 +7050,17 @@ $("#companyFile")
 async function runDCFRequest() {
 
   const row =
-    getCalculatedRows().at(-1);
+    getCalculatedRows()
+      .at(-1);
 
 
   const resultBox =
     $("#dcfResult");
+
+
+  if (!resultBox) {
+    return;
+  }
 
 
   if (!row) {
@@ -7132,7 +7074,8 @@ async function runDCFRequest() {
 
 
   /*
-   * Shares must come from the annual report.
+   * Shares must already be normalized by
+   * the server to CRORE SHARES.
    */
 
   const shares =
@@ -7147,7 +7090,7 @@ async function runDCFRequest() {
   ) {
 
     resultBox.textContent =
-      "DCF cannot be calculated because reliable shares outstanding were not extracted from the annual report.";
+      "DCF cannot be calculated because reliable period-end shares outstanding were not extracted from the annual report.";
 
     return;
 
@@ -7155,12 +7098,18 @@ async function runDCFRequest() {
 
 
   /*
-   * Revenue is essential to this DCF model.
+   * Revenue is required by the DCF model.
    */
 
+  const revenue =
+    finite(
+      row.revenue
+    );
+
+
   if (
-    row.revenue == null ||
-    row.revenue <= 0
+    revenue == null ||
+    revenue <= 0
   ) {
 
     resultBox.textContent =
@@ -7172,17 +7121,14 @@ async function runDCFRequest() {
 
 
   /*
-   * IMPORTANT:
-   *
-   * If the Net Debt input is blank, use the
-   * annual-report calculated net debt.
-   *
-   * Do NOT automatically substitute zero.
+   * Manual net debt overrides report net debt
+   * only when the user entered a value.
    */
 
   const manualNetDebt =
     finite(
-      $("#dcfNetDebt")?.value
+      $("#dcfNetDebt")
+        ?.value
     );
 
 
@@ -7201,7 +7147,9 @@ async function runDCFRequest() {
       : reportNetDebt;
 
 
-  if (netDebt == null) {
+  if (
+    netDebt == null
+  ) {
 
     resultBox.textContent =
       "DCF cannot be calculated because net debt is unavailable. Enter net debt manually or ensure debt and cash were extracted from the annual report.";
@@ -7211,27 +7159,35 @@ async function runDCFRequest() {
   }
 
 
+  /*
+   * User assumptions are entered as percentages.
+   */
+
   const growth =
     finite(
-      $("#dcfGrowth")?.value
+      $("#dcfGrowth")
+        ?.value
     );
 
 
   const margin =
     finite(
-      $("#dcfMargin")?.value
+      $("#dcfMargin")
+        ?.value
     );
 
 
   const wacc =
     finite(
-      $("#dcfWacc")?.value
+      $("#dcfWacc")
+        ?.value
     );
 
 
   const terminalGrowth =
     finite(
-      $("#dcfTerminal")?.value
+      $("#dcfTerminal")
+        ?.value
     );
 
 
@@ -7250,8 +7206,27 @@ async function runDCFRequest() {
   }
 
 
+  /*
+   * Basic frontend validation.
+   *
+   * The server performs authoritative validation too.
+   */
+
   if (
-    terminalGrowth >= wacc
+    wacc <= 0
+  ) {
+
+    resultBox.textContent =
+      "WACC must be greater than zero.";
+
+    return;
+
+  }
+
+
+  if (
+    terminalGrowth >=
+    wacc
   ) {
 
     resultBox.textContent =
@@ -7264,17 +7239,22 @@ async function runDCFRequest() {
 
   const payload = {
 
-    revenue:
-      row.revenue,
+    revenue,
 
     ebit:
-      row.operating_income,
+      finite(
+        row.operating_income
+      ),
 
     operatingCashFlow:
-      row.operating_cash_flow,
+      finite(
+        row.operating_cash_flow
+      ),
 
     capex:
-      row.capex,
+      finite(
+        row.capex
+      ),
 
     netDebt,
 
@@ -7282,16 +7262,20 @@ async function runDCFRequest() {
       shares,
 
     revenueGrowth:
-      growth / 100,
+      growth /
+      100,
 
     ebitMargin:
-      margin / 100,
+      margin /
+      100,
 
     wacc:
-      wacc / 100,
+      wacc /
+      100,
 
     terminalGrowth:
-      terminalGrowth / 100
+      terminalGrowth /
+      100
 
   };
 
@@ -7306,18 +7290,22 @@ async function runDCFRequest() {
       await fetch(
         "/api/valuation/dcf",
         {
+
           method:
             "POST",
 
           headers: {
+
             "Content-Type":
               "application/json"
+
           },
 
           body:
             JSON.stringify(
               payload
             )
+
         }
       );
 
@@ -7333,7 +7321,9 @@ async function runDCFRequest() {
 
       result =
         text
-          ? JSON.parse(text)
+          ? JSON.parse(
+              text
+            )
           : {};
 
     }
@@ -7347,17 +7337,24 @@ async function runDCFRequest() {
     }
 
 
-    if (!response.ok) {
+    if (
+      !response.ok
+    ) {
 
       const errorMessage =
 
-        typeof result?.error === "string"
+        typeof result?.error ===
+        "string"
 
           ? result.error
 
-          : result?.error?.message
+          : result
+              ?.error
+              ?.message
 
-          || "DCF calculation failed.";
+          ||
+
+          "DCF calculation failed.";
 
 
       throw new Error(
@@ -7375,60 +7372,25 @@ async function runDCFRequest() {
      * result.scenarios.bull
      */
 
-    const rawBearValue =
-  finite(
-    bear?.valuePerShare
-  );
+    const bear =
+      result
+        ?.scenarios
+        ?.bear ||
+      null;
 
 
-const rawBaseValue =
-  finite(
-    base?.valuePerShare
-  );
+    const base =
+      result
+        ?.scenarios
+        ?.base ||
+      null;
 
 
-const rawBullValue =
-  finite(
-    bull?.valuePerShare
-  );
-
-
-/*
- * A DCF can mathematically produce negative
- * equity value when enterprise value is below
- * net debt.
- *
- * Do not present that as a negative share price.
- */
-
-const bearValue =
-  rawBearValue != null
-    ? Math.max(0, rawBearValue)
-    : null;
-
-
-const baseValue =
-  rawBaseValue != null
-    ? Math.max(0, rawBaseValue)
-    : null;
-
-
-const bullValue =
-  rawBullValue != null
-    ? Math.max(0, rawBullValue)
-    : null;
-
-
-const equityExhausted =
-  [
-    rawBearValue,
-    rawBaseValue,
-    rawBullValue
-  ].some(
-    value =>
-      value != null &&
-      value <= 0
-  );
+    const bull =
+      result
+        ?.scenarios
+        ?.bull ||
+      null;
 
 
     if (!base) {
@@ -7440,39 +7402,120 @@ const equityExhausted =
     }
 
 
-    const bearValue =
+    /*
+     * Preserve raw model values.
+     */
+
+    const rawBearValue =
       finite(
         bear?.valuePerShare
       );
 
 
-    const baseValue =
+    const rawBaseValue =
       finite(
         base?.valuePerShare
       );
 
 
-    const bullValue =
+    const rawBullValue =
       finite(
         bull?.valuePerShare
       );
 
 
+    /*
+     * If enterprise value is below net debt,
+     * mathematical equity value may become negative.
+     *
+     * Do not display a negative share price.
+     * Display ₹0 while clearly warning the investor.
+     */
+
+    const bearValue =
+
+      rawBearValue != null
+
+        ? Math.max(
+            0,
+            rawBearValue
+          )
+
+        : null;
+
+
+    const baseValue =
+
+      rawBaseValue != null
+
+        ? Math.max(
+            0,
+            rawBaseValue
+          )
+
+        : null;
+
+
+    const bullValue =
+
+      rawBullValue != null
+
+        ? Math.max(
+            0,
+            rawBullValue
+          )
+
+        : null;
+
+
+    const equityExhausted =
+
+      [
+        rawBearValue,
+        rawBaseValue,
+        rawBullValue
+      ]
+
+        .some(
+          value =>
+
+            value != null &&
+            value <= 0
+        );
+
+
     const enterpriseValue =
       finite(
-        base?.enterpriseValue
+        base.enterpriseValue
       );
 
+
+    const rawEquityValue =
+      finite(
+        base.equityValue
+      );
+
+
+    /*
+     * Same display rule for total equity value.
+     */
 
     const equityValue =
-      finite(
-        base?.equityValue
-      );
+
+      rawEquityValue != null
+
+        ? Math.max(
+            0,
+            rawEquityValue
+          )
+
+        : null;
 
 
     resultBox.innerHTML = `
 
       <div class="dcf-output">
+
 
         <div class="dcf-output-header">
 
@@ -7497,13 +7540,19 @@ const equityExhausted =
             </span>
 
             <strong>
+
               ${
+
                 bearValue == null
+
                   ? "N/A"
+
                   : priceMoney(
                       bearValue
                     )
+
               }
+
             </strong>
 
           </div>
@@ -7516,13 +7565,19 @@ const equityExhausted =
             </span>
 
             <strong>
+
               ${
+
                 baseValue == null
+
                   ? "N/A"
+
                   : priceMoney(
                       baseValue
                     )
+
               }
+
             </strong>
 
           </div>
@@ -7535,13 +7590,19 @@ const equityExhausted =
             </span>
 
             <strong>
+
               ${
+
                 bullValue == null
+
                   ? "N/A"
+
                   : priceMoney(
                       bullValue
                     )
+
               }
+
             </strong>
 
           </div>
@@ -7554,13 +7615,19 @@ const equityExhausted =
             </span>
 
             <strong>
+
               ${
+
                 equityValue == null
+
                   ? "N/A"
+
                   : money(
                       equityValue
                     )
+
               }
+
             </strong>
 
           </div>
@@ -7573,13 +7640,19 @@ const equityExhausted =
             </span>
 
             <strong>
+
               ${
+
                 enterpriseValue == null
+
                   ? "N/A"
+
                   : money(
                       enterpriseValue
                     )
+
               }
+
             </strong>
 
           </div>
@@ -7589,33 +7662,38 @@ const equityExhausted =
 
 
         ${
-  equityExhausted
 
-    ? `
+          equityExhausted
 
-      <div class="dcf-interpretation">
+            ? `
 
-        One or more DCF scenarios produced enterprise
-        value at or below net debt. FinSight displays
-        the corresponding equity value per share as
-        ₹0 rather than presenting a negative share price.
+              <div class="dcf-interpretation">
 
-      </div>
+                One or more DCF scenarios produced
+                enterprise value at or below net debt.
+                FinSight therefore displays the
+                corresponding value per share as ₹0
+                rather than presenting a negative
+                share price.
 
-    `
+              </div>
 
-    : ""
-}
+            `
+
+            : ""
+
+        }
 
 
-<small class="dcf-output-note">
+        <small class="dcf-output-note">
 
-  Financial statement inputs and shares outstanding
-  come from the annual report. Growth, margin, WACC
-  and terminal-growth assumptions come from the
-  fields above.
+          Financial statement inputs and shares
+          outstanding come from the annual report.
+          Growth, margin, WACC and terminal-growth
+          assumptions come from the fields above.
 
-</small>
+        </small>
+
 
       </div>
 
