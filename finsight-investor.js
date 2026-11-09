@@ -6641,9 +6641,7 @@ async function handleReportUpload(file) {
       `${extractedCompany.name}: extracted ${primary.length} reporting year${primary.length === 1 ? "" : "s"}. Checking listing status and market data…`;
 
 
-  marketData = null;
-
-valuationState = null;
+  
 
 
 const fetchMarketButton =
