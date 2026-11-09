@@ -1557,187 +1557,515 @@ function pdfPart(file) {
   };
 
 }
-
 /* ============================================================
    FINANCIAL UNIT NORMALIZATION
-   All frontend financial values must be INR crore.
+
+   IMPORTANT:
+   Gemini returns RAW statement values.
+   The SERVER performs the conversion exactly once.
+
+   All monetary values sent to the frontend:
+   INR crore
+
+   Shares outstanding:
+   crore shares
    ============================================================ */
 
-function normalizeFinancialUnitsToCrore(financials) {
 
-  if (!Array.isArray(financials)) {
+function finiteFinancialNumber(value) {
+
+  /*
+   * Never allow missing values to become zero.
+   *
+   * Number(null) === 0
+   * Number("")   === 0
+   *
+   * Both are dangerous for financial analysis.
+   */
+
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return null;
+  }
+
+
+  if (
+    typeof value === "string" &&
+    value.trim() === ""
+  ) {
+    return null;
+  }
+
+
+  const parsed =
+    Number(value);
+
+
+  return Number.isFinite(parsed)
+    ? parsed
+    : null;
+
+}
+
+
+/*
+ * Return the multiplier required to convert
+ * the source monetary unit into INR crore.
+ *
+ * million -> crore = × 0.1
+ * lakh    -> crore = × 0.01
+ * billion -> crore = × 100
+ * crore   -> crore = × 1
+ */
+
+function monetaryCroreFactor(sourceUnit) {
+
+  const unit =
+    String(
+      sourceUnit || ""
+    )
+      .toLowerCase()
+      .replace(/[,()]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+
+  if (!unit) {
+    return null;
+  }
+
+
+  if (
+    /\b(crore|crores|cr)\b/.test(unit)
+  ) {
+    return 1;
+  }
+
+
+  if (
+    /\b(million|millions|mn|mio)\b/.test(unit)
+  ) {
+    return 0.1;
+  }
+
+
+  if (
+    /\b(lakh|lakhs|lac|lacs)\b/.test(unit)
+  ) {
+    return 0.01;
+  }
+
+
+  if (
+    /\b(billion|billions|bn)\b/.test(unit)
+  ) {
+    return 100;
+  }
+
+
+  return null;
+
+}
+
+
+/*
+ * Shares need their own unit conversion.
+ *
+ * The monetary statement may say "INR million",
+ * while the share note may say:
+ *
+ * - 125,000,000 shares
+ * - 1,250 lakh shares
+ * - 12.5 crore shares
+ *
+ * Therefore shares MUST NOT use source_unit.
+ */
+
+function sharesToCrore(
+  value,
+  sharesUnit
+) {
+
+  const shares =
+    finiteFinancialNumber(
+      value
+    );
+
+
+  if (shares == null) {
+    return null;
+  }
+
+
+  const unit =
+    String(
+      sharesUnit || ""
+    )
+      .toLowerCase()
+      .replace(/[,()]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+
+  if (!unit) {
+
+    /*
+     * Do not guess.
+     *
+     * Gemini is instructed to provide
+     * shares_outstanding_unit.
+     */
+
+    return null;
+
+  }
+
+
+  if (
+    /\b(crore|crores|cr)\b/.test(unit)
+  ) {
+
+    return shares;
+
+  }
+
+
+  if (
+    /\b(lakh|lakhs|lac|lacs)\b/.test(unit)
+  ) {
+
+    return shares / 100;
+
+  }
+
+
+  if (
+    /\b(million|millions|mn)\b/.test(unit)
+  ) {
+
+    /*
+     * 10 million shares = 1 crore shares.
+     */
+
+    return shares / 10;
+
+  }
+
+
+  if (
+    /\b(billion|billions|bn)\b/.test(unit)
+  ) {
+
+    /*
+     * 1 billion shares = 100 crore shares.
+     */
+
+    return shares * 100;
+
+  }
+
+
+  if (
+    /\b(number|shares|share|units|absolute)\b/.test(unit)
+  ) {
+
+    /*
+     * 1 crore = 10,000,000 shares.
+     */
+
+    return shares / 10000000;
+
+  }
+
+
+  return null;
+
+}
+
+
+function normalizeFinancialUnitsToCrore(
+  financials
+) {
+
+  if (
+    !Array.isArray(
+      financials
+    )
+  ) {
     return [];
   }
 
+
   const monetaryFields = [
+
     "revenue",
     "ebitda",
     "cogs",
     "operating_income",
     "net_income",
+
     "total_assets",
     "current_assets",
     "current_liabilities",
+
     "total_debt",
     "cash",
     "total_equity",
+
     "operating_cash_flow",
     "capex",
+
     "inventory",
     "accounts_receivable",
     "accounts_payable",
+
     "finance_cost"
+
   ];
 
 
-  return financials.map(row => {
+  return financials.map(
+    rawRow => {
 
-    const normalized = {
-      ...row
-    };
+      const row =
+        rawRow &&
+        typeof rawRow === "object"
 
+          ? rawRow
 
-    const unit =
-      String(
-        row.source_unit || ""
-      )
-        .toLowerCase()
-        .replace(/\s+/g, " ")
-        .trim();
+          : {};
 
 
-    let divisor = 1;
+      const normalized = {
+        ...row
+      };
 
 
-    /*
-     * INR million -> INR crore
-     *
-     * 10 million = 1 crore
-     */
-
-    if (
-      unit.includes("million") ||
-      unit.includes("mn")
-    ) {
-
-      divisor = 10;
-
-    }
+      const sourceUnit =
+        row.source_unit ||
+        null;
 
 
-    /*
-     * INR lakh -> INR crore
-     *
-     * 100 lakh = 1 crore
-     */
-
-    else if (
-      unit.includes("lakh") ||
-      unit.includes("lac")
-    ) {
-
-      divisor = 100;
-
-    }
+      const factor =
+        monetaryCroreFactor(
+          sourceUnit
+        );
 
 
-    /*
-     * INR billion -> INR crore
-     *
-     * 1 billion = 100 crore
-     *
-     * Therefore multiply by 100.
-     */
+      /*
+       * ------------------------------------------------------
+       * MONETARY VALUES
+       * ------------------------------------------------------
+       */
 
-    else if (
-      unit.includes("billion") ||
-      /\bbn\b/.test(unit)
-    ) {
+      if (
+        factor != null
+      ) {
 
-      divisor = 0.01;
+        for (
+          const field
+          of monetaryFields
+        ) {
 
-    }
-
-
-    /*
-     * Crore already requires no conversion.
-     */
-
-    else if (
-      unit.includes("crore") ||
-      unit.includes("cr")
-    ) {
-
-      divisor = 1;
-
-    }
+          const rawValue =
+            finiteFinancialNumber(
+              row[field]
+            );
 
 
-    /*
-     * Unknown unit:
-     * DO NOT guess.
-     */
+          normalized[field] =
 
-    else {
+            rawValue == null
+
+              ? null
+
+              : rawValue *
+                factor;
+
+        }
+
+
+        normalized.original_source_unit =
+          sourceUnit;
+
+
+        normalized.source_unit =
+          "INR crore";
+
+      }
+
+      else {
+
+        /*
+         * Unknown unit means we cannot safely claim
+         * the monetary values are crore.
+         *
+         * Preserve the raw values but flag them.
+         */
+
+        for (
+          const field
+          of monetaryFields
+        ) {
+
+          normalized[field] =
+            finiteFinancialNumber(
+              row[field]
+            );
+
+        }
+
+
+        normalized.original_source_unit =
+          sourceUnit;
+
+
+        normalized.source_unit =
+          sourceUnit;
+
+      }
+
+
+      /*
+       * ------------------------------------------------------
+       * SHARES OUTSTANDING
+       * ------------------------------------------------------
+       */
+
+      const normalizedShares =
+        sharesToCrore(
+
+          row.shares_outstanding,
+
+          row.shares_outstanding_unit
+
+        );
+
+
+      normalized.shares_outstanding =
+        normalizedShares;
+
+
+      normalized.original_shares_outstanding =
+        finiteFinancialNumber(
+          row.shares_outstanding
+        );
+
+
+      normalized.original_shares_outstanding_unit =
+        row.shares_outstanding_unit ||
+        null;
+
+
+      normalized.shares_outstanding_unit =
+
+        normalizedShares == null
+
+          ? row.shares_outstanding_unit ||
+            null
+
+          : "crore shares";
+
+
+      /*
+       * ------------------------------------------------------
+       * OTHER NUMERIC CLEANUP
+       * ------------------------------------------------------
+       */
+
+      normalized.year =
+        finiteFinancialNumber(
+          row.year ??
+          row.end_year
+        );
+
+
+      normalized.source_pages =
+
+        Array.isArray(
+          row.source_pages
+        )
+
+          ? row.source_pages
+
+          : [];
+
+
+      /*
+       * ------------------------------------------------------
+       * VALIDATION NOTES
+       * ------------------------------------------------------
+       */
+
+      const notes =
+        [];
+
+
+      if (
+        row.extraction_notes
+      ) {
+
+        notes.push(
+          String(
+            row.extraction_notes
+          )
+        );
+
+      }
+
+
+      if (
+        factor == null
+      ) {
+
+        notes.push(
+
+          `Monetary unit "${sourceUnit || "unknown"}" could not be normalized safely. Raw monetary values were preserved and must not be assumed to be INR crore.`
+
+        );
+
+      }
+
+      else if (
+        factor !== 1
+      ) {
+
+        notes.push(
+
+          `Server converted monetary values from ${sourceUnit} to INR crore.`
+
+        );
+
+      }
+
+
+      if (
+        row.shares_outstanding != null &&
+        normalizedShares == null
+      ) {
+
+        notes.push(
+
+          `Shares outstanding were present but could not be converted safely because the share unit "${row.shares_outstanding_unit || "unknown"}" was not reliable.`
+
+        );
+
+      }
+
 
       normalized.extraction_notes =
-        [
-          row.extraction_notes,
-          `Unit normalization not applied because source_unit "${row.source_unit || "unknown"}" was not recognized.`
-        ]
-          .filter(Boolean)
-          .join(" ");
+        notes.join(" ");
+
 
       return normalized;
 
     }
-
-
-    for (const field of monetaryFields) {
-
-      const value =
-        Number(
-          row[field]
-        );
-
-
-      if (
-        Number.isFinite(value)
-      ) {
-
-        normalized[field] =
-          value / divisor;
-
-      }
-
-    }
-
-
-    normalized.original_source_unit =
-      row.source_unit || null;
-
-
-    normalized.source_unit =
-      "INR crore";
-
-
-    normalized.extraction_notes =
-      [
-        row.extraction_notes,
-
-        divisor !== 1
-          ? `Server normalized monetary values from ${row.source_unit} to INR crore.`
-          : null
-      ]
-        .filter(Boolean)
-        .join(" ");
-
-
-    return normalized;
-
-  });
+  );
 
 }
+
 
 
 /* ============================================================
@@ -1917,28 +2245,56 @@ state that in extraction_notes.
 
 Otherwise return null.
 
-
 ============================================================
 SHARES OUTSTANDING RULE
 ============================================================
 
-Extract shares outstanding only when the annual report
-provides enough evidence to calculate it reliably.
+Extract PERIOD-END issued/outstanding equity shares when reliably
+supported by the annual report.
 
-Be careful with:
+IMPORTANT:
 
-- face value
-- number of shares
-- crore/lakh share units
-- stock splits
-- bonus issues
-- weighted-average EPS shares versus period-end shares
+Return the RAW number exactly as supported by the report.
 
-For automatic market capitalization, period-end shares
-outstanding are preferred.
+Also return its unit separately.
 
-If uncertain return null.
+Examples:
 
+125000000 shares:
+
+"shares_outstanding": 125000000,
+"shares_outstanding_unit": "shares"
+
+1250 lakh shares:
+
+"shares_outstanding": 1250,
+"shares_outstanding_unit": "lakh shares"
+
+12.5 crore shares:
+
+"shares_outstanding": 12.5,
+"shares_outstanding_unit": "crore shares"
+
+Do NOT convert shares into crore shares yourself.
+
+The server performs deterministic conversion.
+
+Do not confuse:
+
+- authorized shares
+- issued shares
+- subscribed shares
+- paid-up shares
+- weighted-average EPS shares
+- period-end shares outstanding
+
+For market capitalization, period-end outstanding equity shares
+are required.
+
+If only weighted-average EPS shares are available, return
+shares_outstanding as null.
+
+If the number or unit is uncertain, return null.
 
 ============================================================
 OUTPUT
@@ -1966,7 +2322,7 @@ Return VALID JSON ONLY:
       "financial_year": "FY2025-26",
       "year": 2026,
       "statement_basis": "Consolidated",
-      "source_unit": "INR million|INR crore|INR billion",
+      "source_unit": "INR million|INR lakh|INR crore|INR billion|other exact statement unit",
 
       "revenue": null,
       "ebitda": null,
@@ -1992,6 +2348,7 @@ Return VALID JSON ONLY:
       "finance_cost": null,
 
       "shares_outstanding": null,
+      "shares_outstanding_unit": null,
 
       "source_pages": [],
       "extraction_notes": ""
@@ -2058,6 +2415,75 @@ result.financials =
   normalizeFinancialUnitsToCrore(
     result.financials
   );
+
+     /*
+ * Remove unusable rows and protect the frontend
+ * from malformed AI extraction.
+ */
+
+result.financials =
+  result.financials.filter(
+    row => {
+
+      if (
+        !row ||
+        typeof row !== "object"
+      ) {
+        return false;
+      }
+
+
+      if (
+        !Number.isFinite(
+          Number(
+            row.year
+          )
+        )
+      ) {
+        return false;
+      }
+
+
+      /*
+       * Require at least one meaningful
+       * financial-statement value.
+       */
+
+      const financialFields = [
+
+        "revenue",
+        "ebitda",
+        "operating_income",
+        "net_income",
+
+        "total_assets",
+        "total_equity",
+
+        "operating_cash_flow"
+
+      ];
+
+
+      return financialFields.some(
+        field =>
+          finiteFinancialNumber(
+            row[field]
+          ) != null
+      );
+
+    }
+  );
+
+
+if (
+  !result.financials.length
+) {
+
+  throw new Error(
+    "The annual report was read, but no reliable financial-statement rows could be extracted."
+  );
+
+}
 
 
       /*
