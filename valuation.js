@@ -4,25 +4,19 @@
    Supports:
    - DCF
    - Reverse DCF
-   - Automatic assumptions
    - Bear / Base / Bull scenarios
    - Input validation
 
    UNIT CONVENTION
 
    Financial statement values:
-   ₹ crore
+   INR crore
 
    Shares outstanding:
    crore shares
 
    Per-share valuation:
-   ₹ per share
-
-   Example:
-   Equity value = ₹100,000 crore
-   Shares = 1,000 crore
-   Value/share = ₹100
+   INR / currency units per share
    ============================================================ */
 
 
@@ -31,6 +25,30 @@
    ============================================================ */
 
 function number(value) {
+
+  /*
+   * IMPORTANT:
+   *
+   * Number(null) === 0
+   * Number("") === 0
+   *
+   * Missing financial information must NOT
+   * silently become zero.
+   */
+
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return null;
+  }
+
+  if (
+    typeof value === "string" &&
+    value.trim() === ""
+  ) {
+    return null;
+  }
 
   const parsed =
     Number(value);
@@ -110,19 +128,13 @@ function round(
 ) {
 
   if (
-    !Number.isFinite(
-      value
-    )
+    !Number.isFinite(value)
   ) {
-
     return null;
-
   }
-
 
   const factor =
     10 ** digits;
-
 
   return (
     Math.round(
@@ -137,9 +149,7 @@ function round(
    2. ASSUMPTION VALIDATION
    ============================================================ */
 
-function validateWacc(
-  value
-) {
+function validateWacc(value) {
 
   const wacc =
     requiredNumber(
@@ -147,18 +157,16 @@ function validateWacc(
       "WACC"
     );
 
-
   if (
     wacc <= 0 ||
     wacc >= 0.50
   ) {
 
     throw new Error(
-      "WACC must be between 0% and 50%."
+      "WACC must be greater than 0% and lower than 50%."
     );
 
   }
-
 
   return wacc;
 
@@ -176,18 +184,16 @@ function validateTerminalGrowth(
       "Terminal growth"
     );
 
-
   if (
     growth <= -0.20 ||
     growth >= 0.20
   ) {
 
     throw new Error(
-      "Terminal growth must be between -20% and 20%."
+      "Terminal growth must be greater than -20% and lower than 20%."
     );
 
   }
-
 
   if (
     growth >= wacc
@@ -199,15 +205,12 @@ function validateTerminalGrowth(
 
   }
 
-
   return growth;
 
 }
 
 
-function validateRevenueGrowth(
-  value
-) {
+function validateRevenueGrowth(value) {
 
   const growth =
     requiredNumber(
@@ -215,27 +218,23 @@ function validateRevenueGrowth(
       "Revenue growth"
     );
 
-
   if (
     growth <= -0.75 ||
     growth >= 1
   ) {
 
     throw new Error(
-      "Revenue growth assumption must be between -75% and 100%."
+      "Revenue growth must be greater than -75% and lower than 100%."
     );
 
   }
-
 
   return growth;
 
 }
 
 
-function validateMargin(
-  value
-) {
+function validateMargin(value) {
 
   const margin =
     requiredNumber(
@@ -243,18 +242,16 @@ function validateMargin(
       "EBIT margin"
     );
 
-
   if (
     margin <= -0.50 ||
     margin >= 0.80
   ) {
 
     throw new Error(
-      "EBIT margin assumption must be between -50% and 80%."
+      "EBIT margin must be greater than -50% and lower than 80%."
     );
 
   }
-
 
   return margin;
 
@@ -265,19 +262,6 @@ function validateMargin(
    3. FREE CASH FLOW ESTIMATION
    ============================================================ */
 
-/*
- * FinSight uses a simplified unlevered cash-flow model.
- *
- * When operating cash flow and capex are available,
- * historical cash conversion is used to estimate the
- * relationship between EBIT and free cash flow.
- *
- * If that relationship cannot be established,
- * a conservative fallback conversion is used.
- *
- * The fallback is explicitly returned to the frontend.
- */
-
 function estimateCashConversion({
   ebit,
   operatingCashFlow,
@@ -287,20 +271,26 @@ function estimateCashConversion({
   const reportedEBIT =
     number(ebit);
 
-
   const ocf =
     number(
       operatingCashFlow
     );
 
-
   const capitalExpenditure =
     number(capex);
 
 
+  /*
+   * Historical conversion is used only when all
+   * required values exist and EBIT is positive.
+   *
+   * Negative/zero EBIT makes FCF/EBIT conversion
+   * economically unreliable.
+   */
+
   if (
     reportedEBIT != null &&
-    reportedEBIT !== 0 &&
+    reportedEBIT > 0 &&
     ocf != null &&
     capitalExpenditure != null
   ) {
@@ -309,38 +299,55 @@ function estimateCashConversion({
       ocf -
       capitalExpenditure;
 
-
     const conversion =
       historicalFCF /
       reportedEBIT;
 
 
     /*
-     * Avoid extreme one-year accounting effects
-     * dominating the forecast.
+     * Prevent a single unusual year from producing
+     * an extreme forecast conversion ratio.
      */
+
+    const normalizedRate =
+      clamp(
+        conversion,
+        0.15,
+        1.25
+      );
+
 
     return {
 
       rate:
-        clamp(
-          conversion,
-          0.15,
-          1.25
-        ),
+        normalizedRate,
 
       source:
-        "historical operating cash flow less capex relative to EBIT",
+        "Historical operating cash flow less capex relative to EBIT",
 
       historicalFCF:
         round(
           historicalFCF
-        )
+        ),
+
+      rawHistoricalRate:
+        round(
+          conversion,
+          4
+        ),
+
+      constrained:
+        normalizedRate !==
+        conversion
 
     };
 
   }
 
+
+  /*
+   * Fallback is explicitly disclosed.
+   */
 
   return {
 
@@ -348,10 +355,16 @@ function estimateCashConversion({
       0.70,
 
     source:
-      "FinSight conservative fallback assumption",
+      "FinSight fallback cash-conversion assumption",
 
     historicalFCF:
-      null
+      null,
+
+    rawHistoricalRate:
+      null,
+
+    constrained:
+      false
 
   };
 
@@ -372,7 +385,7 @@ function calculateDCF({
 
   capex,
 
-  netDebt = 0,
+  netDebt,
 
   sharesOutstanding,
 
@@ -406,9 +419,18 @@ function calculateDCF({
     number(ebit);
 
 
+  /*
+   * Net debt is required.
+   *
+   * Missing debt/cash information must not
+   * silently become zero.
+   */
+
   const debt =
-    number(netDebt) ??
-    0;
+    requiredNumber(
+      netDebt,
+      "Net debt"
+    );
 
 
   const growth =
@@ -473,6 +495,17 @@ function calculateDCF({
     0;
 
 
+  /*
+   * Keep the unrounded final FCF separately.
+   *
+   * Terminal value should never be calculated
+   * from a display-rounded number.
+   */
+
+  let finalProjectedFCF =
+    null;
+
+
   for (
     let year = 1;
     year <= years;
@@ -491,6 +524,10 @@ function calculateDCF({
     const projectedFCF =
       projectedEBIT *
       cashConversion.rate;
+
+
+    finalProjectedFCF =
+      projectedFCF;
 
 
     const discountFactor =
@@ -547,14 +584,24 @@ function calculateDCF({
   }
 
 
-  const finalFCF =
-    forecasts.at(-1)
-      .freeCashFlow;
+  if (
+    finalProjectedFCF == null
+  ) {
 
+    throw new Error(
+      "DCF forecast could not be generated."
+    );
+
+  }
+
+
+  /*
+   * Gordon Growth terminal value.
+   */
 
   const terminalValue =
 
-    finalFCF
+    finalProjectedFCF
 
     *
 
@@ -595,6 +642,17 @@ function calculateDCF({
     presentValueTerminal;
 
 
+  /*
+   * EV = equity value + net debt
+   *
+   * Therefore:
+   *
+   * equity value = EV - net debt
+   *
+   * Negative net debt (net cash) correctly
+   * increases equity value.
+   */
+
   const equityValue =
     enterpriseValue -
     debt;
@@ -603,6 +661,19 @@ function calculateDCF({
   const valuePerShare =
     equityValue /
     shares;
+
+
+  if (
+    !Number.isFinite(
+      valuePerShare
+    )
+  ) {
+
+    throw new Error(
+      "DCF produced an invalid per-share value."
+    );
+
+  }
 
 
   return {
@@ -667,6 +738,12 @@ function calculateDCF({
       cashConversionSource:
         cashConversion.source,
 
+      rawHistoricalCashConversionRate:
+        cashConversion.rawHistoricalRate,
+
+      cashConversionWasConstrained:
+        cashConversion.constrained,
+
       historicalFCF:
         cashConversion.historicalFCF
 
@@ -710,12 +787,10 @@ function calculateDCF({
 
 
 /* ============================================================
-   5. AUTOMATIC BASE ASSUMPTIONS
+   5. BASE ASSUMPTIONS
    ============================================================ */
 
-function automaticAssumptions(
-  input
-) {
+function automaticAssumptions(input) {
 
   const revenue =
     positiveNumber(
@@ -731,8 +806,11 @@ function automaticAssumptions(
 
 
   /*
-   * If no explicit margin is supplied,
-   * use current EBIT margin when available.
+   * EBIT margin:
+   *
+   * Explicit assumption first.
+   * Otherwise use reported EBIT/revenue.
+   * Final fallback = 15%.
    */
 
   let margin =
@@ -764,11 +842,7 @@ function automaticAssumptions(
 
 
   /*
-   * If no explicit growth assumption exists,
-   * use a conservative default.
-   *
-   * The frontend currently supplies one, but this
-   * keeps the API robust.
+   * Revenue growth fallback = 8%.
    */
 
   let growth =
@@ -787,6 +861,10 @@ function automaticAssumptions(
   }
 
 
+  /*
+   * WACC fallback = 10%.
+   */
+
   let wacc =
     number(
       input.wacc
@@ -802,6 +880,10 @@ function automaticAssumptions(
 
   }
 
+
+  /*
+   * Terminal growth fallback = 4%.
+   */
 
   let terminalGrowth =
     number(
@@ -819,6 +901,12 @@ function automaticAssumptions(
   }
 
 
+  const validatedWacc =
+    validateWacc(
+      wacc
+    );
+
+
   return {
 
     revenueGrowth:
@@ -832,14 +920,12 @@ function automaticAssumptions(
       ),
 
     wacc:
-      validateWacc(
-        wacc
-      ),
+      validatedWacc,
 
     terminalGrowth:
       validateTerminalGrowth(
         terminalGrowth,
-        wacc
+        validatedWacc
       )
 
   };
@@ -854,6 +940,24 @@ function automaticAssumptions(
 export function runDCF(
   input = {}
 ) {
+
+  /*
+   * Prevent missing net debt from silently
+   * becoming zero.
+   */
+
+  if (
+    number(
+      input.netDebt
+    ) == null
+  ) {
+
+    throw new Error(
+      "Net debt is required for DCF. Use annual-report net debt or enter a verified value."
+    );
+
+  }
+
 
   const assumptions =
     automaticAssumptions(
@@ -872,19 +976,8 @@ export function runDCF(
 
 
   /*
-   * Scenario framework.
-   *
-   * Bear:
-   * lower growth,
-   * lower margin,
-   * higher discount rate.
-   *
-   * Bull:
-   * higher growth,
-   * higher margin,
-   * slightly lower discount rate.
+   * BEAR CASE
    */
-
 
   const bearGrowth =
     clamp(
@@ -921,6 +1014,10 @@ export function runDCF(
       0.01
     );
 
+
+  /*
+   * BULL CASE
+   */
 
   const bullGrowth =
     clamp(
@@ -998,6 +1095,22 @@ export function runDCF(
     });
 
 
+  /*
+   * IMPORTANT:
+   *
+   * Return base values at TOP LEVEL as well.
+   *
+   * Your finsight-investor.js renderer reads:
+   *
+   * result.enterpriseValue
+   * result.equityValue
+   * result.valuePerShare
+   * result.terminalValue
+   *
+   * Previously those values only existed inside
+   * scenarios.base, causing N/A cards.
+   */
+
   return {
 
     ok:
@@ -1009,7 +1122,7 @@ export function runDCF(
     unitConvention: {
 
       financialStatements:
-        "crore",
+        "INR crore",
 
       shares:
         "crore shares",
@@ -1018,6 +1131,31 @@ export function runDCF(
         "currency units per share"
 
     },
+
+
+    /* FRONTEND-COMPATIBLE BASE VALUES */
+
+    valuePerShare:
+      base.valuePerShare,
+
+    enterpriseValue:
+      base.enterpriseValue,
+
+    equityValue:
+      base.equityValue,
+
+    terminalValue:
+      base.terminalValue,
+
+    presentValueForecast:
+      base.presentValueForecast,
+
+    presentValueTerminal:
+      base.presentValueTerminal,
+
+    assumptions:
+      base.assumptions,
+
 
     scenarios: {
 
@@ -1031,6 +1169,9 @@ export function runDCF(
 
         equityValue:
           bear.equityValue,
+
+        terminalValue:
+          bear.terminalValue,
 
         assumptions:
           bear.assumptions
@@ -1048,6 +1189,9 @@ export function runDCF(
         equityValue:
           base.equityValue,
 
+        terminalValue:
+          base.terminalValue,
+
         assumptions:
           base.assumptions
 
@@ -1064,6 +1208,9 @@ export function runDCF(
         equityValue:
           bull.equityValue,
 
+        terminalValue:
+          bull.terminalValue,
+
         assumptions:
           bull.assumptions
 
@@ -1076,13 +1223,18 @@ export function runDCF(
 
     warnings: [
 
-      "DCF values depend heavily on growth, margin, discount-rate and terminal-growth assumptions.",
+      "DCF values are highly sensitive to revenue growth, EBIT margin, WACC, terminal growth and cash conversion.",
 
-      "FinSight uses a simplified cash-conversion framework and should not be treated as a substitute for a full analyst cash-flow model.",
+      "FinSight uses a simplified cash-conversion framework rather than a full FCFF model with explicit tax, depreciation and working-capital forecasts.",
+
+      base.assumptions
+        .cashConversionWasConstrained
+        ? "Historical FCF-to-EBIT conversion was outside the permitted range and was constrained for forecasting."
+        : null,
 
       "Missing annual-report inputs are not fabricated."
 
-    ]
+    ].filter(Boolean)
 
   };
 
@@ -1118,6 +1270,19 @@ export function reverseDCF(
     );
 
 
+  if (
+    number(
+      input.netDebt
+    ) == null
+  ) {
+
+    throw new Error(
+      "Net debt is required for reverse DCF. Use annual-report net debt or enter a verified value."
+    );
+
+  }
+
+
   const assumptions =
     automaticAssumptions(
       input
@@ -1125,12 +1290,9 @@ export function reverseDCF(
 
 
   /*
-   * Search for the constant revenue growth rate
-   * that makes DCF value/share approximately equal
-   * to the current market price.
+   * Search range:
    *
-   * Range:
-   * -30% to +80%
+   * -30% to +80% constant annual revenue growth.
    */
 
   let low =
@@ -1139,6 +1301,123 @@ export function reverseDCF(
 
   let high =
     0.80;
+
+
+  /*
+   * Before binary search, determine whether
+   * the requested market price is even reachable
+   * inside the search range.
+   */
+
+  const lowResult =
+    calculateDCF({
+
+      ...input,
+
+      revenue,
+
+      sharesOutstanding:
+        shares,
+
+      revenueGrowth:
+        low,
+
+      ebitMargin:
+        assumptions.ebitMargin,
+
+      wacc:
+        assumptions.wacc,
+
+      terminalGrowth:
+        assumptions.terminalGrowth
+
+    });
+
+
+  const highResult =
+    calculateDCF({
+
+      ...input,
+
+      revenue,
+
+      sharesOutstanding:
+        shares,
+
+      revenueGrowth:
+        high,
+
+      ebitMargin:
+        assumptions.ebitMargin,
+
+      wacc:
+        assumptions.wacc,
+
+      terminalGrowth:
+        assumptions.terminalGrowth
+
+    });
+
+
+  const lowValue =
+    lowResult.valuePerShare;
+
+
+  const highValue =
+    highResult.valuePerShare;
+
+
+  if (
+    !Number.isFinite(lowValue) ||
+    !Number.isFinite(highValue)
+  ) {
+
+    throw new Error(
+      "Reverse DCF could not establish a valid valuation search range."
+    );
+
+  }
+
+
+  /*
+   * With fixed margins and conversion,
+   * DCF value should rise with growth.
+   *
+   * Detect an unexpected model state rather
+   * than returning a misleading answer.
+   */
+
+  if (
+    highValue <= lowValue
+  ) {
+
+    throw new Error(
+      "Reverse DCF could not establish a monotonic growth-to-value relationship."
+    );
+
+  }
+
+
+  if (
+    marketPrice < lowValue
+  ) {
+
+    throw new Error(
+      `The current market price is below the model value even at -30% annual revenue growth. The implied growth rate is outside FinSight's reverse-DCF search range.`
+    );
+
+  }
+
+
+  if (
+    marketPrice > highValue
+  ) {
+
+    throw new Error(
+      `The current market price requires more than 80% annual revenue growth under the supplied assumptions. The implied growth rate is outside FinSight's reverse-DCF search range.`
+    );
+
+  }
 
 
   let bestGrowth =
@@ -1170,46 +1449,29 @@ export function reverseDCF(
       ) / 2;
 
 
-    let result;
+    const result =
+      calculateDCF({
 
+        ...input,
 
-    try {
+        revenue,
 
-      result =
-        calculateDCF({
+        sharesOutstanding:
+          shares,
 
-          ...input,
+        revenueGrowth:
+          midpoint,
 
-          revenue,
+        ebitMargin:
+          assumptions.ebitMargin,
 
-          sharesOutstanding:
-            shares,
+        wacc:
+          assumptions.wacc,
 
-          revenueGrowth:
-            midpoint,
+        terminalGrowth:
+          assumptions.terminalGrowth
 
-          ebitMargin:
-            assumptions.ebitMargin,
-
-          wacc:
-            assumptions.wacc,
-
-          terminalGrowth:
-            assumptions.terminalGrowth
-
-        });
-
-    }
-
-    catch (
-      error
-    ) {
-
-      throw new Error(
-        `Reverse DCF failed: ${error.message}`
-      );
-
-    }
+      });
 
 
     const value =
@@ -1261,7 +1523,8 @@ export function reverseDCF(
 
 
   if (
-    !bestResult
+    !bestResult ||
+    bestGrowth == null
   ) {
 
     throw new Error(
@@ -1276,8 +1539,7 @@ export function reverseDCF(
 
 
   const impliedValue =
-    bestResult
-      .valuePerShare;
+    bestResult.valuePerShare;
 
 
   const absoluteError =
@@ -1286,12 +1548,8 @@ export function reverseDCF(
 
 
   const percentageError =
-    marketPrice !== 0
-
-      ? absoluteError /
-        marketPrice
-
-      : null;
+    absoluteError /
+    marketPrice;
 
 
   let interpretation;
@@ -1302,7 +1560,7 @@ export function reverseDCF(
   ) {
 
     interpretation =
-      "The current market price appears to require very strong sustained revenue growth under the supplied margin and discount-rate assumptions.";
+      "The current market price requires very strong sustained revenue growth under the supplied margin, cash-conversion and discount-rate assumptions.";
 
   }
 
@@ -1311,7 +1569,7 @@ export function reverseDCF(
   ) {
 
     interpretation =
-      "The current market price appears to embed meaningful sustained growth expectations.";
+      "The current market price embeds meaningful sustained revenue-growth expectations under the supplied assumptions.";
 
   }
 
@@ -1320,7 +1578,7 @@ export function reverseDCF(
   ) {
 
     interpretation =
-      "The current market price appears to embed moderate sustained growth under the supplied assumptions.";
+      "The current market price embeds moderate sustained revenue growth under the supplied assumptions.";
 
   }
 
@@ -1329,17 +1587,22 @@ export function reverseDCF(
   ) {
 
     interpretation =
-      "The current market price appears to require relatively modest positive growth under the supplied assumptions.";
+      "The current market price requires relatively modest positive revenue growth under the supplied assumptions.";
 
   }
 
   else {
 
     interpretation =
-      "Under the supplied assumptions, the current market price can be supported even with declining revenue, indicating that the model assumptions may be conservative or that the market price is low relative to the modeled cash flows.";
+      "The model can support the current market price even with declining revenue under the supplied assumptions. Review margins, cash conversion, net debt, WACC and terminal growth before interpreting this as undervaluation.";
 
   }
 
+
+  /*
+   * Return both canonical names and the aliases
+   * expected by the current frontend.
+   */
 
   return {
 
@@ -1353,6 +1616,9 @@ export function reverseDCF(
       round(
         marketPrice
       ),
+
+
+    /* CANONICAL */
 
     impliedRevenueGrowth:
       round(
@@ -1371,20 +1637,37 @@ export function reverseDCF(
         impliedValue
       ),
 
+
+    /* FRONTEND COMPATIBILITY */
+
+    impliedGrowth:
+      round(
+        impliedGrowth,
+        4
+      ),
+
+    impliedValuePerShare:
+      round(
+        impliedValue
+      ),
+
+    valuePerShare:
+      round(
+        impliedValue
+      ),
+
+
     pricingError:
       round(
         absoluteError
       ),
 
     pricingErrorPercent:
-      percentageError == null
+      round(
+        percentageError * 100,
+        2
+      ),
 
-        ? null
-
-        : round(
-            percentageError * 100,
-            2
-          ),
 
     assumptions: {
 
@@ -1415,8 +1698,18 @@ export function reverseDCF(
         round(
           number(
             input.netDebt
-          ) ?? 0
-        )
+          )
+        ),
+
+      cashConversionRate:
+        bestResult
+          .assumptions
+          .cashConversionRate,
+
+      cashConversionSource:
+        bestResult
+          .assumptions
+          .cashConversionSource
 
     },
 
@@ -1424,11 +1717,11 @@ export function reverseDCF(
 
     warnings: [
 
-      "Reverse DCF does not forecast what the company will actually achieve.",
+      "Reverse DCF does not forecast the growth the company will actually achieve.",
 
-      "It estimates the constant revenue-growth rate required to approximately justify the current market price under the supplied assumptions.",
+      "It estimates the constant revenue-growth rate required to approximately justify the entered market price.",
 
-      "Changes in margins, WACC, terminal growth, cash conversion or capital intensity can materially change the implied growth rate."
+      "Changes in EBIT margin, WACC, terminal growth, cash conversion, net debt or capital intensity can materially change the implied growth rate."
 
     ]
 
