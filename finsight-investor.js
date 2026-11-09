@@ -593,6 +593,12 @@ function calculateRow(
   previous = null
 ) {
 
+  /*
+   * ----------------------------------------------------------
+   * GROSS PROFIT
+   * ----------------------------------------------------------
+   */
+
   const grossProfit =
 
     row.revenue != null &&
@@ -603,140 +609,293 @@ function calculateRow(
 
       : null;
 
-const capitalEmployed =
 
-  row.total_equity != null &&
-  row.total_debt != null &&
-  row.cash != null
+  /*
+   * ----------------------------------------------------------
+   * CAPITAL EMPLOYED
+   * ----------------------------------------------------------
+   *
+   * Preferred definition:
+   *
+   * Equity
+   * + Debt
+   * - Cash
+   *
+   * Fallback:
+   *
+   * Total assets
+   * - Current liabilities
+   *
+   * Missing cash is NOT assumed to be zero.
+   */
 
-    ? row.total_equity +
-      row.total_debt -
-      row.cash
+  const capitalEmployed =
 
-    : row.total_assets != null &&
-      row.current_liabilities != null
+    row.total_equity != null &&
+    row.total_debt != null &&
+    row.cash != null
 
-    ? row.total_assets -
-      row.current_liabilities
+      ? row.total_equity +
+        row.total_debt -
+        row.cash
 
-    : null;
+      : row.total_assets != null &&
+        row.current_liabilities != null
 
+      ? row.total_assets -
+        row.current_liabilities
 
-const previousCapitalEmployed =
-
-  previous?.total_equity != null &&
-  previous?.total_debt != null &&
-  previous?.cash != null
-
-    ? previous.total_equity +
-      previous.total_debt -
-      previous.cash
-
-    : previous?.total_assets != null &&
-      previous?.current_liabilities != null
-
-    ? previous.total_assets -
-      previous.current_liabilities
-
-    : null;
-
-const averageCapital =
-
-  capitalEmployed != null &&
-  previousCapitalEmployed != null
-
-    ? average(
-        capitalEmployed,
-        previousCapitalEmployed
-      )
-
-    : null;
+      : null;
 
 
-const averageEquity =
+  const previousCapitalEmployed =
 
-  row.total_equity != null &&
-  previous?.total_equity != null
+    previous?.total_equity != null &&
+    previous?.total_debt != null &&
+    previous?.cash != null
 
-    ? average(
-        row.total_equity,
-        previous.total_equity
-      )
+      ? previous.total_equity +
+        previous.total_debt -
+        previous.cash
 
-    : null;
+      : previous?.total_assets != null &&
+        previous?.current_liabilities != null
 
+      ? previous.total_assets -
+        previous.current_liabilities
 
-const averageAssets =
-
-  row.total_assets != null &&
-  previous?.total_assets != null
-
-    ? average(
-        row.total_assets,
-        previous.total_assets
-      )
-
-    : null;
+      : null;
 
 
-  
+  /*
+   * ROCE should use average capital employed.
+   *
+   * If the previous-year balance is unavailable,
+   * do NOT pretend the current-year balance is
+   * an average.
+   */
+
+  const averageCapital =
+
+    capitalEmployed != null &&
+    previousCapitalEmployed != null
+
+      ? average(
+          capitalEmployed,
+          previousCapitalEmployed
+        )
+
+      : null;
+
+
+  /*
+   * Basic denominator validation.
+   *
+   * This does NOT cap ROCE.
+   *
+   * It only prevents FinSight from calculating
+   * ROCE from a zero, negative or structurally
+   * implausible capital-employed denominator.
+   */
+
+  const capitalEmployedReliable =
+
+    averageCapital != null &&
+    averageCapital > 0 &&
+    row.total_assets != null &&
+    row.total_assets > 0 &&
+    averageCapital <=
+      row.total_assets * 2;
+
+
+  /*
+   * ----------------------------------------------------------
+   * AVERAGE EQUITY
+   * ----------------------------------------------------------
+   *
+   * Required for ROE.
+   */
+
+  const averageEquity =
+
+    row.total_equity != null &&
+    previous?.total_equity != null
+
+      ? average(
+          row.total_equity,
+          previous.total_equity
+        )
+
+      : null;
+
+
+  /*
+   * ----------------------------------------------------------
+   * AVERAGE ASSETS
+   * ----------------------------------------------------------
+   *
+   * Required for ROA and asset turnover.
+   */
+
+  const averageAssets =
+
+    row.total_assets != null &&
+    previous?.total_assets != null
+
+      ? average(
+          row.total_assets,
+          previous.total_assets
+        )
+
+      : null;
+
+
+  /*
+   * ----------------------------------------------------------
+   * WORKING-CAPITAL AVERAGES
+   * ----------------------------------------------------------
+   *
+   * Do not calculate days using only closing
+   * balances when the opening balance is missing.
+   */
 
   const averageReceivables =
 
-  row.accounts_receivable != null &&
-  previous?.accounts_receivable != null
+    row.accounts_receivable != null &&
+    previous?.accounts_receivable != null
 
-    ? average(
-        row.accounts_receivable,
-        previous.accounts_receivable
-      )
+      ? average(
+          row.accounts_receivable,
+          previous.accounts_receivable
+        )
 
-    : null;
-
-
-const averageInventory =
-
-  row.inventory != null &&
-  previous?.inventory != null
-
-    ? average(
-        row.inventory,
-        previous.inventory
-      )
-
-    : null;
+      : null;
 
 
-const averagePayables =
+  const averageInventory =
 
-  row.accounts_payable != null &&
-  previous?.accounts_payable != null
+    row.inventory != null &&
+    previous?.inventory != null
 
-    ? average(
-        row.accounts_payable,
-        previous.accounts_payable
-      )
+      ? average(
+          row.inventory,
+          previous.inventory
+        )
 
-    : null;
+      : null;
 
+
+  const averagePayables =
+
+    row.accounts_payable != null &&
+    previous?.accounts_payable != null
+
+      ? average(
+          row.accounts_payable,
+          previous.accounts_payable
+        )
+
+      : null;
+
+
+  /*
+   * ----------------------------------------------------------
+   * NET DEBT
+   * ----------------------------------------------------------
+   *
+   * Missing cash must remain missing.
+   *
+   * Never silently treat missing cash as zero.
+   */
 
   const netDebt =
 
-  row.total_debt != null &&
-  row.cash != null
+    row.total_debt != null &&
+    row.cash != null
 
-    ? row.total_debt -
-      row.cash
+      ? row.total_debt -
+        row.cash
 
-    : null;
+      : null;
 
+
+  /*
+   * ----------------------------------------------------------
+   * RETURN CALCULATIONS
+   * ----------------------------------------------------------
+   */
+
+  const roe =
+
+    row.net_income != null &&
+    averageEquity != null &&
+    averageEquity > 0
+
+      ? safeDiv(
+          row.net_income,
+          averageEquity
+        )
+
+      : null;
+
+
+  const roa =
+
+    row.net_income != null &&
+    averageAssets != null &&
+    averageAssets > 0
+
+      ? safeDiv(
+          row.net_income,
+          averageAssets
+        )
+
+      : null;
+
+
+  /*
+   * ROCE numerator uses operating income / EBIT.
+   *
+   * ROCE is withheld when:
+   *
+   * - EBIT is unavailable
+   * - EBIT is non-positive
+   * - average capital employed is unavailable
+   * - capital-employed denominator fails validation
+   */
+
+  const roce =
+
+    row.operating_income != null &&
+    row.operating_income > 0 &&
+    capitalEmployedReliable
+
+      ? safeDiv(
+          row.operating_income,
+          averageCapital
+        )
+
+      : null;
+
+
+  /*
+   * ----------------------------------------------------------
+   * RETURN CALCULATED ROW
+   * ----------------------------------------------------------
+   */
 
   return {
 
     ...row,
 
+
+    /* --------------------------------------------------------
+       PROFITABILITY
+       -------------------------------------------------------- */
+
     gross_profit:
       grossProfit,
+
 
     gross_margin:
       safeDiv(
@@ -744,11 +903,13 @@ const averagePayables =
         row.revenue
       ),
 
+
     ebitda_margin:
       safeDiv(
         row.ebitda,
         row.revenue
       ),
+
 
     operating_margin:
       safeDiv(
@@ -756,22 +917,38 @@ const averagePayables =
         row.revenue
       ),
 
+
     net_margin:
       safeDiv(
         row.net_income,
         row.revenue
       ),
 
+
+    /* --------------------------------------------------------
+       LIQUIDITY
+       -------------------------------------------------------- */
+
     current_ratio:
-      safeDiv(
-        row.current_assets,
-        row.current_liabilities
-      ),
+
+      row.current_assets != null &&
+      row.current_liabilities != null &&
+      row.current_liabilities > 0
+
+        ? safeDiv(
+            row.current_assets,
+            row.current_liabilities
+          )
+
+        : null,
+
 
     quick_ratio:
 
       row.current_assets != null &&
-      row.inventory != null
+      row.inventory != null &&
+      row.current_liabilities != null &&
+      row.current_liabilities > 0
 
         ? safeDiv(
             row.current_assets -
@@ -781,49 +958,82 @@ const averagePayables =
 
         : null,
 
+
+    /* --------------------------------------------------------
+       LEVERAGE
+       -------------------------------------------------------- */
+
     debt_equity:
-      safeDiv(
-        row.total_debt,
-        row.total_equity
-      ),
+
+      row.total_debt != null &&
+      row.total_equity != null &&
+      row.total_equity > 0
+
+        ? safeDiv(
+            row.total_debt,
+            row.total_equity
+          )
+
+        : null,
+
 
     net_debt:
       netDebt,
 
+
     net_debt_ebitda:
-      safeDiv(
-        netDebt,
-        row.ebitda
-      ),
 
-    roe:
-      safeDiv(
-        row.net_income,
-        averageEquity
-      ),
+      netDebt != null &&
+      row.ebitda != null &&
+      row.ebitda > 0
 
-    roa:
-      safeDiv(
-        row.net_income,
-        averageAssets
-      ),
+        ? safeDiv(
+            netDebt,
+            row.ebitda
+          )
 
-    roce:
-      safeDiv(
-        row.operating_income,
-        averageCapital
-      ),
+        : null,
+
+
+    /* --------------------------------------------------------
+       RETURNS
+       -------------------------------------------------------- */
+
+    roe,
+
+    roa,
+
+    roce,
+
+
+    /* --------------------------------------------------------
+       ASSET EFFICIENCY
+       -------------------------------------------------------- */
 
     asset_turnover:
-      safeDiv(
-        row.revenue,
-        averageAssets
-      ),
+
+      row.revenue != null &&
+      averageAssets != null &&
+      averageAssets > 0
+
+        ? safeDiv(
+            row.revenue,
+            averageAssets
+          )
+
+        : null,
+
+
+    /* --------------------------------------------------------
+       WORKING CAPITAL
+       -------------------------------------------------------- */
 
     receivable_days:
 
       row.revenue != null &&
-      averageReceivables != null
+      row.revenue > 0 &&
+      averageReceivables != null &&
+      averageReceivables >= 0
 
         ? safeDiv(
             averageReceivables * 365,
@@ -832,10 +1042,13 @@ const averagePayables =
 
         : null,
 
+
     inventory_days:
 
       row.cogs != null &&
-      averageInventory != null
+      row.cogs > 0 &&
+      averageInventory != null &&
+      averageInventory >= 0
 
         ? safeDiv(
             averageInventory * 365,
@@ -844,10 +1057,13 @@ const averagePayables =
 
         : null,
 
+
     payable_days:
 
       row.cogs != null &&
-      averagePayables != null
+      row.cogs > 0 &&
+      averagePayables != null &&
+      averagePayables >= 0
 
         ? safeDiv(
             averagePayables * 365,
@@ -856,17 +1072,46 @@ const averagePayables =
 
         : null,
 
+
+    /* --------------------------------------------------------
+       INTEREST COVERAGE
+       -------------------------------------------------------- */
+
     interest_coverage:
-      safeDiv(
-        row.operating_income,
-        row.finance_cost
-      ),
+
+      row.operating_income != null &&
+      row.finance_cost != null &&
+      row.finance_cost > 0
+
+        ? safeDiv(
+            row.operating_income,
+            row.finance_cost
+          )
+
+        : null,
+
+
+    /* --------------------------------------------------------
+       CASH CONVERSION
+       -------------------------------------------------------- */
 
     cash_conversion:
-      safeDiv(
-        row.operating_cash_flow,
-        row.net_income
-      ),
+
+      row.operating_cash_flow != null &&
+      row.net_income != null &&
+      row.net_income !== 0
+
+        ? safeDiv(
+            row.operating_cash_flow,
+            row.net_income
+          )
+
+        : null,
+
+
+    /* --------------------------------------------------------
+       FREE CASH FLOW
+       -------------------------------------------------------- */
 
     free_cash_flow:
 
@@ -878,11 +1123,17 @@ const averagePayables =
 
         : null,
 
+
+    /* --------------------------------------------------------
+       GROWTH
+       -------------------------------------------------------- */
+
     revenue_growth:
       change(
         row.revenue,
         previous?.revenue
       ),
+
 
     ebitda_growth:
       change(
@@ -890,11 +1141,13 @@ const averagePayables =
         previous?.ebitda
       ),
 
+
     income_growth:
       change(
         row.net_income,
         previous?.net_income
       ),
+
 
     debt_growth:
       change(
@@ -907,6 +1160,10 @@ const averagePayables =
 }
 
 
+/* ============================================================
+   CALCULATE COMPLETE DATASET
+   ============================================================ */
+
 function calculateDataset(
   data = primary
 ) {
@@ -915,22 +1172,39 @@ function calculateDataset(
     !Array.isArray(data) ||
     !data.length
   ) {
+
     return [];
+
   }
 
+
   const sorted =
-    [...data].sort(
-      (a, b) =>
-        a.year - b.year
-    );
+
+    [...data]
+
+      .sort(
+        (a, b) =>
+          a.year -
+          b.year
+      );
+
 
   return sorted.map(
-    (row, index) =>
+    (
+      row,
+      index
+    ) =>
+
       calculateRow(
+
         row,
-        sorted[index - 1] ||
-        null
+
+        sorted[
+          index - 1
+        ] || null
+
       )
+
   );
 
 }
