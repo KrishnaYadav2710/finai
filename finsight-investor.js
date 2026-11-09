@@ -6942,13 +6942,116 @@ async function runDCFRequest() {
     }
 
 
-    $("#dcfResult")
-      .textContent =
-      JSON.stringify(
-        result,
-        null,
-        2
-      );
+  const dcfBox =
+  $("#dcfResult");
+
+const enterpriseValue =
+  finite(
+    result.enterpriseValue ??
+    result.enterprise_value
+  );
+
+const equityValue =
+  finite(
+    result.equityValue ??
+    result.equity_value
+  );
+
+const valuePerShare =
+  finite(
+    result.valuePerShare ??
+    result.value_per_share ??
+    result.intrinsicValuePerShare
+  );
+
+const terminalValue =
+  finite(
+    result.terminalValue ??
+    result.terminal_value
+  );
+
+dcfBox.innerHTML = `
+
+  <div class="dcf-output">
+
+    <div class="dcf-output-header">
+      <span class="eyebrow">
+        DCF RESULT
+      </span>
+
+      <strong>
+        Estimated intrinsic value
+      </strong>
+    </div>
+
+    <div class="dcf-output-grid">
+
+      <div class="dcf-output-card">
+        <span>
+          Value per share
+        </span>
+
+        <strong>
+          ${
+            valuePerShare == null
+              ? "N/A"
+              : priceMoney(valuePerShare)
+          }
+        </strong>
+      </div>
+
+      <div class="dcf-output-card">
+        <span>
+          Equity value
+        </span>
+
+        <strong>
+          ${
+            equityValue == null
+              ? "N/A"
+              : money(equityValue)
+          }
+        </strong>
+      </div>
+
+      <div class="dcf-output-card">
+        <span>
+          Enterprise value
+        </span>
+
+        <strong>
+          ${
+            enterpriseValue == null
+              ? "N/A"
+              : money(enterpriseValue)
+          }
+        </strong>
+      </div>
+
+      <div class="dcf-output-card">
+        <span>
+          Terminal value
+        </span>
+
+        <strong>
+          ${
+            terminalValue == null
+              ? "N/A"
+              : money(terminalValue)
+          }
+        </strong>
+      </div>
+
+    </div>
+
+    <small class="dcf-output-note">
+      DCF result based on the annual-report financial data
+      and the assumptions entered above.
+    </small>
+
+  </div>
+
+`;
 
   }
 
@@ -7100,13 +7203,108 @@ async function runReverseDCFRequest() {
     }
 
 
-    $("#dcfResult")
-      .textContent =
-      JSON.stringify(
-        result,
-        null,
-        2
-      );
+    const reverseBox =
+  $("#dcfResult");
+
+const impliedGrowth =
+  finite(
+    result.impliedGrowth ??
+    result.implied_growth ??
+    result.revenueGrowth ??
+    result.revenue_growth
+  );
+
+const marketPrice =
+  finite(
+    result.marketPrice ??
+    result.market_price ??
+    marketData?.price
+  );
+
+const impliedValue =
+  finite(
+    result.impliedValuePerShare ??
+    result.implied_value_per_share ??
+    result.valuePerShare ??
+    result.value_per_share
+  );
+
+reverseBox.innerHTML = `
+
+  <div class="dcf-output">
+
+    <div class="dcf-output-header">
+
+      <span class="eyebrow">
+        REVERSE DCF RESULT
+      </span>
+
+      <strong>
+        What growth is the market pricing in?
+      </strong>
+
+    </div>
+
+    <div class="dcf-output-grid">
+
+      <div class="dcf-output-card">
+
+        <span>
+          Market price
+        </span>
+
+        <strong>
+          ${
+            marketPrice == null
+              ? "N/A"
+              : priceMoney(marketPrice)
+          }
+        </strong>
+
+      </div>
+
+      <div class="dcf-output-card">
+
+        <span>
+          Implied revenue growth
+        </span>
+
+        <strong>
+          ${
+            impliedGrowth == null
+              ? "N/A"
+              : percentage(impliedGrowth)
+          }
+        </strong>
+
+      </div>
+
+      <div class="dcf-output-card">
+
+        <span>
+          Model value / share
+        </span>
+
+        <strong>
+          ${
+            impliedValue == null
+              ? "N/A"
+              : priceMoney(impliedValue)
+          }
+        </strong>
+
+      </div>
+
+    </div>
+
+    <small class="dcf-output-note">
+      Reverse DCF estimates the growth assumptions required
+      to justify the current market price.
+    </small>
+
+  </div>
+
+`;
 
   }
 
