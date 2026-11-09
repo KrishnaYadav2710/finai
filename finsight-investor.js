@@ -1218,42 +1218,504 @@ function buildScores(row) {
 
   const scores = {};
 
+
+  /* ========================================================
+     PROFITABILITY
+     ======================================================== */
+
   const profitabilityInputs = [];
-  if (row.operating_margin != null) {
-    profitabilityInputs.push(clamp(40 + row.operating_margin * 180));
-  }
-  if (row.roe != null) {
-    profitabilityInputs.push(clamp(40 + row.roe * 120));
-  }
-  if (row.roce != null) {
-    profitabilityInputs.push(clamp(40 + row.roce * 120));
-  }
-  if (profitabilityInputs.length) {
-    scores.Profitability = profitabilityInputs.reduce((a, b) => a + b, 0) / profitabilityInputs.length;
+
+
+  /*
+   * Operating margin
+   *
+   * 0%   ≈ 30
+   * 10%  ≈ 50
+   * 20%  ≈ 70
+   * 30%+ ≈ 90+
+   */
+
+  if (
+    row.operating_margin != null &&
+    Number.isFinite(
+      row.operating_margin
+    )
+  ) {
+
+    profitabilityInputs.push(
+
+      clamp(
+        30 +
+        row.operating_margin *
+        200
+      )
+
+    );
+
   }
 
-  if (row.current_ratio != null) {
-    scores.Liquidity = clamp(row.current_ratio >= 2 ? 100 : row.current_ratio * 50);
+
+  /*
+   * ROE
+   */
+
+  if (
+    row.roe != null &&
+    Number.isFinite(
+      row.roe
+    )
+  ) {
+
+    profitabilityInputs.push(
+
+      clamp(
+        30 +
+        row.roe *
+        200
+      )
+
+    );
+
   }
 
-  if (row.debt_equity != null) {
-    scores.Leverage = clamp(100 - row.debt_equity * 55);
+
+  /*
+   * ROCE
+   */
+
+  if (
+    row.roce != null &&
+    Number.isFinite(
+      row.roce
+    )
+  ) {
+
+    profitabilityInputs.push(
+
+      clamp(
+        30 +
+        row.roce *
+        200
+      )
+
+    );
+
   }
 
-  if (row.cash_conversion != null) {
-    scores["CFO / net profit"] = clamp(row.cash_conversion * 75);
+
+  if (
+    profitabilityInputs.length
+  ) {
+
+    scores.Profitability =
+
+      profitabilityInputs.reduce(
+        (sum, value) =>
+          sum + value,
+        0
+      )
+
+      /
+
+      profitabilityInputs.length;
+
   }
+
+
+  /* ========================================================
+     LIQUIDITY
+     ======================================================== */
+
+  if (
+    row.current_ratio != null &&
+    Number.isFinite(
+      row.current_ratio
+    ) &&
+    row.current_ratio >= 0
+  ) {
+
+    /*
+     * Extremely high current ratios are not
+     * automatically superior.
+     *
+     * They can indicate inefficient capital use.
+     */
+
+    if (
+      row.current_ratio < 1
+    ) {
+
+      scores.Liquidity =
+        clamp(
+          row.current_ratio * 45
+        );
+
+    }
+
+    else if (
+      row.current_ratio < 1.5
+    ) {
+
+      scores.Liquidity =
+        55 +
+        (
+          row.current_ratio - 1
+        ) * 40;
+
+    }
+
+    else if (
+      row.current_ratio <= 3
+    ) {
+
+      scores.Liquidity =
+        75 +
+        (
+          row.current_ratio - 1.5
+        ) * 10;
+
+    }
+
+    else {
+
+      /*
+       * Above 3× remains healthy,
+       * but does not receive unlimited benefit.
+       */
+
+      scores.Liquidity =
+        90;
+
+    }
+
+  }
+
+
+  /* ========================================================
+     LEVERAGE
+     ======================================================== */
+
+  if (
+    row.debt_equity != null &&
+    Number.isFinite(
+      row.debt_equity
+    ) &&
+    row.debt_equity >= 0
+  ) {
+
+    if (
+      row.debt_equity <= 0.25
+    ) {
+
+      scores.Leverage =
+        95;
+
+    }
+
+    else if (
+      row.debt_equity <= 0.5
+    ) {
+
+      scores.Leverage =
+        85;
+
+    }
+
+    else if (
+      row.debt_equity <= 1
+    ) {
+
+      scores.Leverage =
+        70;
+
+    }
+
+    else if (
+      row.debt_equity <= 1.5
+    ) {
+
+      scores.Leverage =
+        50;
+
+    }
+
+    else if (
+      row.debt_equity <= 2
+    ) {
+
+      scores.Leverage =
+        30;
+
+    }
+
+    else {
+
+      scores.Leverage =
+        15;
+
+    }
+
+  }
+
+
+  /* ========================================================
+     CASH CONVERSION
+     ======================================================== */
+
+  if (
+    row.cash_conversion != null &&
+    Number.isFinite(
+      row.cash_conversion
+    )
+  ) {
+
+    /*
+     * Negative operating cash flow receives
+     * a very weak score.
+     */
+
+    if (
+      row.cash_conversion <= 0
+    ) {
+
+      scores["CFO / net profit"] =
+        0;
+
+    }
+
+    else if (
+      row.cash_conversion < 0.5
+    ) {
+
+      scores["CFO / net profit"] =
+        25;
+
+    }
+
+    else if (
+      row.cash_conversion < 0.75
+    ) {
+
+      scores["CFO / net profit"] =
+        45;
+
+    }
+
+    else if (
+      row.cash_conversion < 1
+    ) {
+
+      scores["CFO / net profit"] =
+        65;
+
+    }
+
+    else if (
+      row.cash_conversion <= 1.5
+    ) {
+
+      scores["CFO / net profit"] =
+        90;
+
+    }
+
+    else {
+
+      /*
+       * Very high CFO/profit is good,
+       * but may reflect working-capital timing.
+       */
+
+      scores["CFO / net profit"] =
+        85;
+
+    }
+
+  }
+
+
+  /* ========================================================
+     WORKING-CAPITAL EFFICIENCY
+     ======================================================== */
 
   const efficiencyInputs = [];
-  if (row.receivable_days != null) {
-    efficiencyInputs.push(clamp(100 - Math.max(0, row.receivable_days - 30)));
+
+
+  if (
+    row.receivable_days != null &&
+    Number.isFinite(
+      row.receivable_days
+    ) &&
+    row.receivable_days >= 0
+  ) {
+
+    let score;
+
+
+    if (
+      row.receivable_days <= 30
+    ) {
+
+      score =
+        95;
+
+    }
+
+    else if (
+      row.receivable_days <= 60
+    ) {
+
+      score =
+        80;
+
+    }
+
+    else if (
+      row.receivable_days <= 90
+    ) {
+
+      score =
+        60;
+
+    }
+
+    else if (
+      row.receivable_days <= 120
+    ) {
+
+      score =
+        40;
+
+    }
+
+    else {
+
+      score =
+        20;
+
+    }
+
+
+    efficiencyInputs.push(
+      score
+    );
+
   }
-  if (row.inventory_days != null) {
-    efficiencyInputs.push(clamp(100 - Math.max(0, row.inventory_days - 45) * 0.6));
+
+
+  if (
+    row.inventory_days != null &&
+    Number.isFinite(
+      row.inventory_days
+    ) &&
+    row.inventory_days >= 0
+  ) {
+
+    let score;
+
+
+    if (
+      row.inventory_days <= 45
+    ) {
+
+      score =
+        90;
+
+    }
+
+    else if (
+      row.inventory_days <= 90
+    ) {
+
+      score =
+        75;
+
+    }
+
+    else if (
+      row.inventory_days <= 150
+    ) {
+
+      score =
+        55;
+
+    }
+
+    else if (
+      row.inventory_days <= 250
+    ) {
+
+      score =
+        35;
+
+    }
+
+    else {
+
+      score =
+        15;
+
+    }
+
+
+    efficiencyInputs.push(
+      score
+    );
+
   }
-  if (efficiencyInputs.length) {
-    scores.Efficiency = efficiencyInputs.reduce((a, b) => a + b, 0) / efficiencyInputs.length;
+
+
+  if (
+    efficiencyInputs.length
+  ) {
+
+    scores.Efficiency =
+
+      efficiencyInputs.reduce(
+        (sum, value) =>
+          sum + value,
+        0
+      )
+
+      /
+
+      efficiencyInputs.length;
+
   }
+
+
+  /* ========================================================
+     FINAL VALIDATION
+     ======================================================== */
+
+  for (
+    const key of Object.keys(
+      scores
+    )
+  ) {
+
+    const value =
+      scores[key];
+
+
+    if (
+      !Number.isFinite(
+        value
+      )
+    ) {
+
+      delete scores[key];
+
+      continue;
+
+    }
+
+
+    scores[key] =
+      clamp(value);
+
+  }
+
 
   return scores;
 
