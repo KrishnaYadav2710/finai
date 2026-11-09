@@ -603,27 +603,44 @@ function calculateRow(
 
       : null;
 
+const capitalEmployed =
 
-  const capitalEmployed =
+  row.total_equity != null &&
+  row.total_debt != null &&
+  row.cash != null
 
-    row.total_assets != null &&
-    row.current_liabilities != null
+    ? row.total_equity +
+      row.total_debt -
+      row.cash
 
-      ? row.total_assets -
-        row.current_liabilities
+    : row.total_assets != null &&
+      row.current_liabilities != null
 
-      : null;
+    ? row.total_assets -
+      row.current_liabilities
+
+    : null;
 
 
-  const previousCapitalEmployed =
+const previousCapitalEmployed =
 
-    previous?.total_assets != null &&
-    previous?.current_liabilities != null
+  previous?.total_equity != null &&
+  previous?.total_debt != null &&
+  previous?.cash != null
 
-      ? previous.total_assets -
-        previous.current_liabilities
+    ? previous.total_equity +
+      previous.total_debt -
+      previous.cash
 
-      : null;
+    : previous?.total_assets != null &&
+      previous?.current_liabilities != null
+
+    ? previous.total_assets -
+      previous.current_liabilities
+
+    : null;
+
+
 
 
   const averageCapital =
