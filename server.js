@@ -2049,6 +2049,15 @@ financial statements.
         );
 
       }
+     /*
+ * Normalize all extracted monetary values
+ * before they reach the frontend or database.
+ */
+
+result.financials =
+  normalizeFinancialUnitsToCrore(
+    result.financials
+  );
 
 
       /*
