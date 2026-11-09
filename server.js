@@ -2506,11 +2506,47 @@ if (
          * it did not classify as currently listed.
          */
 
-        result.company.ticker =
-          null;
+       const allowedListingStatuses =
+  new Set([
+    "listed",
+    "unlisted",
+    "pre-IPO",
+    "proposed listing",
+    "unknown"
+  ]);
 
-        result.company.exchange =
-          null;
+
+if (
+  !allowedListingStatuses.has(
+    result.company.listing_status
+  )
+) {
+
+  result.company.listing_status =
+    "unknown";
+
+}
+
+
+if (
+  result.company.listing_status !==
+  "listed"
+) {
+
+  result.company.ticker =
+    null;
+
+  result.company.exchange =
+    null;
+
+  result.company.nse_code =
+    null;
+
+  result.company.bse_code =
+    null;
+
+}
+
 
       }
 
