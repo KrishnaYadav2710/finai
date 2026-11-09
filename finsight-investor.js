@@ -4487,8 +4487,8 @@ $("#fetchMarketPrice")
             false;
 
 
-          button.textContent =
-            "Retry price & valuation";
+         button.textContent =
+            "Fetch price & calculate valuation";
 
 
           return;
@@ -4560,9 +4560,10 @@ $("#fetchMarketPrice")
         button.disabled =
           false;
 
+      button.textContent =
+         "Fetch price & calculate valuation";
 
-        button.textContent =
-          "Retry price & valuation";
+
             }
 
     }
