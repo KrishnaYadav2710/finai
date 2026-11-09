@@ -640,29 +640,46 @@ const previousCapitalEmployed =
 
     : null;
 
+const averageCapital =
+
+  capitalEmployed != null &&
+  previousCapitalEmployed != null
+
+    ? average(
+        capitalEmployed,
+        previousCapitalEmployed
+      )
+
+    : null;
 
 
+const averageEquity =
 
-  const averageCapital =
-    average(
-      capitalEmployed,
-      previousCapitalEmployed
-    );
+  row.total_equity != null &&
+  previous?.total_equity != null
 
+    ? average(
+        row.total_equity,
+        previous.total_equity
+      )
 
-  const averageEquity =
-    average(
-      row.total_equity,
-      previous?.total_equity
-    );
+    : null;
 
 
-  const averageAssets =
-    average(
-      row.total_assets,
-      previous?.total_assets
-    );
+const averageAssets =
 
+  row.total_assets != null &&
+  previous?.total_assets != null
+
+    ? average(
+        row.total_assets,
+        previous.total_assets
+      )
+
+    : null;
+
+
+  
 
   const averageReceivables =
     average(
