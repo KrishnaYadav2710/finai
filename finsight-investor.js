@@ -4201,15 +4201,14 @@ async function fetchAutomaticMarketData() {
        */
 
       if (
-        response.status === 429
-      ) {
+  response.status === 429
+) {
 
-        throw new Error(
-          payload?.error ||
-          "Alpha Vantage request limit has been reached. Try again after the provider limit resets."
-        );
+  throw new Error(
+    "Market data limit reached. Please try again later."
+  );
 
-      }
+}
 
 
       throw new Error(
