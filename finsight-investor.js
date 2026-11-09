@@ -838,15 +838,26 @@ function calculateRow(
    * Never silently treat missing cash as zero.
    */
 
-  const netDebt =
+ const debt =
+  finite(
+    row.total_debt
+  );
 
-    row.total_debt != null &&
-    row.cash != null
 
-      ? row.total_debt -
-        row.cash
+const cash =
+  finite(
+    row.cash
+  );
 
-      : null;
+
+const netDebt =
+
+  debt != null &&
+  cash != null
+
+    ? debt - cash
+
+    : null;
 
 
   /*
