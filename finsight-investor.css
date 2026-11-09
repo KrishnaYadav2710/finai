@@ -3652,3 +3652,403 @@ footer strong {
     min-width: 0;
   }
 }
+
+/* ============================================================
+   32. MARKET PRICE / MANUAL VALUATION
+   FINAL OVERRIDES
+   ============================================================ */
+
+/*
+ * Both automatic and manual valuation buttons
+ * intentionally use the same visual system.
+ */
+
+#fetchMarketPrice,
+#useManualMarketPrice {
+
+  display:
+    inline-flex;
+
+  align-items:
+    center;
+
+  justify-content:
+    center;
+
+  width:
+    100%;
+
+  min-width:
+    0;
+
+  min-height:
+    52px;
+
+  margin:
+    16px 0 0;
+
+  padding:
+    0 18px;
+
+  border:
+    1px solid
+    var(--lime);
+
+  border-radius:
+    4px;
+
+  background:
+    var(--lime);
+
+  color:
+    var(--surface-darker);
+
+  font-family:
+    var(--font);
+
+  font-size:
+    13px;
+
+  font-weight:
+    750;
+
+  line-height:
+    1.2;
+
+  letter-spacing:
+    0.01em;
+
+  text-align:
+    center;
+
+  cursor:
+    pointer;
+
+  appearance:
+    none;
+
+  -webkit-appearance:
+    none;
+
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    transform 120ms ease,
+    opacity 120ms ease;
+
+}
+
+
+/*
+ * Manual button is inside the row,
+ * so it must not inherit the top margin.
+ */
+
+#useManualMarketPrice {
+
+  margin:
+    0;
+
+}
+
+
+@media (hover: hover) {
+
+  #fetchMarketPrice:hover,
+  #useManualMarketPrice:hover {
+
+    background:
+      #d5ef9d;
+
+    border-color:
+      #d5ef9d;
+
+  }
+
+}
+
+
+#fetchMarketPrice:active,
+#useManualMarketPrice:active {
+
+  transform:
+    translateY(1px);
+
+}
+
+
+#fetchMarketPrice:disabled,
+#useManualMarketPrice:disabled {
+
+  opacity:
+    0.6;
+
+  cursor:
+    not-allowed;
+
+}
+
+
+/* ============================================================
+   MANUAL PRICE AREA
+   ============================================================ */
+
+.manual-price-box {
+
+  width:
+    100%;
+
+  margin-top:
+    18px;
+
+  padding-top:
+    18px;
+
+  border-top:
+    1px solid
+    rgba(
+      255,
+      255,
+      255,
+      0.18
+    );
+
+}
+
+
+.manual-price-label {
+
+  display:
+    block;
+
+  margin-bottom:
+    11px;
+
+  color:
+    rgba(
+      255,
+      255,
+      255,
+      0.88
+    );
+
+  font-family:
+    var(--font);
+
+  font-size:
+    12px;
+
+  font-weight:
+    700;
+
+  line-height:
+    1.4;
+
+}
+
+
+.manual-price-row {
+
+  display:
+    grid;
+
+  grid-template-columns:
+    minmax(
+      0,
+      1fr
+    )
+    minmax(
+      0,
+      1.15fr
+    );
+
+  gap:
+    10px;
+
+  align-items:
+    stretch;
+
+}
+
+
+/* ============================================================
+   MANUAL PRICE INPUT
+   ============================================================ */
+
+#manualMarketPrice {
+
+  width:
+    100%;
+
+  min-width:
+    0;
+
+  height:
+    52px;
+
+  margin:
+    0;
+
+  padding:
+    0 14px;
+
+  border:
+    1px solid
+    rgba(
+      255,
+      255,
+      255,
+      0.30
+    );
+
+  border-radius:
+    4px;
+
+  outline:
+    none;
+
+  background:
+    var(--white);
+
+  color:
+    var(--ink);
+
+  font-family:
+    var(--font);
+
+  font-size:
+    14px;
+
+  font-weight:
+    500;
+
+  appearance:
+    textfield;
+
+  -moz-appearance:
+    textfield;
+
+}
+
+
+#manualMarketPrice::-webkit-inner-spin-button,
+#manualMarketPrice::-webkit-outer-spin-button {
+
+  margin:
+    0;
+
+  -webkit-appearance:
+    none;
+
+}
+
+
+#manualMarketPrice::placeholder {
+
+  color:
+    #8b9692;
+
+  opacity:
+    1;
+
+}
+
+
+#manualMarketPrice:focus {
+
+  border-color:
+    var(--lime);
+
+  box-shadow:
+    0 0 0 2px
+    rgba(
+      201,
+      232,
+      139,
+      0.16
+    );
+
+}
+
+
+/* ============================================================
+   MANUAL PRICE DESCRIPTION
+   ============================================================ */
+
+.manual-price-box > small {
+
+  display:
+    block;
+
+  margin-top:
+    9px;
+
+  color:
+    rgba(
+      255,
+      255,
+      255,
+      0.66
+    );
+
+  font-size:
+    10px;
+
+  font-weight:
+    400;
+
+  line-height:
+    1.5;
+
+}
+
+
+/* ============================================================
+   COMPANY MARKET CARD BUTTON NORMALIZATION
+   ============================================================ */
+
+.company-market button {
+
+  font-family:
+    var(--font);
+
+}
+
+
+.company-market #priceDisplay {
+
+  font-family:
+    var(--font);
+
+  font-weight:
+    750;
+
+}
+
+
+/* ============================================================
+   TABLET / MOBILE
+   ============================================================ */
+
+@media (
+  max-width: 700px
+) {
+
+  .manual-price-row {
+
+    grid-template-columns:
+      1fr;
+
+  }
+
+
+  #fetchMarketPrice,
+  #useManualMarketPrice,
+  #manualMarketPrice {
+
+    width:
+      100%;
+
+  }
+
+}
