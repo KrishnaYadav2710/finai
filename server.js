@@ -2075,26 +2075,24 @@ function normalizeFinancialUnitsToCrore(
 app.post(
   "/api/ai/extract-financials",
 
-  upload.single(
-    "report"
-  ),
+  upload.single("report"),
 
-  async (
-    req,
-    res
-  ) => {
+  async (req, res) => {
 
     try {
+
+      /* ------------------------------------------------------
+         REQUIRE PDF
+         ------------------------------------------------------ */
 
       if (!req.file) {
 
         return res
           .status(400)
           .json({
-
-            error:
-              "Upload an annual-report PDF."
-
+            ok: false,
+            error: "Upload an annual-report PDF.",
+            code: "REPORT_REQUIRED"
           });
 
       }
@@ -2105,6 +2103,10 @@ app.post(
           req.body.pdfContext
         );
 
+
+      /* ------------------------------------------------------
+         EXTRACTION PROMPT
+         ------------------------------------------------------ */
 
       const prompt = `
 
@@ -2135,6 +2137,8 @@ Identify:
 - ticker ONLY if explicitly supported
 - exchange ONLY if explicitly supported
 - ISIN where disclosed
+- NSE code where explicitly disclosed
+- BSE security code where explicitly disclosed
 - reporting currency
 
 listing_status MUST be one of:
@@ -2150,10 +2154,16 @@ IMPORTANT:
 
 Do NOT guess ticker or exchange.
 
+Do NOT infer that a company is listed merely because the
+report discusses an IPO, proposed listing or stock exchange.
+
 A proposed IPO does NOT mean the company is already listed.
 
 If the report does not establish a current public ticker,
 return ticker and exchange as null.
+
+Only return nse_code or bse_code when explicitly supported
+by the annual-report evidence.
 
 
 ============================================================
@@ -2172,10 +2182,13 @@ For group-level investor analysis:
 
 4. If multiple annual reports contain the same financial
    year as a comparative figure, use the newest audited
-   annual report presentation unless there is a clear reason
-   not to.
+   annual-report presentation unless there is a clear
+   evidence-based reason not to.
 
-5. FINANCIAL UNITS ARE CRITICAL.
+
+============================================================
+FINANCIAL UNITS — CRITICAL
+============================================================
 
 Read the unit printed on the audited financial statement itself.
 
@@ -2184,7 +2197,11 @@ financial statement.
 
 DO NOT convert million, lakh, billion or crore values yourself.
 
-Examples:
+The FinSight server performs deterministic unit conversion
+after extraction.
+
+
+Example 1:
 
 If the audited statement says:
 
@@ -2201,6 +2218,9 @@ return:
 
 DO NOT return 16676.2.
 
+
+Example 2:
+
 If the audited statement says:
 
 "INR billion"
@@ -2216,66 +2236,127 @@ return:
 
 DO NOT convert it to crore.
 
-The FinSight server performs deterministic unit conversion
-after extraction.
+
+Example 3:
+
+If the audited statement says:
+
+"₹ crore"
+
+and revenue is:
+
+16676.2
+
+return:
+
+"source_unit": "INR crore",
+"revenue": 16676.2
+
 
 All monetary values within a financial-year row must correspond
 to the declared source_unit.
 
 If different audited statements use different units and the
 values cannot be represented safely under one source_unit,
-do not silently convert or combine them. Explain the issue in
-extraction_notes and return unsupported fields as null.
+do not silently convert or combine them.
+
+Explain the issue in extraction_notes and return unsupported
+fields as null.
 
 Never change the scale of a reported number silently.
 
-6. shares_outstanding should be returned in CRORE SHARES
-   when reliably calculable.
+If the source unit cannot be established reliably, return the
+affected monetary values as null rather than guessing.
 
-7. If a field cannot be reliably extracted, return null.
 
-8. Never use zero to represent missing information.
+============================================================
+MISSING DATA RULE
+============================================================
+
+If a financial value cannot be reliably established:
+
+return null.
+
+Never use zero to represent missing information.
+
+Zero may only be returned when the audited statement actually
+reports zero.
 
 
 ============================================================
 EXTRACT EVERY AVAILABLE REPORTING YEAR
 ============================================================
 
-SOURCE PRIORITY (MANDATORY):
+SOURCE PRIORITY — MANDATORY:
 
-A. First locate the audited CONSOLIDATED Balance Sheet, Consolidated Statement of Profit and Loss, and Consolidated Cash Flow Statement.
-B. Extract financial-statement numbers from those audited statements and their notes.
-C. Do NOT use "Year in Review", highlights, investor presentation KPIs, pre-sales, adjusted PAT, adjusted EBITDA, or standalone statements as substitutes for audited consolidated line items when consolidated statements exist.
-D. Use the exact comparative prior-year column from the newest audited consolidated statements for the prior year.
-E. EBITDA may come from an explicitly reported consolidated EBITDA disclosure; if it is an adjusted/non-GAAP KPI, mark it clearly in extraction_notes and do not present it as audited EBITDA.
-F. Return source_unit and source_pages for auditability.
+A. First locate the audited CONSOLIDATED Balance Sheet.
 
-For each usable financial year extract:
+B. Locate the audited CONSOLIDATED Statement of Profit and Loss.
+
+C. Locate the audited CONSOLIDATED Cash Flow Statement.
+
+D. Use relevant audited notes where required.
+
+E. Extract financial-statement numbers from those audited
+   statements and notes.
+
+F. Do NOT use the following as substitutes for audited
+   consolidated financial-statement values when consolidated
+   statements exist:
+
+- Year in Review
+- highlights
+- investor presentation KPIs
+- pre-sales
+- bookings
+- adjusted PAT
+- adjusted EBITDA
+- standalone financial statements
+
+G. Use the exact comparative prior-year column from the newest
+   audited consolidated statements for the prior year.
+
+H. EBITDA may come from an explicitly reported consolidated
+   EBITDA disclosure.
+
+If EBITDA is adjusted/non-GAAP, clearly state this in
+extraction_notes.
+
+I. Return source_unit and source_pages for auditability.
+
+
+============================================================
+FINANCIAL FIELDS
+============================================================
+
+For each usable financial year extract where reliably supported:
 
 - revenue
 - EBITDA
-- cost of goods sold / comparable operating cost if clearly available
+- cost of goods sold / comparable operating cost
 - operating income / EBIT
-- net income attributable/appropriate for group analysis
+- net income appropriate for consolidated group analysis
 - total assets
 - current assets
 - current liabilities
 - total borrowings / debt
-- cash and cash equivalents where reliably available
+- cash and cash equivalents
 - total equity
 - operating cash flow
-- capital expenditure where reliably available
+- capital expenditure
 - inventory
 - trade/accounts receivable
 - trade/accounts payable
 - finance cost
 - shares outstanding
 
+
 For each row identify:
 
 - financial year
 - year-end year
 - statement basis
+- exact source unit
 - source pages when reliable
 - extraction notes
 
@@ -2287,17 +2368,22 @@ EBITDA RULE
 Use reported EBITDA when explicitly disclosed.
 
 If EBITDA is not explicitly reported but can be reliably
-calculated from disclosed financial data, calculate it and
-state that in extraction_notes.
+calculated from disclosed audited financial information,
+calculate it and clearly state that calculation in
+extraction_notes.
 
-Otherwise return null.
+If EBITDA cannot be established reliably, return null.
+
+Do not substitute an adjusted operating KPI for EBITDA without
+identifying it as adjusted/non-GAAP.
+
 
 ============================================================
 SHARES OUTSTANDING RULE
 ============================================================
 
-Extract PERIOD-END issued/outstanding equity shares when reliably
-supported by the annual report.
+Extract PERIOD-END issued/outstanding equity shares when
+reliably supported by the annual report.
 
 IMPORTANT:
 
@@ -2305,26 +2391,30 @@ Return the RAW number exactly as supported by the report.
 
 Also return its unit separately.
 
-Examples:
+
+Example:
 
 125000000 shares:
 
 "shares_outstanding": 125000000,
 "shares_outstanding_unit": "shares"
 
+
 1250 lakh shares:
 
 "shares_outstanding": 1250,
 "shares_outstanding_unit": "lakh shares"
+
 
 12.5 crore shares:
 
 "shares_outstanding": 12.5,
 "shares_outstanding_unit": "crore shares"
 
+
 Do NOT convert shares into crore shares yourself.
 
-The server performs deterministic conversion.
+The FinSight server performs deterministic conversion.
 
 Do not confuse:
 
@@ -2338,10 +2428,13 @@ Do not confuse:
 For market capitalization, period-end outstanding equity shares
 are required.
 
-If only weighted-average EPS shares are available, return
-shares_outstanding as null.
+If only weighted-average EPS shares are available, return:
+
+"shares_outstanding": null,
+"shares_outstanding_unit": null
 
 If the number or unit is uncertain, return null.
+
 
 ============================================================
 OUTPUT
@@ -2369,6 +2462,7 @@ Return VALID JSON ONLY:
       "financial_year": "FY2025-26",
       "year": 2026,
       "statement_basis": "Consolidated",
+
       "source_unit": "INR million|INR lakh|INR crore|INR billion|other exact statement unit",
 
       "revenue": null,
@@ -2415,15 +2509,20 @@ Return only supported reporting years.
 Do not manufacture a complete row by combining incompatible
 financial statements.
 
+Do not invent missing values.
+
 `;
 
+
+      /* ------------------------------------------------------
+         CALL GEMINI
+         ------------------------------------------------------ */
 
       const text =
         await geminiGenerate(
           [
             {
-              text:
-                prompt
+              text: prompt
             },
 
             pdfPart(
@@ -2431,8 +2530,7 @@ financial statements.
             )
           ],
           {
-            json:
-              true
+            json: true
           }
         );
 
@@ -2441,11 +2539,15 @@ financial statements.
         safeJSON(text);
 
 
+      /* ------------------------------------------------------
+         VALIDATE TOP-LEVEL RESPONSE
+         ------------------------------------------------------ */
+
       if (
         !result ||
-        !Array.isArray(
-          result.financials
-        )
+        typeof result !== "object" ||
+        Array.isArray(result) ||
+        !Array.isArray(result.financials)
       ) {
 
         throw new Error(
@@ -2453,154 +2555,395 @@ financial statements.
         );
 
       }
-     /*
- * Normalize all extracted monetary values
- * before they reach the frontend or database.
- */
 
-result.financials =
-  normalizeFinancialUnitsToCrore(
-    result.financials
-  );
 
-     /*
- * Remove unusable rows and protect the frontend
- * from malformed AI extraction.
- */
+      /* ------------------------------------------------------
+         NORMALIZE MONETARY UNITS
 
-result.financials =
-  result.financials.filter(
-    row => {
+         normalizeFinancialUnitsToCrore() must convert:
+         million -> crore
+         lakh    -> crore
+         billion -> crore
+         crore   -> crore
+         ------------------------------------------------------ */
+
+      result.financials =
+        normalizeFinancialUnitsToCrore(
+          result.financials
+        );
+
+
+      /* ------------------------------------------------------
+         NORMALIZE SHARES OUTSTANDING
+
+         Frontend convention:
+         shares_outstanding = CRORE SHARES
+         ------------------------------------------------------ */
+
+      result.financials =
+        result.financials.map(
+          row => {
+
+            if (
+              !row ||
+              typeof row !== "object"
+            ) {
+
+              return row;
+
+            }
+
+
+            const rawShares =
+              finiteFinancialNumber(
+                row.shares_outstanding
+              );
+
+
+            const rawUnit =
+              String(
+                row.shares_outstanding_unit ||
+                ""
+              )
+                .trim()
+                .toLowerCase();
+
+
+            let croreShares =
+              null;
+
+
+            if (
+              rawShares != null &&
+              rawShares >= 0
+            ) {
+
+              /*
+               * Already crore shares.
+               */
+
+              if (
+                rawUnit.includes("crore") ||
+                /\bcr\b/.test(rawUnit)
+              ) {
+
+                croreShares =
+                  rawShares;
+
+              }
+
+
+              /*
+               * Lakh shares -> crore shares.
+               *
+               * 100 lakh = 1 crore.
+               */
+
+              else if (
+                rawUnit.includes("lakh") ||
+                rawUnit.includes("lac")
+              ) {
+
+                croreShares =
+                  rawShares / 100;
+
+              }
+
+
+              /*
+               * Million shares -> crore shares.
+               *
+               * 10 million = 1 crore.
+               */
+
+              else if (
+                rawUnit.includes("million") ||
+                /\bmn\b/.test(rawUnit)
+              ) {
+
+                croreShares =
+                  rawShares / 10;
+
+              }
+
+
+              /*
+               * Billion shares -> crore shares.
+               *
+               * 1 billion = 100 crore.
+               */
+
+              else if (
+                rawUnit.includes("billion") ||
+                /\bbn\b/.test(rawUnit)
+              ) {
+
+                croreShares =
+                  rawShares * 100;
+
+              }
+
+
+              /*
+               * Plain individual shares.
+               *
+               * 1 crore = 10,000,000 shares.
+               */
+
+              else if (
+                rawUnit === "share" ||
+                rawUnit === "shares" ||
+                rawUnit.includes(
+                  "number of shares"
+                )
+              ) {
+
+                croreShares =
+                  rawShares / 10000000;
+
+              }
+
+            }
+
+
+            return {
+
+              ...row,
+
+              original_shares_outstanding:
+                rawShares,
+
+              original_shares_outstanding_unit:
+                row.shares_outstanding_unit ||
+                null,
+
+              shares_outstanding:
+                croreShares,
+
+              shares_outstanding_unit:
+                croreShares == null
+                  ? null
+                  : "crore shares",
+
+              extraction_notes:
+                [
+                  row.extraction_notes,
+
+                  rawShares != null &&
+                  croreShares == null
+                    ? `Shares outstanding were not used because the share unit "${row.shares_outstanding_unit || "unknown"}" could not be normalized reliably.`
+                    : null,
+
+                  rawShares != null &&
+                  croreShares != null &&
+                  rawUnit !== "crore shares"
+                    ? `Server normalized shares outstanding from ${row.shares_outstanding_unit || "reported share unit"} to crore shares.`
+                    : null
+
+                ]
+                  .filter(Boolean)
+                  .join(" ")
+
+            };
+
+          }
+        );
+
+
+      /* ------------------------------------------------------
+         REMOVE MALFORMED / EMPTY FINANCIAL ROWS
+         ------------------------------------------------------ */
+
+      result.financials =
+        result.financials.filter(
+          row => {
+
+            if (
+              !row ||
+              typeof row !== "object"
+            ) {
+
+              return false;
+
+            }
+
+
+            const year =
+              Number(
+                row.year
+              );
+
+
+            if (
+              !Number.isFinite(year) ||
+              year < 1900 ||
+              year > 2200
+            ) {
+
+              return false;
+
+            }
+
+
+            /*
+             * Require at least one meaningful
+             * financial-statement value.
+             */
+
+            const financialFields = [
+
+              "revenue",
+              "ebitda",
+              "operating_income",
+              "net_income",
+
+              "total_assets",
+              "total_equity",
+
+              "operating_cash_flow"
+
+            ];
+
+
+            return financialFields.some(
+              field =>
+                finiteFinancialNumber(
+                  row[field]
+                ) != null
+            );
+
+          }
+        );
+
 
       if (
-        !row ||
-        typeof row !== "object"
+        !result.financials.length
       ) {
-        return false;
+
+        throw new Error(
+          "The annual report was read, but no reliable financial-statement rows could be extracted."
+        );
+
       }
 
 
-      if (
-        !Number.isFinite(
-          Number(
-            row.year
-          )
-        )
-      ) {
-        return false;
-      }
-
-
-      /*
-       * Require at least one meaningful
-       * financial-statement value.
-       */
-
-      const financialFields = [
-
-        "revenue",
-        "ebitda",
-        "operating_income",
-        "net_income",
-
-        "total_assets",
-        "total_equity",
-
-        "operating_cash_flow"
-
-      ];
-
-
-      return financialFields.some(
-        field =>
-          finiteFinancialNumber(
-            row[field]
-          ) != null
-      );
-
-    }
-  );
-
-
-if (
-  !result.financials.length
-) {
-
-  throw new Error(
-    "The annual report was read, but no reliable financial-statement rows could be extracted."
-  );
-
-}
-
-
-      /*
-       * Defensive cleanup.
-       */
+      /* ------------------------------------------------------
+         COMPANY OBJECT
+         ------------------------------------------------------ */
 
       result.company =
-        result.company ||
-        {};
+        result.company &&
+        typeof result.company === "object" &&
+        !Array.isArray(result.company)
+
+          ? result.company
+
+          : {};
+
+
+      /* ------------------------------------------------------
+         LISTING STATUS VALIDATION
+         ------------------------------------------------------ */
+
+      const allowedListingStatuses =
+        new Set([
+          "listed",
+          "unlisted",
+          "pre-IPO",
+          "proposed listing",
+          "unknown"
+        ]);
 
 
       if (
-        result.company
-          .listing_status !==
+        !allowedListingStatuses.has(
+          result.company.listing_status
+        )
+      ) {
+
+        result.company.listing_status =
+          "unknown";
+
+      }
+
+
+      /*
+       * Never retain public-market identifiers when the
+       * extraction does not establish that the company is
+       * currently listed.
+       */
+
+      if (
+        result.company.listing_status !==
         "listed"
       ) {
 
-        /*
-         * Never retain an AI-guessed ticker for a company
-         * it did not classify as currently listed.
-         */
+        result.company.ticker =
+          null;
 
-       const allowedListingStatuses =
-  new Set([
-    "listed",
-    "unlisted",
-    "pre-IPO",
-    "proposed listing",
-    "unknown"
-  ]);
+        result.company.exchange =
+          null;
 
+        result.company.nse_code =
+          null;
 
-if (
-  !allowedListingStatuses.has(
-    result.company.listing_status
-  )
-) {
-
-  result.company.listing_status =
-    "unknown";
-
-}
-
-
-if (
-  result.company.listing_status !==
-  "listed"
-) {
-
-  result.company.ticker =
-    null;
-
-  result.company.exchange =
-    null;
-
-  result.company.nse_code =
-    null;
-
-  result.company.bse_code =
-    null;
-
-}
-
+        result.company.bse_code =
+          null;
 
       }
 
 
-      /*
-       * Save extracted report if database is available.
-       */
+      /* ------------------------------------------------------
+         VALIDATION OBJECT
+         ------------------------------------------------------ */
+
+      result.validation =
+        result.validation &&
+        typeof result.validation === "object" &&
+        !Array.isArray(result.validation)
+
+          ? result.validation
+
+          : {};
+
+
+      result.validation.years_found =
+        result.financials
+          .map(
+            row =>
+              row.financial_year ||
+              row.year
+          )
+          .filter(Boolean);
+
+
+      if (
+        !Array.isArray(
+          result.validation.missing_critical_fields
+        )
+      ) {
+
+        result.validation.missing_critical_fields =
+          [];
+
+      }
+
+
+      if (
+        !Array.isArray(
+          result.validation.warnings
+        )
+      ) {
+
+        result.validation.warnings =
+          [];
+
+      }
+
+
+      /* ------------------------------------------------------
+         SAVE EXTRACTED REPORT
+         ------------------------------------------------------ */
 
       let persisted =
         null;
@@ -2614,33 +2957,25 @@ if (
             await upsertCompany({
 
               name:
-                result.company
-                  .legal_name
-
-                ||
-
-                result.company
-                  .name
-
-                ||
-
+                result.company.legal_name ||
+                result.company.name ||
                 "Unknown company",
 
               ticker:
-                result.company
-                  .ticker,
+                result.company.ticker ||
+                null,
 
               exchange:
-                result.company
-                  .exchange,
+                result.company.exchange ||
+                null,
 
               listingStatus:
-                result.company
-                  .listing_status,
+                result.company.listing_status ||
+                "unknown",
 
               isin:
-                result.company
-                  .isin
+                result.company.isin ||
+                null
 
             });
 
@@ -2659,16 +2994,13 @@ if (
 
 
           const years =
-
             result.financials
-
               .map(
                 row =>
                   Number(
                     row.year
                   )
               )
-
               .filter(
                 Number.isFinite
               );
@@ -2712,8 +3044,7 @@ if (
               [
                 companyRow.id,
 
-                req.file
-                  .originalname,
+                req.file.originalname,
 
                 latestYear,
 
@@ -2722,8 +3053,7 @@ if (
                     result.financials,
 
                   validation:
-                    result.validation ||
-                    {},
+                    result.validation,
 
                   pdfContext:
                     pdfContext ||
@@ -2753,17 +3083,31 @@ if (
 
         }
 
-        catch (error) {
+        catch (databaseError) {
+
+          /*
+           * Database failure must NOT destroy a successful
+           * annual-report extraction.
+           */
 
           console.error(
             "Failed to persist financial extraction:",
-            error
+            databaseError
+          );
+
+
+          result.validation.warnings.push(
+            "Financial extraction succeeded, but the result could not be saved to research memory."
           );
 
         }
 
       }
 
+
+      /* ------------------------------------------------------
+         SUCCESS
+         ------------------------------------------------------ */
 
       return res.json({
 
@@ -2777,180 +3121,200 @@ if (
 
     }
 
+
+    /* ========================================================
+       EXTRACTION ERROR HANDLER
+       ======================================================== */
+
     catch (error) {
 
-  console.error(
-    "Financial extraction full error:",
-    error
-  );
+      console.error(
+        "Financial extraction full error:",
+        error
+      );
 
 
-  const upstreamStatus =
-    Number.isInteger(
-      error?.status
-    )
-      ? error.status
-      : null;
-
-
-  let status =
-    500;
-
-
-  let message =
-    "FinSight could not extract reliable financial statements from this annual report.";
-
-
-  let code =
-    "FINANCIAL_EXTRACTION_FAILED";
-
-
-  if (
-    upstreamStatus === 400
-  ) {
-
-    status =
-      400;
-
-    code =
-      "INVALID_REPORT";
-
-    message =
-      "The annual report could not be processed. Confirm that the PDF is readable and contains financial statements.";
-
-  }
-
-
-  else if (
-    upstreamStatus === 413
-  ) {
-
-    status =
-      413;
-
-    code =
-      "REPORT_TOO_LARGE";
-
-    message =
-      "The annual-report file is too large to process.";
-
-  }
-
-
-  else if (
-    upstreamStatus === 429
-  ) {
-
-    status =
-      429;
-
-    code =
-      "AI_RATE_LIMIT";
-
-    message =
-      "The AI extraction service is temporarily rate-limited. Please try again shortly.";
-
-  }
-
-
-  else if (
-    upstreamStatus === 401 ||
-    upstreamStatus === 403
-  ) {
-
-    status =
-      503;
-
-    code =
-      "AI_AUTH_ERROR";
-
-    message =
-      "The AI extraction service is temporarily unavailable because its API credentials were rejected.";
-
-  }
-
-
-  else if (
-    upstreamStatus != null &&
-    upstreamStatus >= 500
-  ) {
-
-    status =
-      503;
-
-    code =
-      "AI_PROVIDER_UNAVAILABLE";
-
-    message =
-      "The AI extraction provider is temporarily unavailable. Please try again.";
-
-  }
-
-
-  else if (
-    error?.message ===
-    "Gemini AI is not configured."
-  ) {
-
-    status =
-      503;
-
-    code =
-      "AI_NOT_CONFIGURED";
-
-    message =
-      "FinSight AI extraction is not configured on the server.";
-
-  }
-
-
-  else if (
-    typeof error?.message === "string" &&
-    error.message.trim()
-  ) {
-
-    const safeMessage =
-      error.message.trim();
-
-
-    message =
-      safeMessage.length <= 500
-        ? safeMessage
-        : "Financial extraction failed because the AI provider returned an unexpected error.";
-
-  }
-
-
-  return res
-    .status(status)
-    .json({
-
-      ok:
-        false,
-
-      error:
-        message,
-
-      code
-
-    });
-
-}
-
-      const status =
-        Number.isInteger(error?.status) &&
-        error.status >= 400 &&
-        error.status < 600
+      const upstreamStatus =
+        Number.isInteger(
+          error?.status
+        )
           ? error.status
-          : 500;
+          : null;
+
+
+      let status =
+        500;
+
+
+      let message =
+        "FinSight could not extract reliable financial statements from this annual report.";
+
+
+      let code =
+        "FINANCIAL_EXTRACTION_FAILED";
+
+
+      /* ------------------------------------------------------
+         BAD / UNREADABLE INPUT
+         ------------------------------------------------------ */
+
+      if (
+        upstreamStatus === 400
+      ) {
+
+        status =
+          400;
+
+        code =
+          "INVALID_REPORT";
+
+        message =
+          "The annual report could not be processed. Confirm that the PDF is readable and contains financial statements.";
+
+      }
+
+
+      /* ------------------------------------------------------
+         FILE TOO LARGE
+         ------------------------------------------------------ */
+
+      else if (
+        upstreamStatus === 413
+      ) {
+
+        status =
+          413;
+
+        code =
+          "REPORT_TOO_LARGE";
+
+        message =
+          "The annual-report file is too large to process.";
+
+      }
+
+
+      /* ------------------------------------------------------
+         PROVIDER RATE LIMIT
+         ------------------------------------------------------ */
+
+      else if (
+        upstreamStatus === 429
+      ) {
+
+        status =
+          429;
+
+        code =
+          "AI_RATE_LIMIT";
+
+        message =
+          "The AI extraction service is temporarily rate-limited. Please try again shortly.";
+
+      }
+
+
+      /* ------------------------------------------------------
+         PROVIDER AUTHENTICATION
+         ------------------------------------------------------ */
+
+      else if (
+        upstreamStatus === 401 ||
+        upstreamStatus === 403
+      ) {
+
+        status =
+          503;
+
+        code =
+          "AI_AUTH_ERROR";
+
+        message =
+          "The AI extraction service is temporarily unavailable because its API credentials were rejected.";
+
+      }
+
+
+      /* ------------------------------------------------------
+         PROVIDER SERVER ERROR
+         ------------------------------------------------------ */
+
+      else if (
+        upstreamStatus != null &&
+        upstreamStatus >= 500
+      ) {
+
+        status =
+          503;
+
+        code =
+          "AI_PROVIDER_UNAVAILABLE";
+
+        message =
+          "The AI extraction provider is temporarily unavailable. Please try again.";
+
+      }
+
+
+      /* ------------------------------------------------------
+         GEMINI NOT CONFIGURED
+         ------------------------------------------------------ */
+
+      else if (
+        error?.message ===
+        "Gemini AI is not configured."
+      ) {
+
+        status =
+          503;
+
+        code =
+          "AI_NOT_CONFIGURED";
+
+        message =
+          "FinSight AI extraction is not configured on the server.";
+
+      }
+
+
+      /* ------------------------------------------------------
+         SAFE APPLICATION ERROR
+         ------------------------------------------------------ */
+
+      else if (
+        typeof error?.message === "string" &&
+        error.message.trim()
+      ) {
+
+        const safeMessage =
+          error.message.trim();
+
+
+        message =
+          safeMessage.length <= 500
+
+            ? safeMessage
+
+            : "Financial extraction failed because the AI provider returned an unexpected error.";
+
+      }
+
 
       return res
         .status(status)
         .json({
+
           ok: false,
-          error: message,
+
+          error:
+            message,
+
+          code,
+
           providerStatus:
-            error?.providerStatus || null
+            error?.providerStatus ||
+            null
+
         });
 
     }
@@ -2962,7 +3326,6 @@ if (
 /* ============================================================
    15. ANNUAL REPORT AI
    ============================================================ */
-
 app.post(
   "/api/ai/analyze-report",
 
