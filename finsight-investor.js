@@ -7375,19 +7375,60 @@ async function runDCFRequest() {
      * result.scenarios.bull
      */
 
-    const bear =
-      result?.scenarios?.bear ||
-      null;
+    const rawBearValue =
+  finite(
+    bear?.valuePerShare
+  );
 
 
-    const base =
-      result?.scenarios?.base ||
-      null;
+const rawBaseValue =
+  finite(
+    base?.valuePerShare
+  );
 
 
-    const bull =
-      result?.scenarios?.bull ||
-      null;
+const rawBullValue =
+  finite(
+    bull?.valuePerShare
+  );
+
+
+/*
+ * A DCF can mathematically produce negative
+ * equity value when enterprise value is below
+ * net debt.
+ *
+ * Do not present that as a negative share price.
+ */
+
+const bearValue =
+  rawBearValue != null
+    ? Math.max(0, rawBearValue)
+    : null;
+
+
+const baseValue =
+  rawBaseValue != null
+    ? Math.max(0, rawBaseValue)
+    : null;
+
+
+const bullValue =
+  rawBullValue != null
+    ? Math.max(0, rawBullValue)
+    : null;
+
+
+const equityExhausted =
+  [
+    rawBearValue,
+    rawBaseValue,
+    rawBullValue
+  ].some(
+    value =>
+      value != null &&
+      value <= 0
+  );
 
 
     if (!base) {
@@ -7547,14 +7588,34 @@ async function runDCFRequest() {
         </div>
 
 
-        <small class="dcf-output-note">
+        ${
+  equityExhausted
 
-          Financial statement inputs and shares outstanding
-          come from the annual report. Growth, margin, WACC
-          and terminal-growth assumptions come from the
-          fields above.
+    ? `
 
-        </small>
+      <div class="dcf-interpretation">
+
+        One or more DCF scenarios produced enterprise
+        value at or below net debt. FinSight displays
+        the corresponding equity value per share as
+        ₹0 rather than presenting a negative share price.
+
+      </div>
+
+    `
+
+    : ""
+}
+
+
+<small class="dcf-output-note">
+
+  Financial statement inputs and shares outstanding
+  come from the annual report. Growth, margin, WACC
+  and terminal-growth assumptions come from the
+  fields above.
+
+</small>
 
       </div>
 
