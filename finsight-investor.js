@@ -682,24 +682,42 @@ const averageAssets =
   
 
   const averageReceivables =
-    average(
-      row.accounts_receivable,
-      previous?.accounts_receivable
-    );
+
+  row.accounts_receivable != null &&
+  previous?.accounts_receivable != null
+
+    ? average(
+        row.accounts_receivable,
+        previous.accounts_receivable
+      )
+
+    : null;
 
 
-  const averageInventory =
-    average(
-      row.inventory,
-      previous?.inventory
-    );
+const averageInventory =
+
+  row.inventory != null &&
+  previous?.inventory != null
+
+    ? average(
+        row.inventory,
+        previous.inventory
+      )
+
+    : null;
 
 
-  const averagePayables =
-    average(
-      row.accounts_payable,
-      previous?.accounts_payable
-    );
+const averagePayables =
+
+  row.accounts_payable != null &&
+  previous?.accounts_payable != null
+
+    ? average(
+        row.accounts_payable,
+        previous.accounts_payable
+      )
+
+    : null;
 
 
   const netDebt =
