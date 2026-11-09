@@ -5404,6 +5404,193 @@ $("#fetchMarketPrice")
     }
   );
 
+/* ============================================================
+   MANUAL SHARE PRICE VALUATION
+   ============================================================ */
+
+$("#useManualMarketPrice")
+  ?.addEventListener(
+    "click",
+    () => {
+
+      const input =
+        $("#manualMarketPrice");
+
+      const button =
+        $("#useManualMarketPrice");
+
+
+      /*
+       * Annual report must already be loaded.
+       */
+
+      if (
+        !extractedCompany ||
+        !primary?.length
+      ) {
+
+        $("#marketNote").textContent =
+          "Upload an annual report first.";
+
+        return;
+
+      }
+
+
+      /*
+       * Read manually entered share price.
+       */
+
+      const manualPrice =
+        finite(
+          input?.value
+        );
+
+
+      if (
+        manualPrice == null ||
+        manualPrice <= 0
+      ) {
+
+        $("#marketNote").textContent =
+          "Enter a valid share price greater than zero.";
+
+        input?.focus();
+
+        return;
+
+      }
+
+
+      /*
+       * IMPORTANT:
+       *
+       * ONLY the share price is manual.
+       *
+       * Shares outstanding,
+       * net profit,
+       * equity,
+       * EBITDA,
+       * revenue,
+       * debt,
+       * cash,
+       * free cash flow
+       *
+       * continue to come from the uploaded
+       * annual report.
+       */
+
+      marketData = {
+
+        price:
+          manualPrice,
+
+        currency:
+          extractedCompany?.currency ||
+          "INR",
+
+        provider:
+          "Manual share price",
+
+        symbol:
+          extractedCompany?.ticker ||
+          extractedCompany?.nse_code ||
+          extractedCompany?.bse_code ||
+          null,
+
+        identifierSource:
+          "manually entered share price",
+
+        asOf:
+          new Date()
+            .toISOString()
+            .slice(0, 10),
+
+        live:
+          false,
+
+        manual:
+          true
+
+      };
+
+
+      /*
+       * Update market display.
+       */
+
+      $("#priceDisplay").textContent =
+        `${priceMoney(
+          manualPrice
+        )} · manual`;
+
+
+      $("#marketNote").textContent =
+        "Manual share price entered. All financial inputs and shares outstanding are taken from the uploaded annual report.";
+
+
+      /*
+       * Make manual price available
+       * to the rest of FinSight.
+       */
+
+      if (
+        window.finSightResearchContext
+      ) {
+
+        window
+          .finSightResearchContext
+          .market =
+          marketData;
+
+      }
+
+
+      /*
+       * Use the EXISTING Section 21
+       * valuation engine.
+       */
+
+      renderAutomaticValuation();
+
+
+      /*
+       * Change button text after calculation.
+       */
+
+      if (button) {
+
+        button.textContent =
+          "Recalculate valuation";
+
+      }
+
+
+      /*
+       * Notify other FinSight modules.
+       */
+
+      window.dispatchEvent(
+
+        new CustomEvent(
+          "finsight:market-ready",
+          {
+            detail: {
+
+              market:
+                marketData,
+
+              valuation:
+                valuationState
+
+            }
+          }
+        )
+
+      );
+
+    }
+  );
    /* ============================================================
    21. AUTOMATIC VALUATION
    ============================================================ */
