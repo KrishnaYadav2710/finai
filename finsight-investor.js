@@ -452,12 +452,31 @@ function hideScanProgress() {
 
 }
 
-
 /* ============================================================
    5. NORMALIZE EXTRACTED FINANCIAL DATA
    ============================================================ */
 
 function normalizeFinancialRow(row) {
+
+  /*
+   * IMPORTANT DATA RULES
+   *
+   * 1. revenue means operating/customer revenue only.
+   *    It must NOT silently fall back to total income.
+   *
+   * 2. total_income is stored separately because annual reports
+   *    may include interest income, other income, gains, etc.
+   *
+   * 3. net_debt_cash is the preferred server-normalized cash
+   *    balance for net-debt calculations.
+   *
+   * 4. Financial statement values are expected from the server
+   *    in INR crore.
+   *
+   * 5. shares_outstanding is expected in crore shares.
+   *
+   * Missing values remain null.
+   */
 
   return {
 
@@ -480,13 +499,10 @@ function normalizeFinancialRow(row) {
       row.statement_basis ||
       "Unknown",
 
-    /*
-     * Server-normalized financial values are expected
-     * to be INR crore.
-     *
-     * Preserve the original unit metadata so the
-     * extraction remains auditable.
-     */
+
+    /* --------------------------------------------------------
+       SOURCE / UNIT METADATA
+       -------------------------------------------------------- */
 
     source_unit:
       row.source_unit ||
@@ -496,67 +512,165 @@ function normalizeFinancialRow(row) {
       row.original_source_unit ||
       null,
 
+
+    /* --------------------------------------------------------
+       INCOME STATEMENT
+       -------------------------------------------------------- */
+
+    /*
+     * Revenue must remain actual operating/customer revenue.
+     *
+     * NEVER do:
+     *
+     * row.revenue ?? row.total_income
+     *
+     * because total income can contain non-operating income.
+     */
+
     revenue:
-      finite(row.revenue),
+      finite(
+        row.revenue
+      ),
+
+    total_income:
+      finite(
+        row.total_income
+      ),
+
+    other_income:
+      finite(
+        row.other_income
+      ),
+
+    revenue_basis:
+      row.revenue_basis ||
+      (
+        row.revenue != null
+          ? "reported revenue"
+          : null
+      ),
 
     ebitda:
-      finite(row.ebitda),
+      finite(
+        row.ebitda
+      ),
 
     cogs:
-      finite(row.cogs),
+      finite(
+        row.cogs
+      ),
 
     operating_income:
-      finite(row.operating_income),
+      finite(
+        row.operating_income
+      ),
 
     net_income:
-      finite(row.net_income),
+      finite(
+        row.net_income
+      ),
+
+    finance_cost:
+      finite(
+        row.finance_cost
+      ),
+
+
+    /* --------------------------------------------------------
+       BALANCE SHEET
+       -------------------------------------------------------- */
 
     total_assets:
-      finite(row.total_assets),
+      finite(
+        row.total_assets
+      ),
 
     current_assets:
-      finite(row.current_assets),
+      finite(
+        row.current_assets
+      ),
 
     current_liabilities:
-      finite(row.current_liabilities),
+      finite(
+        row.current_liabilities
+      ),
 
     total_debt:
-      finite(row.total_debt),
+      finite(
+        row.total_debt
+      ),
+
+    /*
+     * CASH USED FOR NET-DEBT CALCULATION
+     *
+     * Prefer a dedicated server-normalized net-debt cash value.
+     *
+     * This allows the backend to decide whether eligible
+     * liquid investments should be included.
+     *
+     * The frontend must NOT independently add investments,
+     * deposits or financial assets because doing so can
+     * double-count liquidity.
+     */
 
     cash:
       finite(
+        row.net_debt_cash ??
         row.cash ??
         row.cash_and_equivalents
       ),
 
+    net_debt_cash_basis:
+      row.net_debt_cash_basis ||
+      null,
+
     total_equity:
-      finite(row.total_equity),
-
-    operating_cash_flow:
-      finite(row.operating_cash_flow),
-
-    capex:
-      finite(row.capex),
+      finite(
+        row.total_equity
+      ),
 
     inventory:
-      finite(row.inventory),
+      finite(
+        row.inventory
+      ),
 
     accounts_receivable:
-      finite(row.accounts_receivable),
+      finite(
+        row.accounts_receivable
+      ),
 
     accounts_payable:
-      finite(row.accounts_payable),
+      finite(
+        row.accounts_payable
+      ),
 
-    finance_cost:
-      finite(row.finance_cost),
 
-    /*
-     * The SERVER must already have converted this
-     * to crore shares.
-     */
+    /* --------------------------------------------------------
+       CASH FLOW
+       -------------------------------------------------------- */
+
+    operating_cash_flow:
+      finite(
+        row.operating_cash_flow
+      ),
+
+    capex:
+      finite(
+        row.capex
+      ),
+
+
+    /* --------------------------------------------------------
+       SHARES
+       --------------------------------------------------------
+       Server must already have normalized this into
+       CRORE SHARES.
+       -------------------------------------------------------- */
 
     shares_outstanding:
-      finite(row.shares_outstanding),
+      finite(
+        row.shares_outstanding
+      ),
 
     shares_outstanding_unit:
       row.shares_outstanding_unit ||
@@ -571,8 +685,15 @@ function normalizeFinancialRow(row) {
       row.original_shares_outstanding_unit ||
       null,
 
+
+    /* --------------------------------------------------------
+       EXTRACTION AUDIT TRAIL
+       -------------------------------------------------------- */
+
     source_pages:
-      Array.isArray(row.source_pages)
+      Array.isArray(
+        row.source_pages
+      )
         ? row.source_pages
         : [],
 
@@ -587,49 +708,259 @@ function normalizeFinancialRow(row) {
 
 function normalizeFinancialDataset(rows) {
 
-  if (!Array.isArray(rows)) {
+  if (
+    !Array.isArray(rows)
+  ) {
+
     return [];
+
   }
 
-  const normalized = rows
-    .map(normalizeFinancialRow)
-    .filter(row => row.year != null);
+
+  const normalized =
+
+    rows
+
+      .map(
+        normalizeFinancialRow
+      )
+
+      .filter(
+        row =>
+          row.year != null
+      );
+
 
   /*
-   * One row per financial year. Annual reports often repeat a prior year
-   * as a comparative column or include both standalone and consolidated
-   * statements. Prefer consolidated rows, then the row with the most
-   * usable investor fields. This prevents duplicate FY points in charts.
+   * ----------------------------------------------------------
+   * DATA COMPLETENESS
+   * ----------------------------------------------------------
+   *
+   * Annual reports frequently contain:
+   *
+   * - consolidated statements
+   * - standalone statements
+   * - comparative prior-year columns
+   * - repeated financial tables
+   *
+   * FinSight keeps ONE row per financial year.
+   *
+   * Consolidated statements receive strong preference.
    */
-  const completeness = row => {
-    const fields = [
-      "revenue", "ebitda", "operating_income", "net_income",
-      "total_assets", "current_assets", "current_liabilities",
-      "total_debt", "cash", "total_equity", "operating_cash_flow",
-      "capex", "inventory", "accounts_receivable",
-      "accounts_payable", "finance_cost", "shares_outstanding"
-    ];
-    return fields.reduce((n, key) => n + (row[key] != null ? 1 : 0), 0);
-  };
 
-  const quality = row => {
-    const basis = String(row.statement_basis || "").toLowerCase();
-    const consolidatedBonus = basis.includes("consolidated") ? 100 : 0;
-    const mixedPenalty = basis.includes("mixed") ? -10 : 0;
-    return consolidatedBonus + mixedPenalty + completeness(row);
-  };
+  const completeness =
+    row => {
 
-  const byYear = new Map();
+      const fields = [
 
-  for (const row of normalized) {
-    const key = Number(row.year);
-    const existing = byYear.get(key);
-    if (!existing || quality(row) > quality(existing)) {
-      byYear.set(key, row);
+        "revenue",
+
+        "total_income",
+
+        "ebitda",
+
+        "operating_income",
+
+        "net_income",
+
+        "total_assets",
+
+        "current_assets",
+
+        "current_liabilities",
+
+        "total_debt",
+
+        "cash",
+
+        "total_equity",
+
+        "operating_cash_flow",
+
+        "capex",
+
+        "inventory",
+
+        "accounts_receivable",
+
+        "accounts_payable",
+
+        "finance_cost",
+
+        "shares_outstanding"
+
+      ];
+
+
+      return fields.reduce(
+        (
+          count,
+          key
+        ) =>
+
+          count +
+          (
+            row[key] != null
+              ? 1
+              : 0
+          ),
+
+        0
+      );
+
+    };
+
+
+  /*
+   * ----------------------------------------------------------
+   * ROW QUALITY
+   * ----------------------------------------------------------
+   */
+
+  const quality =
+    row => {
+
+      const basis =
+        String(
+          row.statement_basis ||
+          ""
+        )
+          .toLowerCase();
+
+
+      const consolidatedBonus =
+
+        basis.includes(
+          "consolidated"
+        )
+
+          ? 100
+
+          : 0;
+
+
+      const standalonePenalty =
+
+        basis.includes(
+          "standalone"
+        )
+
+          ? -20
+
+          : 0;
+
+
+      const mixedPenalty =
+
+        basis.includes(
+          "mixed"
+        )
+
+          ? -30
+
+          : 0;
+
+
+      /*
+       * Give a small additional preference to rows
+       * containing actual revenue rather than only
+       * total income.
+       */
+
+      const revenueBonus =
+
+        row.revenue != null
+
+          ? 10
+
+          : 0;
+
+
+      return (
+
+        consolidatedBonus +
+
+        standalonePenalty +
+
+        mixedPenalty +
+
+        revenueBonus +
+
+        completeness(
+          row
+        )
+
+      );
+
+    };
+
+
+  /*
+   * ----------------------------------------------------------
+   * ONE ROW PER FINANCIAL YEAR
+   * ----------------------------------------------------------
+   */
+
+  const byYear =
+    new Map();
+
+
+  for (
+    const row of normalized
+  ) {
+
+    const key =
+      Number(
+        row.year
+      );
+
+
+    const existing =
+      byYear.get(
+        key
+      );
+
+
+    if (
+      !existing ||
+      quality(row) >
+      quality(existing)
+    ) {
+
+      byYear.set(
+        key,
+        row
+      );
+
     }
+
   }
 
-  return [...byYear.values()].sort((a, b) => a.year - b.year);
+
+  /*
+   * Oldest → newest.
+   *
+   * This ordering is required for:
+   *
+   * - year-on-year growth
+   * - average equity
+   * - average assets
+   * - average capital employed
+   * - working-capital days
+   */
+
+  return [
+
+    ...byYear.values()
+
+  ].sort(
+    (
+      a,
+      b
+    ) =>
+      a.year -
+      b.year
+  );
 
 }
 
@@ -665,18 +996,18 @@ function calculateRow(
    * CAPITAL EMPLOYED
    * ----------------------------------------------------------
    *
-   * Preferred definition:
+   * Preferred:
    *
    * Equity
    * + Debt
-   * - Cash
+   * - Net-debt cash
    *
    * Fallback:
    *
    * Total assets
    * - Current liabilities
    *
-   * Missing cash is NOT assumed to be zero.
+   * Missing cash is NEVER assumed to be zero.
    */
 
   const capitalEmployed =
@@ -718,11 +1049,10 @@ function calculateRow(
 
 
   /*
-   * ROCE should use average capital employed.
+   * ROCE uses average capital employed.
    *
-   * If the previous-year balance is unavailable,
-   * do NOT pretend the current-year balance is
-   * an average.
+   * Do NOT use current-year closing capital as
+   * a substitute when the opening balance is absent.
    */
 
   const averageCapital =
@@ -739,21 +1069,19 @@ function calculateRow(
 
 
   /*
-   * Basic denominator validation.
-   *
-   * This does NOT cap ROCE.
-   *
-   * It only prevents FinSight from calculating
-   * ROCE from a zero, negative or structurally
-   * implausible capital-employed denominator.
+   * Capital-employed denominator validation.
    */
 
   const capitalEmployedReliable =
 
     averageCapital != null &&
+
     averageCapital > 0 &&
+
     row.total_assets != null &&
+
     row.total_assets > 0 &&
+
     averageCapital <=
       row.total_assets * 2;
 
@@ -762,8 +1090,6 @@ function calculateRow(
    * ----------------------------------------------------------
    * AVERAGE EQUITY
    * ----------------------------------------------------------
-   *
-   * Required for ROE.
    */
 
   const averageEquity =
@@ -783,8 +1109,6 @@ function calculateRow(
    * ----------------------------------------------------------
    * AVERAGE ASSETS
    * ----------------------------------------------------------
-   *
-   * Required for ROA and asset turnover.
    */
 
   const averageAssets =
@@ -804,9 +1128,6 @@ function calculateRow(
    * ----------------------------------------------------------
    * WORKING-CAPITAL AVERAGES
    * ----------------------------------------------------------
-   *
-   * Do not calculate days using only closing
-   * balances when the opening balance is missing.
    */
 
   const averageReceivables =
@@ -850,39 +1171,92 @@ function calculateRow(
 
   /*
    * ----------------------------------------------------------
-   * NET DEBT
+   * NET DEBT / NET CASH
    * ----------------------------------------------------------
    *
-   * Missing cash must remain missing.
+   * Formula:
    *
-   * Never silently treat missing cash as zero.
+   * Net debt = total debt - eligible cash
+   *
+   * Positive:
+   * company has net debt.
+   *
+   * Negative:
+   * company has net cash.
+   *
+   * Example:
+   *
+   * Debt = ₹44.9 Cr
+   * Cash = ₹2,273.2 Cr
+   *
+   * Net debt =
+   * 44.9 - 2,273.2
+   * =
+   * -₹2,228.3 Cr
+   *
+   * That negative number MUST be preserved because:
+   *
+   * Enterprise value =
+   * Market cap + net debt
+   *
+   * therefore net cash correctly reduces EV.
    */
 
- const debt =
-  finite(
-    row.total_debt
-  );
+  const debt =
+    finite(
+      row.total_debt
+    );
 
 
-const cash =
-  finite(
-    row.cash
-  );
+  const cash =
+    finite(
+      row.cash
+    );
 
 
-const netDebt =
+  const netDebt =
 
-  debt != null &&
-  cash != null
+    debt != null &&
+    cash != null
 
-    ? debt - cash
+      ? debt -
+        cash
 
-    : null;
+      : null;
+
+
+  const netCash =
+
+    netDebt != null &&
+    netDebt < 0
+
+      ? Math.abs(
+          netDebt
+        )
+
+      : null;
+
+
+  const balanceSheetPosition =
+
+    netDebt == null
+
+      ? null
+
+      : netDebt < 0
+
+      ? "net cash"
+
+      : netDebt > 0
+
+      ? "net debt"
+
+      : "neutral";
 
 
   /*
    * ----------------------------------------------------------
-   * RETURN CALCULATIONS
+   * RETURN ON EQUITY
    * ----------------------------------------------------------
    */
 
@@ -900,6 +1274,12 @@ const netDebt =
       : null;
 
 
+  /*
+   * ----------------------------------------------------------
+   * RETURN ON ASSETS
+   * ----------------------------------------------------------
+   */
+
   const roa =
 
     row.net_income != null &&
@@ -915,14 +1295,15 @@ const netDebt =
 
 
   /*
-   * ROCE numerator uses operating income / EBIT.
+   * ----------------------------------------------------------
+   * ROCE
+   * ----------------------------------------------------------
    *
-   * ROCE is withheld when:
+   * Numerator:
+   * operating income / EBIT
    *
-   * - EBIT is unavailable
-   * - EBIT is non-positive
-   * - average capital employed is unavailable
-   * - capital-employed denominator fails validation
+   * Denominator:
+   * average capital employed
    */
 
   const roce =
@@ -935,6 +1316,29 @@ const netDebt =
           row.operating_income,
           averageCapital
         )
+
+      : null;
+
+
+  /*
+   * ----------------------------------------------------------
+   * SIMPLIFIED CASH FLOW
+   * ----------------------------------------------------------
+   *
+   * This is deliberately NOT called FCFF.
+   *
+   * OCF - capex can be useful as a simple cash-flow
+   * indicator but it is not automatically equivalent
+   * to unlevered free cash flow to the firm.
+   */
+
+  const simplifiedFreeCashFlow =
+
+    row.operating_cash_flow != null &&
+    row.capex != null
+
+      ? row.operating_cash_flow -
+        row.capex
 
       : null;
 
@@ -1038,9 +1442,28 @@ const netDebt =
         : null,
 
 
+    /*
+     * Preserve negative net debt.
+     *
+     * DO NOT clamp this to zero.
+     */
+
     net_debt:
       netDebt,
 
+
+    net_cash:
+      netCash,
+
+
+    balance_sheet_position:
+      balanceSheetPosition,
+
+
+    /*
+     * Negative net-debt/EBITDA is valid and means
+     * the company is in a net-cash position.
+     */
 
     net_debt_ebitda:
 
@@ -1171,18 +1594,15 @@ const netDebt =
 
 
     /* --------------------------------------------------------
-       FREE CASH FLOW
+       SIMPLIFIED FREE CASH FLOW
        -------------------------------------------------------- */
 
     free_cash_flow:
+      simplifiedFreeCashFlow,
 
-      row.operating_cash_flow != null &&
-      row.capex != null
 
-        ? row.operating_cash_flow -
-          row.capex
-
-        : null,
+    simplified_free_cash_flow:
+      simplifiedFreeCashFlow,
 
 
     /* --------------------------------------------------------
@@ -1239,12 +1659,19 @@ function calculateDataset(
   }
 
 
+  /*
+   * Always calculate oldest → newest.
+   */
+
   const sorted =
 
     [...data]
 
       .sort(
-        (a, b) =>
+        (
+          a,
+          b
+        ) =>
           a.year -
           b.year
       );
@@ -1262,7 +1689,8 @@ function calculateDataset(
 
         sorted[
           index - 1
-        ] || null
+        ] ||
+        null
 
       )
 
@@ -7051,40 +7479,119 @@ $("#companyFile")
     }
   );
 
-
 /* ============================================================
-   25. ADVANCED DCF EVENTS
+   25. ADVANCED DCF / REVERSE DCF
    ============================================================ */
 
-async function runDCFRequest() {
+
+/* ============================================================
+   DCF SOURCE ROW
+   ============================================================ */
+
+/*
+ * Both DCF and reverse DCF MUST use the exact same
+ * financial-year row.
+ *
+ * normalizeFinancialDataset() has already:
+ *
+ * - preferred consolidated financials
+ * - removed duplicate FY rows
+ * - sorted years oldest → newest
+ *
+ * Therefore the final row is the latest normalized
+ * reporting year.
+ *
+ * Do not mix:
+ *
+ * - current-year revenue
+ * - prior-year EBIT
+ * - different-period shares
+ * - different-period debt/cash
+ *
+ * inside one valuation.
+ */
+
+function getDCFSourceRow() {
+
+  const rows =
+    getCalculatedRows();
+
+
+  if (
+    !rows.length
+  ) {
+
+    return null;
+
+  }
+
+
+  return (
+    rows.at(-1) ||
+    null
+  );
+
+}
+
+
+/* ============================================================
+   COMMON DCF INPUTS
+   ============================================================ */
+
+/*
+ * DCF and reverse DCF use this SAME input builder.
+ *
+ * This is important because it prevents the two models
+ * from silently using different:
+ *
+ * - revenue
+ * - EBIT
+ * - OCF
+ * - capex
+ * - net debt
+ * - shares
+ * - statement basis
+ * - financial year
+ */
+
+function getCommonDCFInputs() {
 
   const row =
-    getCalculatedRows()
-      .at(-1);
-
-
-  const resultBox =
-    $("#dcfResult");
-
-
-  if (!resultBox) {
-    return;
-  }
+    getDCFSourceRow();
 
 
   if (!row) {
 
-    resultBox.textContent =
-      "Upload an annual report first.";
+    return {
+      error:
+        "Upload an annual report first."
+    };
 
-    return;
+  }
+
+
+  const revenue =
+    finite(
+      row.revenue
+    );
+
+
+  if (
+    revenue == null ||
+    revenue <= 0
+  ) {
+
+    return {
+      error:
+        "DCF cannot be calculated because operating revenue is unavailable from the annual report."
+    };
 
   }
 
 
   /*
-   * Shares must already be normalized by
-   * the server to CRORE SHARES.
+   * Shares must already have been normalized
+   * by the extraction server to CRORE SHARES.
    */
 
   const shares =
@@ -7098,40 +7605,25 @@ async function runDCFRequest() {
     shares <= 0
   ) {
 
-    resultBox.textContent =
-      "DCF cannot be calculated because reliable period-end shares outstanding were not extracted from the annual report.";
-
-    return;
-
-  }
-
-
-  /*
-   * Revenue is required by the DCF model.
-   */
-
-  const revenue =
-    finite(
-      row.revenue
-    );
-
-
-  if (
-    revenue == null ||
-    revenue <= 0
-  ) {
-
-    resultBox.textContent =
-      "DCF cannot be calculated because revenue is unavailable from the annual report.";
-
-    return;
+    return {
+      error:
+        "DCF cannot be calculated because reliable period-end shares outstanding were not extracted from the annual report."
+    };
 
   }
 
 
   /*
-   * Manual net debt overrides report net debt
-   * only when the user entered a value.
+   * Manual net debt is an explicit override.
+   *
+   * Blank field:
+   * use annual-report value.
+   *
+   * Entered field:
+   * use user value.
+   *
+   * Negative net debt is VALID and represents
+   * a net-cash position.
    */
 
   const manualNetDebt =
@@ -7160,16 +7652,16 @@ async function runDCFRequest() {
     netDebt == null
   ) {
 
-    resultBox.textContent =
-      "DCF cannot be calculated because net debt is unavailable. Enter net debt manually or ensure debt and cash were extracted from the annual report.";
-
-    return;
+    return {
+      error:
+        "DCF cannot be calculated because net debt is unavailable. Enter net debt manually or ensure debt and cash were extracted from the annual report."
+    };
 
   }
 
 
   /*
-   * User assumptions are entered as percentages.
+   * Assumption fields are entered as percentages.
    */
 
   const growth =
@@ -7207,28 +7699,22 @@ async function runDCFRequest() {
     terminalGrowth == null
   ) {
 
-    resultBox.textContent =
-      "Enter valid DCF assumptions for growth, EBIT margin, WACC and terminal growth.";
-
-    return;
+    return {
+      error:
+        "Enter valid DCF assumptions for growth, EBIT margin, WACC and terminal growth."
+    };
 
   }
 
-
-  /*
-   * Basic frontend validation.
-   *
-   * The server performs authoritative validation too.
-   */
 
   if (
     wacc <= 0
   ) {
 
-    resultBox.textContent =
-      "WACC must be greater than zero.";
-
-    return;
+    return {
+      error:
+        "WACC must be greater than zero."
+    };
 
   }
 
@@ -7238,19 +7724,70 @@ async function runDCFRequest() {
     wacc
   ) {
 
-    resultBox.textContent =
-      "Terminal growth must be lower than WACC.";
-
-    return;
+    return {
+      error:
+        "Terminal growth must be lower than WACC."
+    };
 
   }
 
 
-  const payload = {
+  /*
+   * EBIT margin can technically be negative,
+   * so do not arbitrarily force it positive.
+   *
+   * But completely implausible inputs are rejected.
+   */
+
+  if (
+    margin <= -100 ||
+    margin > 100
+  ) {
+
+    return {
+      error:
+        "Enter a realistic EBIT margin between -100% and 100%."
+    };
+
+  }
+
+
+  /*
+   * Revenue growth is allowed to be negative.
+   */
+
+  if (
+    growth <= -100 ||
+    growth > 200
+  ) {
+
+    return {
+      error:
+        "Enter a realistic revenue-growth assumption between -100% and 200%."
+    };
+
+  }
+
+
+  return {
+
+    row,
 
     revenue,
 
-    ebit:
+    shares,
+
+    netDebt,
+
+    growth,
+
+    margin,
+
+    wacc,
+
+    terminalGrowth,
+
+    operatingIncome:
       finite(
         row.operating_income
       ),
@@ -7265,26 +7802,129 @@ async function runDCFRequest() {
         row.capex
       ),
 
-    netDebt,
+    financialYear:
+      row.year,
+
+    financialYearLabel:
+      yearLabel(
+        row
+      ),
+
+    statementBasis:
+      row.statement_basis ||
+      "Unknown",
+
+    revenueBasis:
+      row.revenue_basis ||
+      "reported revenue",
+
+    netDebtSource:
+
+      manualNetDebt != null
+
+        ? "manual override"
+
+        : "annual report"
+
+  };
+
+}
+
+
+/* ============================================================
+   STANDARD DCF
+   ============================================================ */
+
+async function runDCFRequest() {
+
+  const resultBox =
+    $("#dcfResult");
+
+
+  if (!resultBox) {
+    return;
+  }
+
+
+  const inputs =
+    getCommonDCFInputs();
+
+
+  if (
+    inputs.error
+  ) {
+
+    resultBox.textContent =
+      inputs.error;
+
+    return;
+
+  }
+
+
+  /*
+   * Send the SAME normalized financial basis
+   * used by reverse DCF.
+   *
+   * valuation.js remains responsible for the
+   * authoritative DCF mathematics.
+   */
+
+  const payload = {
+
+    revenue:
+      inputs.revenue,
+
+    ebit:
+      inputs.operatingIncome,
+
+    operatingCashFlow:
+      inputs.operatingCashFlow,
+
+    capex:
+      inputs.capex,
+
+    netDebt:
+      inputs.netDebt,
 
     sharesOutstanding:
-      shares,
+      inputs.shares,
 
     revenueGrowth:
-      growth /
+      inputs.growth /
       100,
 
     ebitMargin:
-      margin /
+      inputs.margin /
       100,
 
     wacc:
-      wacc /
+      inputs.wacc /
       100,
 
     terminalGrowth:
-      terminalGrowth /
-      100
+      inputs.terminalGrowth /
+      100,
+
+
+    /*
+     * Audit / provenance metadata.
+     */
+
+    financialYear:
+      inputs.financialYear,
+
+    financialYearLabel:
+      inputs.financialYearLabel,
+
+    statementBasis:
+      inputs.statementBasis,
+
+    revenueBasis:
+      inputs.revenueBasis,
+
+    netDebtSource:
+      inputs.netDebtSource
 
   };
 
@@ -7329,10 +7969,13 @@ async function runDCFRequest() {
     try {
 
       result =
+
         text
+
           ? JSON.parse(
               text
             )
+
           : {};
 
     }
@@ -7363,6 +8006,10 @@ async function runDCFRequest() {
 
           ||
 
+          result?.message
+
+          ||
+
           "DCF calculation failed.";
 
 
@@ -7374,11 +8021,15 @@ async function runDCFRequest() {
 
 
     /*
-     * valuation.js returns:
+     * Expected valuation.js structure:
      *
-     * result.scenarios.bear
-     * result.scenarios.base
-     * result.scenarios.bull
+     * {
+     *   scenarios: {
+     *     bear: {...},
+     *     base: {...},
+     *     bull: {...}
+     *   }
+     * }
      */
 
     const bear =
@@ -7412,7 +8063,8 @@ async function runDCFRequest() {
 
 
     /*
-     * Preserve raw model values.
+     * Preserve raw model values before applying
+     * presentation rules.
      */
 
     const rawBearValue =
@@ -7434,11 +8086,16 @@ async function runDCFRequest() {
 
 
     /*
-     * If enterprise value is below net debt,
-     * mathematical equity value may become negative.
+     * A DCF may mathematically produce negative
+     * equity value when:
      *
-     * Do not display a negative share price.
-     * Display ₹0 while clearly warning the investor.
+     * Enterprise value < net debt.
+     *
+     * A negative equity value is economically
+     * meaningful at enterprise level but should
+     * not be displayed as a negative stock price.
+     *
+     * Display floor = ₹0.
      */
 
     const bearValue =
@@ -7493,6 +8150,11 @@ async function runDCFRequest() {
         );
 
 
+    /*
+     * Enterprise value must remain the model's
+     * enterprise value.
+     */
+
     const enterpriseValue =
       finite(
         base.enterpriseValue
@@ -7504,10 +8166,6 @@ async function runDCFRequest() {
         base.equityValue
       );
 
-
-    /*
-     * Same display rule for total equity value.
-     */
 
     const equityValue =
 
@@ -7551,7 +8209,6 @@ async function runDCFRequest() {
             <strong>
 
               ${
-
                 bearValue == null
 
                   ? "N/A"
@@ -7559,7 +8216,6 @@ async function runDCFRequest() {
                   : priceMoney(
                       bearValue
                     )
-
               }
 
             </strong>
@@ -7576,7 +8232,6 @@ async function runDCFRequest() {
             <strong>
 
               ${
-
                 baseValue == null
 
                   ? "N/A"
@@ -7584,7 +8239,6 @@ async function runDCFRequest() {
                   : priceMoney(
                       baseValue
                     )
-
               }
 
             </strong>
@@ -7601,7 +8255,6 @@ async function runDCFRequest() {
             <strong>
 
               ${
-
                 bullValue == null
 
                   ? "N/A"
@@ -7609,7 +8262,6 @@ async function runDCFRequest() {
                   : priceMoney(
                       bullValue
                     )
-
               }
 
             </strong>
@@ -7626,7 +8278,6 @@ async function runDCFRequest() {
             <strong>
 
               ${
-
                 equityValue == null
 
                   ? "N/A"
@@ -7634,7 +8285,6 @@ async function runDCFRequest() {
                   : money(
                       equityValue
                     )
-
               }
 
             </strong>
@@ -7651,7 +8301,6 @@ async function runDCFRequest() {
             <strong>
 
               ${
-
                 enterpriseValue == null
 
                   ? "N/A"
@@ -7659,7 +8308,6 @@ async function runDCFRequest() {
                   : money(
                       enterpriseValue
                     )
-
               }
 
             </strong>
@@ -7671,7 +8319,6 @@ async function runDCFRequest() {
 
 
         ${
-
           equityExhausted
 
             ? `
@@ -7690,16 +8337,19 @@ async function runDCFRequest() {
             `
 
             : ""
-
         }
 
 
         <small class="dcf-output-note">
 
-          Financial statement inputs and shares
-          outstanding come from the annual report.
-          Growth, margin, WACC and terminal-growth
-          assumptions come from the fields above.
+          ${inputs.financialYearLabel}
+          · ${inputs.statementBasis} financials
+          · Revenue basis: ${inputs.revenueBasis}
+          · Net debt: ${inputs.netDebtSource}.
+          Financial statement inputs and shares outstanding
+          come from the annual report. Growth, EBIT margin,
+          WACC and terminal-growth assumptions come from
+          the fields above.
 
         </small>
 
@@ -7735,18 +8385,25 @@ async function runDCFRequest() {
 
 async function runReverseDCFRequest() {
 
-  const row =
-    getCalculatedRows().at(-1);
-
-
   const resultBox =
     $("#dcfResult");
 
 
-  if (!row) {
+  if (!resultBox) {
+    return;
+  }
+
+
+  const inputs =
+    getCommonDCFInputs();
+
+
+  if (
+    inputs.error
+  ) {
 
     resultBox.textContent =
-      "Upload an annual report first.";
+      inputs.error;
 
     return;
 
@@ -7754,12 +8411,8 @@ async function runReverseDCFRequest() {
 
 
   /*
-   * Reverse DCF needs a market price.
-   *
-   * This may be:
-   *
-   * - fetched market price
-   * - manually entered market price
+   * Reverse DCF additionally requires
+   * a market share price.
    */
 
   const marketPrice =
@@ -7781,147 +8434,73 @@ async function runReverseDCFRequest() {
   }
 
 
-  const shares =
-    finite(
-      row.shares_outstanding
-    );
-
-
-  if (
-    shares == null ||
-    shares <= 0
-  ) {
-
-    resultBox.textContent =
-      "Reverse DCF cannot be calculated because reliable shares outstanding were not extracted from the annual report.";
-
-    return;
-
-  }
-
-
-  if (
-    row.revenue == null ||
-    row.revenue <= 0
-  ) {
-
-    resultBox.textContent =
-      "Reverse DCF cannot be calculated because revenue is unavailable from the annual report.";
-
-    return;
-
-  }
-
-
   /*
-   * Manual net debt overrides report net debt
-   * only when the user actually entered a value.
+   * IMPORTANT:
+   *
+   * Same financial basis as standard DCF.
+   *
+   * The only fundamental difference is:
+   *
+   * Standard DCF:
+   * growth → value
+   *
+   * Reverse DCF:
+   * market value → implied growth
    */
-
-  const manualNetDebt =
-    finite(
-      $("#dcfNetDebt")?.value
-    );
-
-
-  const reportNetDebt =
-    finite(
-      row.net_debt
-    );
-
-
-  const netDebt =
-
-    manualNetDebt != null
-
-      ? manualNetDebt
-
-      : reportNetDebt;
-
-
-  if (netDebt == null) {
-
-    resultBox.textContent =
-      "Reverse DCF cannot be calculated because net debt is unavailable. Enter net debt manually or ensure debt and cash were extracted from the annual report.";
-
-    return;
-
-  }
-
-
-  const margin =
-    finite(
-      $("#dcfMargin")?.value
-    );
-
-
-  const wacc =
-    finite(
-      $("#dcfWacc")?.value
-    );
-
-
-  const terminalGrowth =
-    finite(
-      $("#dcfTerminal")?.value
-    );
-
-
-  if (
-    margin == null ||
-    wacc == null ||
-    terminalGrowth == null
-  ) {
-
-    resultBox.textContent =
-      "Enter valid EBIT margin, WACC and terminal-growth assumptions.";
-
-    return;
-
-  }
-
-
-  if (
-    terminalGrowth >= wacc
-  ) {
-
-    resultBox.textContent =
-      "Terminal growth must be lower than WACC.";
-
-    return;
-
-  }
-
 
   const payload = {
 
     marketPrice,
 
     revenue:
-      row.revenue,
+      inputs.revenue,
 
     ebit:
-      row.operating_income,
+      inputs.operatingIncome,
 
     operatingCashFlow:
-      row.operating_cash_flow,
+      inputs.operatingCashFlow,
 
     capex:
-      row.capex,
+      inputs.capex,
 
-    netDebt,
+    netDebt:
+      inputs.netDebt,
 
     sharesOutstanding:
-      shares,
+      inputs.shares,
 
     ebitMargin:
-      margin / 100,
+      inputs.margin /
+      100,
 
     wacc:
-      wacc / 100,
+      inputs.wacc /
+      100,
 
     terminalGrowth:
-      terminalGrowth / 100
+      inputs.terminalGrowth /
+      100,
+
+
+    /*
+     * Audit / provenance metadata.
+     */
+
+    financialYear:
+      inputs.financialYear,
+
+    financialYearLabel:
+      inputs.financialYearLabel,
+
+    statementBasis:
+      inputs.statementBasis,
+
+    revenueBasis:
+      inputs.revenueBasis,
+
+    netDebtSource:
+      inputs.netDebtSource
 
   };
 
@@ -7936,18 +8515,22 @@ async function runReverseDCFRequest() {
       await fetch(
         "/api/valuation/reverse-dcf",
         {
+
           method:
             "POST",
 
           headers: {
+
             "Content-Type":
               "application/json"
+
           },
 
           body:
             JSON.stringify(
               payload
             )
+
         }
       );
 
@@ -7962,8 +8545,13 @@ async function runReverseDCFRequest() {
     try {
 
       result =
+
         text
-          ? JSON.parse(text)
+
+          ? JSON.parse(
+              text
+            )
+
           : {};
 
     }
@@ -7977,17 +8565,28 @@ async function runReverseDCFRequest() {
     }
 
 
-    if (!response.ok) {
+    if (
+      !response.ok
+    ) {
 
       const errorMessage =
 
-        typeof result?.error === "string"
+        typeof result?.error ===
+        "string"
 
           ? result.error
 
-          : result?.error?.message
+          : result
+              ?.error
+              ?.message
 
-          || "Reverse DCF calculation failed.";
+          ||
+
+          result?.message
+
+          ||
+
+          "Reverse DCF calculation failed.";
 
 
       throw new Error(
@@ -7998,7 +8597,7 @@ async function runReverseDCFRequest() {
 
 
     /*
-     * These names EXACTLY match valuation.js.
+     * Expected valuation.js response.
      */
 
     const returnedMarketPrice =
@@ -8031,9 +8630,30 @@ async function runReverseDCFRequest() {
       );
 
 
+    /*
+     * A successful reverse DCF should return
+     * a finite implied growth rate.
+     *
+     * If the solver could not find one,
+     * the server should return null plus an
+     * interpretation explaining why.
+     */
+
+    const impliedGrowthDisplay =
+
+      impliedGrowth == null
+
+        ? "N/A"
+
+        : percentage(
+            impliedGrowth
+          );
+
+
     resultBox.innerHTML = `
 
       <div class="dcf-output">
+
 
         <div class="dcf-output-header">
 
@@ -8058,13 +8678,19 @@ async function runReverseDCFRequest() {
             </span>
 
             <strong>
+
               ${
                 returnedMarketPrice == null
-                  ? "N/A"
+
+                  ? priceMoney(
+                      marketPrice
+                    )
+
                   : priceMoney(
                       returnedMarketPrice
                     )
               }
+
             </strong>
 
           </div>
@@ -8077,13 +8703,7 @@ async function runReverseDCFRequest() {
             </span>
 
             <strong>
-              ${
-                impliedGrowth == null
-                  ? "N/A"
-                  : percentage(
-                      impliedGrowth
-                    )
-              }
+              ${impliedGrowthDisplay}
             </strong>
 
           </div>
@@ -8096,13 +8716,20 @@ async function runReverseDCFRequest() {
             </span>
 
             <strong>
+
               ${
                 modeledValue == null
+
                   ? "N/A"
+
                   : priceMoney(
-                      modeledValue
+                      Math.max(
+                        0,
+                        modeledValue
+                      )
                     )
               }
+
             </strong>
 
           </div>
@@ -8115,23 +8742,32 @@ async function runReverseDCFRequest() {
             </span>
 
             <strong>
+
               ${
                 pricingError == null
+
                   ? "N/A"
+
                   : priceMoney(
                       pricingError
                     )
               }
+
             </strong>
 
+
             <small>
+
               ${
                 pricingErrorPercent == null
+
                   ? ""
+
                   : `${formatNumber(
                       pricingErrorPercent
                     )}%`
               }
+
             </small>
 
           </div>
@@ -8146,7 +8782,9 @@ async function runReverseDCFRequest() {
             ? `
 
               <div class="dcf-interpretation">
+
                 ${result.interpretation}
+
               </div>
 
             `
@@ -8157,11 +8795,17 @@ async function runReverseDCFRequest() {
 
         <small class="dcf-output-note">
 
+          ${inputs.financialYearLabel}
+          · ${inputs.statementBasis} financials
+          · Revenue basis: ${inputs.revenueBasis}
+          · Net debt: ${inputs.netDebtSource}.
           Reverse DCF estimates the constant revenue-growth
           rate required to approximately justify the current
-          share price under the assumptions above.
+          share price under the supplied EBIT-margin, WACC
+          and terminal-growth assumptions.
 
         </small>
+
 
       </div>
 
