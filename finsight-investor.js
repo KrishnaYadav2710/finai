@@ -6811,16 +6811,23 @@ async function runDCFRequest() {
     getCalculatedRows().at(-1);
 
 
+  const resultBox =
+    $("#dcfResult");
+
+
   if (!row) {
 
-    $("#dcfResult")
-      .textContent =
+    resultBox.textContent =
       "Upload an annual report first.";
 
     return;
 
   }
 
+
+  /*
+   * Shares must come from the annual report.
+   */
 
   const shares =
     finite(
@@ -6829,12 +6836,120 @@ async function runDCFRequest() {
 
 
   if (
-    shares == null
+    shares == null ||
+    shares <= 0
   ) {
 
-    $("#dcfResult")
-      .textContent =
-      "DCF per-share value requires reliably extracted shares outstanding.";
+    resultBox.textContent =
+      "DCF cannot be calculated because reliable shares outstanding were not extracted from the annual report.";
+
+    return;
+
+  }
+
+
+  /*
+   * Revenue is essential to this DCF model.
+   */
+
+  if (
+    row.revenue == null ||
+    row.revenue <= 0
+  ) {
+
+    resultBox.textContent =
+      "DCF cannot be calculated because revenue is unavailable from the annual report.";
+
+    return;
+
+  }
+
+
+  /*
+   * IMPORTANT:
+   *
+   * If the Net Debt input is blank, use the
+   * annual-report calculated net debt.
+   *
+   * Do NOT automatically substitute zero.
+   */
+
+  const manualNetDebt =
+    finite(
+      $("#dcfNetDebt")?.value
+    );
+
+
+  const reportNetDebt =
+    finite(
+      row.net_debt
+    );
+
+
+  const netDebt =
+
+    manualNetDebt != null
+
+      ? manualNetDebt
+
+      : reportNetDebt;
+
+
+  if (netDebt == null) {
+
+    resultBox.textContent =
+      "DCF cannot be calculated because net debt is unavailable. Enter net debt manually or ensure debt and cash were extracted from the annual report.";
+
+    return;
+
+  }
+
+
+  const growth =
+    finite(
+      $("#dcfGrowth")?.value
+    );
+
+
+  const margin =
+    finite(
+      $("#dcfMargin")?.value
+    );
+
+
+  const wacc =
+    finite(
+      $("#dcfWacc")?.value
+    );
+
+
+  const terminalGrowth =
+    finite(
+      $("#dcfTerminal")?.value
+    );
+
+
+  if (
+    growth == null ||
+    margin == null ||
+    wacc == null ||
+    terminalGrowth == null
+  ) {
+
+    resultBox.textContent =
+      "Enter valid DCF assumptions for growth, EBIT margin, WACC and terminal growth.";
+
+    return;
+
+  }
+
+
+  if (
+    terminalGrowth >= wacc
+  ) {
+
+    resultBox.textContent =
+      "Terminal growth must be lower than WACC.";
 
     return;
 
@@ -6855,54 +6970,27 @@ async function runDCFRequest() {
     capex:
       row.capex,
 
-    netDebt:
-      finite(
-        $("#dcfNetDebt")
-          ?.value
-      ) ??
-      row.net_debt ??
-      0,
+    netDebt,
 
     sharesOutstanding:
       shares,
 
     revenueGrowth:
-      (
-        finite(
-          $("#dcfGrowth")
-            ?.value
-        ) || 0
-      ) / 100,
+      growth / 100,
 
     ebitMargin:
-      (
-        finite(
-          $("#dcfMargin")
-            ?.value
-        ) || 0
-      ) / 100,
+      margin / 100,
 
     wacc:
-      (
-        finite(
-          $("#dcfWacc")
-            ?.value
-        ) || 0
-      ) / 100,
+      wacc / 100,
 
     terminalGrowth:
-      (
-        finite(
-          $("#dcfTerminal")
-            ?.value
-        ) || 0
-      ) / 100
+      terminalGrowth / 100
 
   };
 
 
-  $("#dcfResult")
-    .textContent =
+  resultBox.textContent =
     "Calculating DCF…";
 
 
@@ -6928,130 +7016,243 @@ async function runDCFRequest() {
       );
 
 
-    const result =
-      await response.json();
+    const text =
+      await response.text();
 
 
-    if (!response.ok) {
+    let result;
+
+
+    try {
+
+      result =
+        text
+          ? JSON.parse(text)
+          : {};
+
+    }
+
+    catch {
 
       throw new Error(
-        result?.error ||
-        "DCF failed."
+        "DCF server returned an unreadable response."
       );
 
     }
 
 
-  const dcfBox =
-  $("#dcfResult");
+    if (!response.ok) {
 
-const enterpriseValue =
-  finite(
-    result.enterpriseValue ??
-    result.enterprise_value
-  );
+      const errorMessage =
 
-const equityValue =
-  finite(
-    result.equityValue ??
-    result.equity_value
-  );
+        typeof result?.error === "string"
 
-const valuePerShare =
-  finite(
-    result.valuePerShare ??
-    result.value_per_share ??
-    result.intrinsicValuePerShare
-  );
+          ? result.error
 
-const terminalValue =
-  finite(
-    result.terminalValue ??
-    result.terminal_value
-  );
+          : result?.error?.message
 
-dcfBox.innerHTML = `
+          || "DCF calculation failed.";
 
-  <div class="dcf-output">
 
-    <div class="dcf-output-header">
-      <span class="eyebrow">
-        DCF RESULT
-      </span>
+      throw new Error(
+        errorMessage
+      );
 
-      <strong>
-        Estimated intrinsic value
-      </strong>
-    </div>
+    }
 
-    <div class="dcf-output-grid">
 
-      <div class="dcf-output-card">
-        <span>
-          Value per share
-        </span>
+    /*
+     * valuation.js returns:
+     *
+     * result.scenarios.bear
+     * result.scenarios.base
+     * result.scenarios.bull
+     */
 
-        <strong>
-          ${
-            valuePerShare == null
-              ? "N/A"
-              : priceMoney(valuePerShare)
-          }
-        </strong>
+    const bear =
+      result?.scenarios?.bear ||
+      null;
+
+
+    const base =
+      result?.scenarios?.base ||
+      null;
+
+
+    const bull =
+      result?.scenarios?.bull ||
+      null;
+
+
+    if (!base) {
+
+      throw new Error(
+        "DCF server did not return the expected base scenario."
+      );
+
+    }
+
+
+    const bearValue =
+      finite(
+        bear?.valuePerShare
+      );
+
+
+    const baseValue =
+      finite(
+        base?.valuePerShare
+      );
+
+
+    const bullValue =
+      finite(
+        bull?.valuePerShare
+      );
+
+
+    const enterpriseValue =
+      finite(
+        base?.enterpriseValue
+      );
+
+
+    const equityValue =
+      finite(
+        base?.equityValue
+      );
+
+
+    resultBox.innerHTML = `
+
+      <div class="dcf-output">
+
+        <div class="dcf-output-header">
+
+          <span class="eyebrow">
+            DCF RESULT
+          </span>
+
+          <strong>
+            Estimated intrinsic value
+          </strong>
+
+        </div>
+
+
+        <div class="dcf-output-grid">
+
+
+          <div class="dcf-output-card">
+
+            <span>
+              Bear value / share
+            </span>
+
+            <strong>
+              ${
+                bearValue == null
+                  ? "N/A"
+                  : priceMoney(
+                      bearValue
+                    )
+              }
+            </strong>
+
+          </div>
+
+
+          <div class="dcf-output-card">
+
+            <span>
+              Base value / share
+            </span>
+
+            <strong>
+              ${
+                baseValue == null
+                  ? "N/A"
+                  : priceMoney(
+                      baseValue
+                    )
+              }
+            </strong>
+
+          </div>
+
+
+          <div class="dcf-output-card">
+
+            <span>
+              Bull value / share
+            </span>
+
+            <strong>
+              ${
+                bullValue == null
+                  ? "N/A"
+                  : priceMoney(
+                      bullValue
+                    )
+              }
+            </strong>
+
+          </div>
+
+
+          <div class="dcf-output-card">
+
+            <span>
+              Base equity value
+            </span>
+
+            <strong>
+              ${
+                equityValue == null
+                  ? "N/A"
+                  : money(
+                      equityValue
+                    )
+              }
+            </strong>
+
+          </div>
+
+
+          <div class="dcf-output-card">
+
+            <span>
+              Base enterprise value
+            </span>
+
+            <strong>
+              ${
+                enterpriseValue == null
+                  ? "N/A"
+                  : money(
+                      enterpriseValue
+                    )
+              }
+            </strong>
+
+          </div>
+
+
+        </div>
+
+
+        <small class="dcf-output-note">
+
+          Financial statement inputs and shares outstanding
+          come from the annual report. Growth, margin, WACC
+          and terminal-growth assumptions come from the
+          fields above.
+
+        </small>
+
       </div>
 
-      <div class="dcf-output-card">
-        <span>
-          Equity value
-        </span>
-
-        <strong>
-          ${
-            equityValue == null
-              ? "N/A"
-              : money(equityValue)
-          }
-        </strong>
-      </div>
-
-      <div class="dcf-output-card">
-        <span>
-          Enterprise value
-        </span>
-
-        <strong>
-          ${
-            enterpriseValue == null
-              ? "N/A"
-              : money(enterpriseValue)
-          }
-        </strong>
-      </div>
-
-      <div class="dcf-output-card">
-        <span>
-          Terminal value
-        </span>
-
-        <strong>
-          ${
-            terminalValue == null
-              ? "N/A"
-              : money(terminalValue)
-          }
-        </strong>
-      </div>
-
-    </div>
-
-    <small class="dcf-output-note">
-      DCF result based on the annual-report financial data
-      and the assumptions entered above.
-    </small>
-
-  </div>
-
-`;
+    `;
 
   }
 
@@ -7059,14 +7260,24 @@ dcfBox.innerHTML = `
     error
   ) {
 
-    $("#dcfResult")
-      .textContent =
-      error.message;
+    console.error(
+      "DCF calculation:",
+      error
+    );
+
+
+    resultBox.textContent =
+      error?.message ||
+      "DCF calculation failed.";
 
   }
 
 }
 
+
+/* ============================================================
+   REVERSE DCF
+   ============================================================ */
 
 async function runReverseDCFRequest() {
 
@@ -7074,14 +7285,42 @@ async function runReverseDCFRequest() {
     getCalculatedRows().at(-1);
 
 
+  const resultBox =
+    $("#dcfResult");
+
+
+  if (!row) {
+
+    resultBox.textContent =
+      "Upload an annual report first.";
+
+    return;
+
+  }
+
+
+  /*
+   * Reverse DCF needs a market price.
+   *
+   * This may be:
+   *
+   * - fetched market price
+   * - manually entered market price
+   */
+
+  const marketPrice =
+    finite(
+      marketData?.price
+    );
+
+
   if (
-    !row ||
-    !marketData
+    marketPrice == null ||
+    marketPrice <= 0
   ) {
 
-    $("#dcfResult")
-      .textContent =
-      "Reverse DCF requires a verified market price and extracted financial data.";
+    resultBox.textContent =
+      "Reverse DCF requires a share price. Fetch the market price or enter a share price manually first.";
 
     return;
 
@@ -7095,12 +7334,105 @@ async function runReverseDCFRequest() {
 
 
   if (
-    shares == null
+    shares == null ||
+    shares <= 0
   ) {
 
-    $("#dcfResult")
-      .textContent =
-      "Reverse DCF requires reliably extracted shares outstanding.";
+    resultBox.textContent =
+      "Reverse DCF cannot be calculated because reliable shares outstanding were not extracted from the annual report.";
+
+    return;
+
+  }
+
+
+  if (
+    row.revenue == null ||
+    row.revenue <= 0
+  ) {
+
+    resultBox.textContent =
+      "Reverse DCF cannot be calculated because revenue is unavailable from the annual report.";
+
+    return;
+
+  }
+
+
+  /*
+   * Manual net debt overrides report net debt
+   * only when the user actually entered a value.
+   */
+
+  const manualNetDebt =
+    finite(
+      $("#dcfNetDebt")?.value
+    );
+
+
+  const reportNetDebt =
+    finite(
+      row.net_debt
+    );
+
+
+  const netDebt =
+
+    manualNetDebt != null
+
+      ? manualNetDebt
+
+      : reportNetDebt;
+
+
+  if (netDebt == null) {
+
+    resultBox.textContent =
+      "Reverse DCF cannot be calculated because net debt is unavailable. Enter net debt manually or ensure debt and cash were extracted from the annual report.";
+
+    return;
+
+  }
+
+
+  const margin =
+    finite(
+      $("#dcfMargin")?.value
+    );
+
+
+  const wacc =
+    finite(
+      $("#dcfWacc")?.value
+    );
+
+
+  const terminalGrowth =
+    finite(
+      $("#dcfTerminal")?.value
+    );
+
+
+  if (
+    margin == null ||
+    wacc == null ||
+    terminalGrowth == null
+  ) {
+
+    resultBox.textContent =
+      "Enter valid EBIT margin, WACC and terminal-growth assumptions.";
+
+    return;
+
+  }
+
+
+  if (
+    terminalGrowth >= wacc
+  ) {
+
+    resultBox.textContent =
+      "Terminal growth must be lower than WACC.";
 
     return;
 
@@ -7109,8 +7441,7 @@ async function runReverseDCFRequest() {
 
   const payload = {
 
-    marketPrice:
-      marketData.price,
+    marketPrice,
 
     revenue:
       row.revenue,
@@ -7124,46 +7455,24 @@ async function runReverseDCFRequest() {
     capex:
       row.capex,
 
-    netDebt:
-      finite(
-        $("#dcfNetDebt")
-          ?.value
-      ) ??
-      row.net_debt ??
-      0,
+    netDebt,
 
     sharesOutstanding:
       shares,
 
     ebitMargin:
-      (
-        finite(
-          $("#dcfMargin")
-            ?.value
-        ) || 0
-      ) / 100,
+      margin / 100,
 
     wacc:
-      (
-        finite(
-          $("#dcfWacc")
-            ?.value
-        ) || 0
-      ) / 100,
+      wacc / 100,
 
     terminalGrowth:
-      (
-        finite(
-          $("#dcfTerminal")
-            ?.value
-        ) || 0
-      ) / 100
+      terminalGrowth / 100
 
   };
 
 
-  $("#dcfResult")
-    .textContent =
+  resultBox.textContent =
     "Calculating market-implied growth…";
 
 
@@ -7189,122 +7498,220 @@ async function runReverseDCFRequest() {
       );
 
 
-    const result =
-      await response.json();
+    const text =
+      await response.text();
 
 
-    if (!response.ok) {
+    let result;
+
+
+    try {
+
+      result =
+        text
+          ? JSON.parse(text)
+          : {};
+
+    }
+
+    catch {
 
       throw new Error(
-        result?.error ||
-        "Reverse DCF failed."
+        "Reverse DCF server returned an unreadable response."
       );
 
     }
 
 
-    const reverseBox =
-  $("#dcfResult");
+    if (!response.ok) {
 
-const impliedGrowth =
-  finite(
-    result.impliedGrowth ??
-    result.implied_growth ??
-    result.revenueGrowth ??
-    result.revenue_growth
-  );
+      const errorMessage =
 
-const marketPrice =
-  finite(
-    result.marketPrice ??
-    result.market_price ??
-    marketData?.price
-  );
+        typeof result?.error === "string"
 
-const impliedValue =
-  finite(
-    result.impliedValuePerShare ??
-    result.implied_value_per_share ??
-    result.valuePerShare ??
-    result.value_per_share
-  );
+          ? result.error
 
-reverseBox.innerHTML = `
+          : result?.error?.message
 
-  <div class="dcf-output">
+          || "Reverse DCF calculation failed.";
 
-    <div class="dcf-output-header">
 
-      <span class="eyebrow">
-        REVERSE DCF RESULT
-      </span>
+      throw new Error(
+        errorMessage
+      );
 
-      <strong>
-        What growth is the market pricing in?
-      </strong>
+    }
 
-    </div>
 
-    <div class="dcf-output-grid">
+    /*
+     * These names EXACTLY match valuation.js.
+     */
 
-      <div class="dcf-output-card">
+    const returnedMarketPrice =
+      finite(
+        result.marketPrice
+      );
 
-        <span>
-          Market price
-        </span>
 
-        <strong>
-          ${
-            marketPrice == null
-              ? "N/A"
-              : priceMoney(marketPrice)
-          }
-        </strong>
+    const impliedGrowth =
+      finite(
+        result.impliedRevenueGrowth
+      );
+
+
+    const modeledValue =
+      finite(
+        result.modeledValuePerShare
+      );
+
+
+    const pricingError =
+      finite(
+        result.pricingError
+      );
+
+
+    const pricingErrorPercent =
+      finite(
+        result.pricingErrorPercent
+      );
+
+
+    resultBox.innerHTML = `
+
+      <div class="dcf-output">
+
+        <div class="dcf-output-header">
+
+          <span class="eyebrow">
+            REVERSE DCF RESULT
+          </span>
+
+          <strong>
+            What growth is the market pricing in?
+          </strong>
+
+        </div>
+
+
+        <div class="dcf-output-grid">
+
+
+          <div class="dcf-output-card">
+
+            <span>
+              Market price
+            </span>
+
+            <strong>
+              ${
+                returnedMarketPrice == null
+                  ? "N/A"
+                  : priceMoney(
+                      returnedMarketPrice
+                    )
+              }
+            </strong>
+
+          </div>
+
+
+          <div class="dcf-output-card">
+
+            <span>
+              Implied revenue growth
+            </span>
+
+            <strong>
+              ${
+                impliedGrowth == null
+                  ? "N/A"
+                  : percentage(
+                      impliedGrowth
+                    )
+              }
+            </strong>
+
+          </div>
+
+
+          <div class="dcf-output-card">
+
+            <span>
+              Model value / share
+            </span>
+
+            <strong>
+              ${
+                modeledValue == null
+                  ? "N/A"
+                  : priceMoney(
+                      modeledValue
+                    )
+              }
+            </strong>
+
+          </div>
+
+
+          <div class="dcf-output-card">
+
+            <span>
+              Pricing difference
+            </span>
+
+            <strong>
+              ${
+                pricingError == null
+                  ? "N/A"
+                  : priceMoney(
+                      pricingError
+                    )
+              }
+            </strong>
+
+            <small>
+              ${
+                pricingErrorPercent == null
+                  ? ""
+                  : `${formatNumber(
+                      pricingErrorPercent
+                    )}%`
+              }
+            </small>
+
+          </div>
+
+
+        </div>
+
+
+        ${
+          result.interpretation
+
+            ? `
+
+              <div class="dcf-interpretation">
+                ${result.interpretation}
+              </div>
+
+            `
+
+            : ""
+        }
+
+
+        <small class="dcf-output-note">
+
+          Reverse DCF estimates the constant revenue-growth
+          rate required to approximately justify the current
+          share price under the assumptions above.
+
+        </small>
 
       </div>
 
-      <div class="dcf-output-card">
-
-        <span>
-          Implied revenue growth
-        </span>
-
-        <strong>
-          ${
-            impliedGrowth == null
-              ? "N/A"
-              : percentage(impliedGrowth)
-          }
-        </strong>
-
-      </div>
-
-      <div class="dcf-output-card">
-
-        <span>
-          Model value / share
-        </span>
-
-        <strong>
-          ${
-            impliedValue == null
-              ? "N/A"
-              : priceMoney(impliedValue)
-          }
-        </strong>
-
-      </div>
-
-    </div>
-
-    <small class="dcf-output-note">
-      Reverse DCF estimates the growth assumptions required
-      to justify the current market price.
-    </small>
-
-  </div>
-
-`;
+    `;
 
   }
 
@@ -7312,14 +7719,24 @@ reverseBox.innerHTML = `
     error
   ) {
 
-    $("#dcfResult")
-      .textContent =
-      error.message;
+    console.error(
+      "Reverse DCF calculation:",
+      error
+    );
+
+
+    resultBox.textContent =
+      error?.message ||
+      "Reverse DCF calculation failed.";
 
   }
 
 }
 
+
+/* ============================================================
+   DCF BUTTON EVENTS
+   ============================================================ */
 
 $("#runDcf")
   ?.addEventListener(
