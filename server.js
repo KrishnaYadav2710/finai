@@ -2779,32 +2779,163 @@ if (
 
     catch (error) {
 
-      console.error(
-        "Financial extraction full error:",
-        error
-      );
+  console.error(
+    "Financial extraction full error:",
+    error
+  );
 
-      let message =
-        "Annual-report financial extraction failed.";
 
-      if (typeof error === "string") {
-        message = error;
-      } else if (
-        error?.message &&
-        typeof error.message === "string"
-      ) {
-        message = error.message;
-      } else if (
-        error &&
-        typeof error === "object"
-      ) {
-        try {
-          message = JSON.stringify(error);
-        } catch {
-          message =
-            "Unknown financial extraction error.";
-        }
-      }
+  const upstreamStatus =
+    Number.isInteger(
+      error?.status
+    )
+      ? error.status
+      : null;
+
+
+  let status =
+    500;
+
+
+  let message =
+    "FinSight could not extract reliable financial statements from this annual report.";
+
+
+  let code =
+    "FINANCIAL_EXTRACTION_FAILED";
+
+
+  if (
+    upstreamStatus === 400
+  ) {
+
+    status =
+      400;
+
+    code =
+      "INVALID_REPORT";
+
+    message =
+      "The annual report could not be processed. Confirm that the PDF is readable and contains financial statements.";
+
+  }
+
+
+  else if (
+    upstreamStatus === 413
+  ) {
+
+    status =
+      413;
+
+    code =
+      "REPORT_TOO_LARGE";
+
+    message =
+      "The annual-report file is too large to process.";
+
+  }
+
+
+  else if (
+    upstreamStatus === 429
+  ) {
+
+    status =
+      429;
+
+    code =
+      "AI_RATE_LIMIT";
+
+    message =
+      "The AI extraction service is temporarily rate-limited. Please try again shortly.";
+
+  }
+
+
+  else if (
+    upstreamStatus === 401 ||
+    upstreamStatus === 403
+  ) {
+
+    status =
+      503;
+
+    code =
+      "AI_AUTH_ERROR";
+
+    message =
+      "The AI extraction service is temporarily unavailable because its API credentials were rejected.";
+
+  }
+
+
+  else if (
+    upstreamStatus != null &&
+    upstreamStatus >= 500
+  ) {
+
+    status =
+      503;
+
+    code =
+      "AI_PROVIDER_UNAVAILABLE";
+
+    message =
+      "The AI extraction provider is temporarily unavailable. Please try again.";
+
+  }
+
+
+  else if (
+    error?.message ===
+    "Gemini AI is not configured."
+  ) {
+
+    status =
+      503;
+
+    code =
+      "AI_NOT_CONFIGURED";
+
+    message =
+      "FinSight AI extraction is not configured on the server.";
+
+  }
+
+
+  else if (
+    typeof error?.message === "string" &&
+    error.message.trim()
+  ) {
+
+    const safeMessage =
+      error.message.trim();
+
+
+    message =
+      safeMessage.length <= 500
+        ? safeMessage
+        : "Financial extraction failed because the AI provider returned an unexpected error.";
+
+  }
+
+
+  return res
+    .status(status)
+    .json({
+
+      ok:
+        false,
+
+      error:
+        message,
+
+      code
+
+    });
+
+}
 
       const status =
         Number.isInteger(error?.status) &&
