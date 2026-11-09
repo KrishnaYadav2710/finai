@@ -4830,3 +4830,772 @@ footer strong {
   }
 
 }
+
+/* ============================================================
+   FINSIGHT LANDING PAGE POLISH
+   Logo + Hero + Upload Progress
+   ============================================================ */
+
+
+/* ------------------------------------------------------------
+   HEADER
+   ------------------------------------------------------------ */
+
+.topbar {
+  padding: 30px 48px;
+  background: rgba(255, 255, 255, 0.92);
+  border-bottom: 1px solid rgba(20, 55, 46, 0.10);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+
+/* ------------------------------------------------------------
+   NEW MINIMAL LOGO
+   ------------------------------------------------------------ */
+
+.brand-chart {
+  width: 52px;
+  height: 48px;
+
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+
+  gap: 5px;
+
+  padding: 8px;
+
+  border-radius: 12px;
+
+  background:
+    linear-gradient(
+      145deg,
+      rgba(22, 105, 76, 0.08),
+      rgba(139, 230, 77, 0.10)
+    );
+}
+
+
+.brand-bar {
+  display: block;
+
+  width: 8px;
+
+  border-radius: 8px 8px 3px 3px;
+
+  background:
+    linear-gradient(
+      180deg,
+      #72e846,
+      #08764f
+    );
+
+  transform-origin: bottom;
+
+  animation:
+    finSightBarRise 900ms
+    cubic-bezier(.2,.8,.2,1)
+    both;
+}
+
+
+.brand-bar.bar-1 {
+  height: 16px;
+  animation-delay: 80ms;
+}
+
+
+.brand-bar.bar-2 {
+  height: 28px;
+  animation-delay: 160ms;
+}
+
+
+.brand-bar.bar-3 {
+  height: 40px;
+  animation-delay: 240ms;
+}
+
+
+@keyframes finSightBarRise {
+
+  from {
+    transform: scaleY(0.15);
+    opacity: 0;
+  }
+
+  to {
+    transform: scaleY(1);
+    opacity: 1;
+  }
+
+}
+
+
+.brand-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+
+.brand-copy strong {
+  font-size: 24px;
+  line-height: 1;
+  letter-spacing: -0.04em;
+  color: #102f29;
+}
+
+
+.brand-copy span {
+  font-size: 11px;
+  font-weight: 700;
+
+  letter-spacing: 0.19em;
+
+  color: #71817c;
+}
+
+
+/* ------------------------------------------------------------
+   STATUS
+   ------------------------------------------------------------ */
+
+.system-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+
+  padding: 10px 14px;
+
+  border: 1px solid rgba(21, 61, 51, 0.12);
+  border-radius: 999px;
+
+  background: rgba(248, 251, 249, 0.9);
+}
+
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+
+  flex: 0 0 auto;
+
+  border-radius: 50%;
+
+  background: #22b76a;
+
+  box-shadow:
+    0 0 0 5px rgba(34, 183, 106, 0.10);
+
+  animation:
+    statusPulse 2s ease-in-out infinite;
+}
+
+
+@keyframes statusPulse {
+
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 4px rgba(34, 183, 106, 0.08);
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 8px rgba(34, 183, 106, 0.02);
+  }
+
+}
+
+
+/* ------------------------------------------------------------
+   HERO
+   ------------------------------------------------------------ */
+
+.hero {
+  position: relative;
+
+  overflow: hidden;
+
+  padding:
+    clamp(58px, 8vw, 100px)
+    clamp(28px, 6vw, 64px);
+
+  background:
+    radial-gradient(
+      circle at 88% 40%,
+      rgba(110, 235, 115, 0.16),
+      transparent 35%
+    ),
+    linear-gradient(
+      135deg,
+      #ffffff 0%,
+      #fbfdfb 55%,
+      #f1fbf5 100%
+    );
+}
+
+
+.hero::before {
+  content: "";
+
+  position: absolute;
+
+  width: 360px;
+  height: 360px;
+
+  right: -140px;
+  top: 90px;
+
+  border-radius: 50%;
+
+  background:
+    rgba(108, 238, 119, 0.10);
+
+  filter: blur(60px);
+
+  pointer-events: none;
+
+  animation:
+    heroGlow 7s ease-in-out infinite alternate;
+}
+
+
+@keyframes heroGlow {
+
+  from {
+    transform:
+      translate3d(0, -10px, 0)
+      scale(0.95);
+  }
+
+  to {
+    transform:
+      translate3d(-35px, 25px, 0)
+      scale(1.1);
+  }
+
+}
+
+
+.hero-copy {
+  position: relative;
+  z-index: 1;
+
+  max-width: 900px;
+
+  animation:
+    heroEnter 700ms ease-out both;
+}
+
+
+.hero-copy h1 {
+  max-width: 850px;
+
+  margin-top: 24px;
+
+  font-size:
+    clamp(42px, 6vw, 72px);
+
+  line-height: 0.98;
+
+  letter-spacing: -0.055em;
+
+  color: #102f29;
+}
+
+
+.hero-copy p {
+  max-width: 900px;
+
+  margin-top: 28px;
+
+  font-size:
+    clamp(17px, 2vw, 21px);
+
+  line-height: 1.65;
+
+  color: #536660;
+}
+
+
+@keyframes heroEnter {
+
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+}
+
+
+/* ------------------------------------------------------------
+   UPLOAD CARD
+   ------------------------------------------------------------ */
+
+.report-upload-card {
+  position: relative;
+  z-index: 1;
+
+  max-width: 900px;
+
+  margin-top: 48px;
+
+  padding: 14px;
+
+  border-radius: 30px;
+
+  background:
+    rgba(255, 255, 255, 0.84);
+
+  border:
+    1px solid rgba(25, 71, 58, 0.08);
+
+  box-shadow:
+    0 22px 65px rgba(20, 64, 51, 0.10);
+
+  backdrop-filter:
+    blur(14px);
+
+  -webkit-backdrop-filter:
+    blur(14px);
+
+  animation:
+    uploadEnter 850ms 120ms ease-out both;
+}
+
+
+@keyframes uploadEnter {
+
+  from {
+    opacity: 0;
+    transform: translateY(25px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+}
+
+
+/* ------------------------------------------------------------
+   DROP ZONE
+   ------------------------------------------------------------ */
+
+.upload-dropzone {
+  min-height: 285px;
+
+  padding: 38px 28px;
+
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+
+  text-align: center;
+
+  cursor: pointer;
+
+  border:
+    2px dashed rgba(27, 126, 92, 0.65);
+
+  border-radius: 22px;
+
+  background:
+    linear-gradient(
+      145deg,
+      rgba(255,255,255,.92),
+      rgba(239,252,244,.76)
+    );
+
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    background 180ms ease;
+}
+
+
+.upload-dropzone:hover {
+  transform: translateY(-2px);
+
+  border-color: #14915e;
+
+  box-shadow:
+    inset 0 0 0 1px rgba(24, 145, 94, 0.06),
+    0 15px 38px rgba(23, 98, 73, 0.08);
+}
+
+
+/* ------------------------------------------------------------
+   PDF ICON
+   ------------------------------------------------------------ */
+
+.upload-document-icon {
+  position: relative;
+
+  color: #126b4d;
+
+  margin-bottom: 16px;
+
+  animation:
+    documentFloat 3s ease-in-out infinite;
+}
+
+
+@keyframes documentFloat {
+
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-6px);
+  }
+
+}
+
+
+.pdf-badge {
+  position: absolute;
+
+  left: 4px;
+  bottom: 5px;
+
+  padding: 3px 7px;
+
+  border-radius: 6px;
+
+  background: #2ac45f;
+  color: #fff;
+
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+
+
+/* ------------------------------------------------------------
+   UPLOAD TEXT
+   ------------------------------------------------------------ */
+
+.upload-title {
+  font-size: 25px;
+  letter-spacing: -0.03em;
+
+  color: #112f29;
+}
+
+
+.upload-subtitle {
+  margin-top: 6px;
+
+  font-size: 14px;
+
+  color: #73837e;
+}
+
+
+/* ------------------------------------------------------------
+   UPLOAD BUTTON
+   ------------------------------------------------------------ */
+
+.upload-button {
+  width: min(100%, 490px);
+
+  min-height: 58px;
+
+  margin-top: 24px;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  gap: 11px;
+
+  padding: 0 24px;
+
+  border-radius: 999px;
+
+  background:
+    linear-gradient(
+      100deg,
+      #74e824,
+      #bfe978
+    );
+
+  color: #102b25;
+
+  font-size: 16px;
+  font-weight: 800;
+
+  box-shadow:
+    0 10px 26px rgba(103, 205, 52, 0.20);
+
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease;
+}
+
+
+.upload-dropzone:hover .upload-button {
+  transform: scale(1.015);
+
+  box-shadow:
+    0 14px 34px rgba(103, 205, 52, 0.28);
+}
+
+
+/* ------------------------------------------------------------
+   UPLOAD STATUS
+   ------------------------------------------------------------ */
+
+.upload-status {
+  padding:
+    16px 10px 8px;
+
+  color: #536660;
+
+  font-size: 14px;
+}
+
+
+/* ------------------------------------------------------------
+   PROGRESS AREA
+   ------------------------------------------------------------ */
+
+.scan-progress {
+  padding:
+    10px 10px 16px;
+}
+
+
+.scan-progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+
+  gap: 20px;
+
+  margin-bottom: 10px;
+
+  font-size: 13px;
+  font-weight: 700;
+
+  color: #173a31;
+}
+
+
+.scan-working {
+  color: #248b69;
+}
+
+
+/* ------------------------------------------------------------
+   PROGRESS TRACK
+   ------------------------------------------------------------ */
+
+.scan-track {
+  position: relative;
+
+  width: 100%;
+  height: 12px;
+
+  overflow: hidden;
+
+  border-radius: 999px;
+
+  background: #e7eee9;
+}
+
+
+.scan-bar {
+  position: relative;
+
+  width: 0%;
+  height: 100%;
+
+  overflow: hidden;
+
+  border-radius: inherit;
+
+  background:
+    linear-gradient(
+      90deg,
+      #0c8757,
+      #27c76d,
+      #8fe95d
+    );
+
+  transition:
+    width 350ms ease;
+}
+
+
+/*
+ * Animated light travelling through the
+ * progress bar while PDF pages are scanned.
+ */
+
+.scan-bar::after {
+  content: "";
+
+  position: absolute;
+
+  inset: 0;
+
+  width: 45%;
+
+  transform: translateX(-120%);
+
+  background:
+    linear-gradient(
+      90deg,
+      transparent,
+      rgba(255,255,255,.48),
+      transparent
+    );
+
+  animation:
+    progressShimmer 1.35s linear infinite;
+}
+
+
+@keyframes progressShimmer {
+
+  to {
+    transform: translateX(280%);
+  }
+
+}
+
+
+/* ------------------------------------------------------------
+   ERROR
+   ------------------------------------------------------------ */
+
+.error-box {
+  margin: 10px;
+
+  padding: 14px 16px;
+
+  border-radius: 12px;
+
+  background: #fff2f0;
+
+  border: 1px solid #f0c4bd;
+
+  color: #8a3026;
+}
+
+
+/* ------------------------------------------------------------
+   MOBILE / IPAD
+   ------------------------------------------------------------ */
+
+@media (max-width: 760px) {
+
+  .topbar {
+    padding: 24px;
+  }
+
+
+  .topbar {
+    align-items: flex-start;
+    gap: 18px;
+  }
+
+
+  .brand-chart {
+    width: 46px;
+    height: 44px;
+  }
+
+
+  .brand-copy strong {
+    font-size: 21px;
+  }
+
+
+  .hero {
+    padding:
+      58px 24px
+      64px;
+  }
+
+
+  .hero-copy h1 {
+    font-size:
+      clamp(42px, 11vw, 60px);
+  }
+
+
+  .report-upload-card {
+    margin-top: 38px;
+
+    border-radius: 24px;
+  }
+
+
+  .upload-dropzone {
+    min-height: 260px;
+
+    padding: 30px 18px;
+
+    border-radius: 18px;
+  }
+
+
+  .upload-button {
+    width: 100%;
+  }
+
+
+  .scan-progress-header {
+    align-items: flex-start;
+    flex-direction: column;
+
+    gap: 3px;
+  }
+
+}
+
+
+/* ------------------------------------------------------------
+   ACCESSIBILITY
+   ------------------------------------------------------------ */
+
+@media (prefers-reduced-motion: reduce) {
+
+  .brand-bar,
+  .status-dot,
+  .hero::before,
+  .hero-copy,
+  .report-upload-card,
+  .upload-document-icon,
+  .scan-bar::after {
+    animation: none !important;
+  }
+
+
+  .scan-bar,
+  .upload-dropzone,
+  .upload-button {
+    transition: none !important;
+  }
+
+}
