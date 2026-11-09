@@ -2175,12 +2175,59 @@ For group-level investor analysis:
    annual report presentation unless there is a clear reason
    not to.
 
-5. FINANCIAL UNITS ARE CRITICAL. Read the unit printed on the audited statement itself.
-   Normalize every monetary amount to INR CRORE before returning JSON:
-   - if source says "₹ in million" / "H in million" / "INR million", divide by 10
-   - if source says "₹ in billion" / "H Bn", multiply by 100
-   - if source says "₹ in crore", keep the number unchanged
-   Do not label a billion or million figure as crore without conversion.
+5. FINANCIAL UNITS ARE CRITICAL.
+
+Read the unit printed on the audited financial statement itself.
+
+Return every monetary number EXACTLY AS PRINTED in the audited
+financial statement.
+
+DO NOT convert million, lakh, billion or crore values yourself.
+
+Examples:
+
+If the audited statement says:
+
+"INR million"
+
+and revenue is:
+
+166762
+
+return:
+
+"source_unit": "INR million",
+"revenue": 166762
+
+DO NOT return 16676.2.
+
+If the audited statement says:
+
+"INR billion"
+
+and revenue is:
+
+166.762
+
+return:
+
+"source_unit": "INR billion",
+"revenue": 166.762
+
+DO NOT convert it to crore.
+
+The FinSight server performs deterministic unit conversion
+after extraction.
+
+All monetary values within a financial-year row must correspond
+to the declared source_unit.
+
+If different audited statements use different units and the
+values cannot be represented safely under one source_unit,
+do not silently convert or combine them. Explain the issue in
+extraction_notes and return unsupported fields as null.
+
+Never change the scale of a reported number silently.
 
 6. shares_outstanding should be returned in CRORE SHARES
    when reliably calculable.
