@@ -687,14 +687,13 @@ const previousCapitalEmployed =
 
   const netDebt =
 
-    row.total_debt != null
+  row.total_debt != null &&
+  row.cash != null
 
-      ? row.total_debt -
-        (
-          row.cash || 0
-        )
+    ? row.total_debt -
+      row.cash
 
-      : null;
+    : null;
 
 
   return {
