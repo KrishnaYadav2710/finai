@@ -73,42 +73,48 @@
        HEADER
        ====================================================== -->
 
-  <header class="topbar">
+  <!-- ======================================================
+     HEADER
+     ====================================================== -->
 
-    <div class="brand">
+<header class="topbar">
 
-      <div class="brand-mark">
-        F
-      </div>
+  <div class="brand">
 
-      <div>
+    <div class="brand-mark brand-chart" aria-hidden="true">
+      <span class="brand-bar bar-1"></span>
+      <span class="brand-bar bar-2"></span>
+      <span class="brand-bar bar-3"></span>
+    </div>
 
-        <strong>
-          FinSight
-        </strong>
+    <div class="brand-copy">
 
-        <span>
-          AI Investor Research
-        </span>
+      <strong>
+        FinSight
+      </strong>
 
-      </div>
+      <span>
+        INVESTOR INTELLIGENCE
+      </span>
 
     </div>
 
+  </div>
 
-    <div class="top-actions">
 
-      <div
-        id="aiStatus"
-        class="system-status"
-      >
-        Checking research engine…
-      </div>
+  <div class="top-actions">
 
+    <div
+      id="aiStatus"
+      class="system-status"
+    >
+      <span class="status-dot"></span>
+      Checking research engine…
     </div>
 
-  </header>
+  </div>
 
+</header>
 
   <!-- ======================================================
        MAIN
@@ -121,92 +127,181 @@
          HERO / REPORT INPUT
          ==================================================== -->
 
-    <section class="hero">
+<section class="hero">
 
-      <div class="hero-copy">
+  <div class="hero-copy">
 
-        <span class="eyebrow">
-          ANNUAL REPORT → INVESTOR INTELLIGENCE
+    <span class="eyebrow">
+      ANNUAL REPORT → INVESTOR INTELLIGENCE
+    </span>
+
+    <h1>
+      Understand a company before you invest.
+    </h1>
+
+    <p>
+      Upload the company's annual report. FinSight extracts
+      the financial history, analyzes the business, identifies
+      risks, checks management and governance, and builds an
+      investor research workspace from the supplied evidence.
+    </p>
+
+  </div>
+
+
+  <!-- UPLOAD CARD -->
+
+  <div class="report-upload-card">
+
+    <input
+      id="companyFile"
+      type="file"
+      accept=".pdf,application/pdf"
+      hidden
+    >
+
+
+    <label
+      class="upload-dropzone"
+      for="companyFile"
+    >
+
+      <div class="upload-document-icon" aria-hidden="true">
+
+        <svg
+          viewBox="0 0 64 64"
+          width="64"
+          height="64"
+          fill="none"
+        >
+
+          <path
+            d="M17 6h22l12 12v40H17V6Z"
+            stroke="currentColor"
+            stroke-width="3"
+            stroke-linejoin="round"
+          />
+
+          <path
+            d="M39 6v13h12"
+            stroke="currentColor"
+            stroke-width="3"
+            stroke-linejoin="round"
+          />
+
+          <path
+            d="M25 31h18M25 39h14"
+            stroke="currentColor"
+            stroke-width="3"
+            stroke-linecap="round"
+          />
+
+        </svg>
+
+        <span class="pdf-badge">
+          PDF
         </span>
-
-        <h1>
-          Understand a company before you invest.
-        </h1>
-
-        <p>
-          Upload the company's annual report. FinSight extracts
-          the financial history, analyzes the business, identifies
-          risks, checks management and governance, and builds an
-          investor research workspace from the supplied evidence.
-        </p>
 
       </div>
 
 
-      <div class="report-upload-card">
+      <strong class="upload-title">
+        Upload annual report
+      </strong>
 
 
-        <!-- IMPORTANT:
-             File input is OUTSIDE the label.
-             This is more reliable on Safari / iPad.
-        -->
+      <span class="upload-subtitle">
+        PDF · up to 45 MB
+      </span>
 
-        <input
-          id="companyFile"
-          type="file"
-          accept=".pdf,application/pdf"
-          hidden
+
+      <span class="upload-button">
+
+        <svg
+          viewBox="0 0 24 24"
+          width="20"
+          height="20"
+          fill="none"
+          aria-hidden="true"
         >
 
+          <path
+            d="M12 16V4M7 9l5-5 5 5"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
 
-        <label
-          class="file-button primary"
-          for="companyFile"
-        >
-          Upload annual report
-        </label>
+          <path
+            d="M5 14v5h14v-5"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
 
+        </svg>
+
+        Choose annual report
+
+      </span>
+
+    </label>
+
+
+    <!-- STATUS -->
+
+    <div
+      id="uploadStatus"
+      class="upload-status"
+    >
+      No company loaded.
+    </div>
+
+
+    <!-- LOADING / SCANNING BAR -->
+
+    <div
+      id="scanProgress"
+      class="scan-progress"
+      hidden
+    >
+
+      <div class="scan-progress-header">
+
+        <span id="scanProgressText">
+          Preparing report…
+        </span>
+
+        <span class="scan-working">
+          Analyzing
+        </span>
+
+      </div>
+
+
+      <div class="scan-track">
 
         <div
-          id="uploadStatus"
-          class="upload-status"
-        >
-          No company loaded.
-        </div>
-
-
-        <div
-          id="scanProgress"
-          class="scan-progress"
-          hidden
-        >
-
-          <div class="scan-track">
-
-            <div
-              id="scanBar"
-              class="scan-bar"
-            ></div>
-
-          </div>
-
-          <span id="scanProgressText">
-            Preparing report…
-          </span>
-
-        </div>
-
-
-        <div
-          id="error"
-          class="error-box"
-          hidden
+          id="scanBar"
+          class="scan-bar"
         ></div>
 
       </div>
 
-    </section>
+    </div>
 
+
+    <div
+      id="error"
+      class="error-box"
+      hidden
+    ></div>
+
+  </div>
+
+</section>
 
     <!-- ====================================================
          EMPTY STATE
