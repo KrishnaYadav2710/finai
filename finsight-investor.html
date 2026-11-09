@@ -122,213 +122,244 @@
 
   <main>
 
+    <!-- ======================================================
+     HEADER
+     ====================================================== -->
 
-    <!-- ====================================================
-         HERO / REPORT INPUT
-         ==================================================== -->
+<header class="topbar landing-topbar">
 
-<section class="hero">
+  <div class="brand">
 
-  <div class="hero-copy">
+    <div class="brand-mark" aria-hidden="true">
+      <span class="brand-f">F</span>
+      <span class="brand-spark"></span>
+    </div>
 
-    <span class="eyebrow">
-      ANNUAL REPORT → INVESTOR INTELLIGENCE
-    </span>
+    <div class="brand-copy">
 
-    <h1>
-      Understand a company before you invest.
-    </h1>
-
-    <p>
-      Upload the company's annual report. FinSight extracts
-      the financial history, analyzes the business, identifies
-      risks, checks management and governance, and builds an
-      investor research workspace from the supplied evidence.
-    </p>
-
-  </div>
-
-
-  <!-- UPLOAD CARD -->
-
-  <div class="report-upload-card">
-
-    <input
-      id="companyFile"
-      type="file"
-      accept=".pdf,application/pdf"
-      hidden
-    >
-
-
-    <label
-      class="upload-dropzone"
-      for="companyFile"
-    >
-
-      <div class="upload-document-icon" aria-hidden="true">
-
-        <svg
-          viewBox="0 0 64 64"
-          width="64"
-          height="64"
-          fill="none"
-        >
-
-          <path
-            d="M17 6h22l12 12v40H17V6Z"
-            stroke="currentColor"
-            stroke-width="3"
-            stroke-linejoin="round"
-          />
-
-          <path
-            d="M39 6v13h12"
-            stroke="currentColor"
-            stroke-width="3"
-            stroke-linejoin="round"
-          />
-
-          <path
-            d="M25 31h18M25 39h14"
-            stroke="currentColor"
-            stroke-width="3"
-            stroke-linecap="round"
-          />
-
-        </svg>
-
-        <span class="pdf-badge">
-          PDF
-        </span>
-
-      </div>
-
-
-      <strong class="upload-title">
-        Upload annual report
+      <strong>
+        FinSight
       </strong>
 
-
-      <span class="upload-subtitle">
-        PDF · up to 45 MB
+      <span>
+        AI INVESTOR RESEARCH
       </span>
 
-
-      <span class="upload-button">
-
-        <svg
-          viewBox="0 0 24 24"
-          width="20"
-          height="20"
-          fill="none"
-          aria-hidden="true"
-        >
-
-          <path
-            d="M12 16V4M7 9l5-5 5 5"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-
-          <path
-            d="M5 14v5h14v-5"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          />
-
-        </svg>
-
-        Choose annual report
-
-      </span>
-
-    </label>
-
-
-    <!-- STATUS -->
-
-    <div
-      id="uploadStatus"
-      class="upload-status"
-    >
-      No company loaded.
     </div>
-
-
-    <!-- LOADING / SCANNING BAR -->
-
-    <div
-      id="scanProgress"
-      class="scan-progress"
-      hidden
-    >
-
-      <div class="scan-progress-header">
-
-        <span id="scanProgressText">
-          Preparing report…
-        </span>
-
-        <span class="scan-working">
-          Analyzing
-        </span>
-
-      </div>
-
-
-      <div class="scan-track">
-
-        <div
-          id="scanBar"
-          class="scan-bar"
-        ></div>
-
-      </div>
-
-    </div>
-
-
-    <div
-      id="error"
-      class="error-box"
-      hidden
-    ></div>
 
   </div>
 
-</section>
 
-    <!-- ====================================================
-         EMPTY STATE
-         ==================================================== -->
+  <div class="top-actions">
 
-    <section
-      id="emptyState"
-      class="empty-state"
+    <div
+      id="aiStatus"
+      class="system-status"
     >
+      <span class="status-dot"></span>
+      Checking research engine…
+    </div>
 
-      <div class="empty-icon">
-        ↑
-      </div>
+  </div>
 
-      <h2>
-        Upload an annual report to begin
-      </h2>
+</header>
+
+
+<!-- ======================================================
+     MAIN
+     ====================================================== -->
+
+<main>
+
+
+  <!-- ====================================================
+       UNIFIED LANDING HERO
+       ==================================================== -->
+
+  <section class="hero landing-hero">
+
+    <div
+      class="hero-glow hero-glow-one"
+      aria-hidden="true"
+    ></div>
+
+    <div
+      class="hero-glow hero-glow-two"
+      aria-hidden="true"
+    ></div>
+
+
+    <div class="hero-copy">
+
+      <span class="eyebrow hero-eyebrow">
+        ANNUAL REPORT
+        <span class="eyebrow-arrow">→</span>
+        INVESTOR INTELLIGENCE
+      </span>
+
+
+      <h1>
+        Understand a company
+        <span>before you invest.</span>
+      </h1>
+
 
       <p>
-        FinSight does not use sample-company financials.
-        The dashboard will be populated only from the company
-        annual report you provide.
+        Upload the company's annual report. FinSight extracts
+        the financial history, analyzes the business, identifies
+        risks, checks management and governance, and builds an
+        investor research workspace from the supplied evidence.
       </p>
 
-    </section>
+    </div>
 
 
+    <!-- ==================================================
+         SINGLE UPLOAD CARD
+         ================================================== -->
+
+    <div class="report-upload-card landing-upload-card">
+
+      <input
+        id="companyFile"
+        type="file"
+        accept=".pdf,application/pdf"
+        hidden
+      >
+
+
+      <label
+        class="file-button primary landing-upload-button"
+        for="companyFile"
+      >
+
+        <span class="upload-icon" aria-hidden="true">
+
+          <svg
+            viewBox="0 0 24 24"
+            width="21"
+            height="21"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M12 16V4"></path>
+            <path d="M7.5 8.5 12 4l4.5 4.5"></path>
+            <path d="M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"></path>
+          </svg>
+
+        </span>
+
+        <span>
+          Upload annual report
+        </span>
+
+      </label>
+
+
+      <div
+        id="uploadStatus"
+        class="upload-status"
+      >
+        PDF annual reports up to 45 MB
+      </div>
+
+
+      <!-- Progress stays INSIDE the same card -->
+
+      <div
+        id="scanProgress"
+        class="scan-progress landing-progress"
+        hidden
+      >
+
+        <div class="scan-progress-header">
+
+          <span class="scan-active">
+
+            <span class="scan-pulse"></span>
+
+            Analyzing report
+
+          </span>
+
+
+          <span id="scanProgressText">
+            Preparing report…
+          </span>
+
+        </div>
+
+
+        <div class="scan-track">
+
+          <div
+            id="scanBar"
+            class="scan-bar"
+          ></div>
+
+        </div>
+
+      </div>
+
+
+      <div
+        id="error"
+        class="error-box"
+        hidden
+      ></div>
+
+    </div>
+
+
+    <div class="hero-trust-row">
+
+      <span>
+        <i></i>
+        Evidence grounded
+      </span>
+
+      <span>
+        <i></i>
+        No sample financials
+      </span>
+
+      <span>
+        <i></i>
+        Consolidated statements preferred
+      </span>
+
+    </div>
+
+  </section>
+
+
+  <!--
+    Keep this ID because finsight-investor.js uses it.
+    It is intentionally hidden so we do NOT show a
+    second upload section.
+  -->
+
+  <section
+    id="emptyState"
+    class="empty-state landing-empty-state"
+    hidden
+  ></section>
+
+
+  <!-- ====================================================
+       COMPANY WORKSPACE
+       Keep all your existing content from here onward.
+       ==================================================== -->
+
+  <div
+    id="companyWorkspace"
+    hidden
+  >
+
+  
     <!-- ====================================================
          COMPANY WORKSPACE
          ==================================================== -->
