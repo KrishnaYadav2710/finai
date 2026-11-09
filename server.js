@@ -4054,496 +4054,40 @@ Use exactly:
 
 /* ============================================================
    18. ALPHA VANTAGE MARKET QUOTE
-   Identifier-first market lookup
-
-   Priority for Indian companies:
-   1. BSE security code
-   2. NSE code
-   3. Verified ticker
-
-   No company-name symbol search.
-   No guessed ticker.
-   ============================================================ */
-
-
-const marketQuoteCache =
-  new Map();
-
-
-const MARKET_CACHE_MS =
-  6 * 60 * 60 * 1000;
-
-
-/* ============================================================
-   MARKET CACHE
-   ============================================================ */
-
-function getCachedMarketQuote(key) {
-
-  const cached =
-    marketQuoteCache.get(key);
-
-
-  if (!cached) {
-    return null;
-  }
-
-
-  if (
-    Date.now() -
-      cached.savedAt >
-    MARKET_CACHE_MS
-  ) {
-
-    marketQuoteCache.delete(key);
-
-    return null;
-
-  }
-
-
-  return cached.data;
-
-}
-
-
-function cacheMarketQuote(
-  key,
-  data
-) {
-
-  marketQuoteCache.set(
-    key,
-    {
-      savedAt:
-        Date.now(),
-
-      data
-    }
-  );
-
-}
-
-
-/* ============================================================
-   ONE ALPHA VANTAGE QUOTE REQUEST
-   ============================================================ */
-
-async function fetchAlphaQuote(
-  symbol
-) {
-
-  const url =
-    new URL(
-      "https://www.alphavantage.co/query"
-    );
-
-
-  url.searchParams.set(
-    "function",
-    "GLOBAL_QUOTE"
-  );
-
-
-  url.searchParams.set(
-    "symbol",
-    symbol
-  );
-
-
-  url.searchParams.set(
-    "apikey",
-    ALPHA_VANTAGE_API_KEY
-  );
-
-
-  const data =
-    await fetchJSON(url);
-
-
-  /*
-   * Alpha Vantage sometimes returns HTTP 200
-   * with an API-limit message in the JSON.
-   */
-
-  if (
-    data?.Note ||
-    data?.Information
-  ) {
-
-    const error =
-      new Error(
-        data.Note ||
-        data.Information
-      );
-
-
-    error.status =
-      429;
-
-
-    throw error;
-
-  }
-
-
-  const quote =
-    data?.["Global Quote"] ||
-    {};
-
-
-  const price =
-    Number(
-      quote["05. price"]
-    );
-
-
-  if (
-    !Number.isFinite(price) ||
-    price <= 0
-  ) {
-
-    return null;
-
-  }
-
-
-  const numeric =
-    key => {
-
-      const value =
-        Number(
-          quote[key]
-        );
-
-
-      return Number.isFinite(value)
-        ? value
-        : null;
-
-    };
-
-
-  return {
-
-    symbol,
-
-    price,
-
-    open:
-      numeric(
-        "02. open"
-      ),
-
-    high:
-      numeric(
-        "03. high"
-      ),
-
-    low:
-      numeric(
-        "04. low"
-      ),
-
-    volume:
-      numeric(
-        "06. volume"
-      ),
-
-    asOf:
-      quote[
-        "07. latest trading day"
-      ] ||
-      null,
-
-    previousClose:
-      numeric(
-        "08. previous close"
-      ),
-
-    change:
-      numeric(
-        "09. change"
-      ),
-
-    changePercent:
-      quote[
-        "10. change percent"
-      ] ||
-      null
-
-  };
-
-}
-
-
-/* ============================================================
-   BUILD VERIFIED MARKET IDENTIFIERS
-   ============================================================ */
-
-function buildMarketCandidates({
-
-  ticker,
-
-  exchange,
-
-  nseCode,
-
-  bseCode
-
-}) {
-
-  const candidates =
-    [];
-
-
-  const cleanTicker =
-    String(
-      ticker || ""
-    )
-      .trim()
-      .toUpperCase();
-
-
-  const cleanExchange =
-    String(
-      exchange || ""
-    )
-      .trim()
-      .toUpperCase();
-
-
-  const cleanNSE =
-    String(
-      nseCode || ""
-    )
-      .trim()
-      .toUpperCase();
-
-
-  const cleanBSE =
-    String(
-      bseCode || ""
-    )
-      .trim()
-      .toUpperCase();
-
-
-  /*
-   * PRIORITY 1
-   *
-   * BSE security code explicitly extracted
-   * from annual report.
-   *
-   * Example:
-   *
-   * 543287
-   *
-   * becomes:
-   *
-   * 543287.BSE
-   */
-
-  if (cleanBSE) {
-
-    candidates.push({
-
-      symbol:
-
-        cleanBSE.endsWith(
-          ".BSE"
-        )
-
-          ? cleanBSE
-
-          : `${cleanBSE}.BSE`,
-
-      source:
-        "BSE security code"
-
-    });
-
-  }
-
-
-  /*
-   * PRIORITY 2
-   *
-   * Explicit NSE code from annual report.
-   */
-
-  if (cleanNSE) {
-
-    candidates.push({
-
-      symbol:
-        cleanNSE,
-
-      source:
-        "NSE code"
-
-    });
-
-  }
-
-
-  /*
-   * PRIORITY 3
-   *
-   * Generic ticker is allowed only because
-   * it came from annual-report extraction.
-   */
-
-  if (cleanTicker) {
-
-    /*
-     * BSE ticker
-     */
-
-    if (
-      cleanExchange ===
-      "BSE"
-    ) {
-
-      candidates.push({
-
-        symbol:
-
-          cleanTicker.endsWith(
-            ".BSE"
-          )
-
-            ? cleanTicker
-
-            : `${cleanTicker}.BSE`,
-
-        source:
-          "Verified BSE ticker"
-
-      });
-
-    }
-
-
-    /*
-     * NSE / other verified ticker
-     */
-
-    else {
-
-      candidates.push({
-
-        symbol:
-          cleanTicker,
-
-        source:
-          "Verified ticker"
-
-      });
-
-    }
-
-  }
-
-
-  /*
-   * Remove duplicate symbols.
-   */
-
-  const seen =
-    new Set();
-
-
-  return candidates.filter(
-    candidate => {
-
-      if (
-        !candidate.symbol ||
-        seen.has(
-          candidate.symbol
-        )
-      ) {
-
-        return false;
-
-      }
-
-
-      seen.add(
-        candidate.symbol
-      );
-
-
-      return true;
-
-    }
-  );
-
-}
-
-
-/* ============================================================
-   MARKET PRICE ENDPOINT
+   ONE API REQUEST PER BUTTON PRESS
    ============================================================ */
 
 app.get(
-  "/api/market/:ticker",
+  "/api/market/:identifier",
 
-  async (
-    req,
-    res
-  ) => {
+  async (req, res) => {
 
     try {
 
-      if (
-        !ALPHA_VANTAGE_API_KEY
-      ) {
+      if (!ALPHA_VANTAGE_API_KEY) {
 
         return res
           .status(503)
           .json({
-
-            ok:
-              false,
-
+            ok: false,
             error:
               "Alpha Vantage API key is not configured."
-
           });
 
       }
 
 
+      const identifier =
+        String(
+          req.params.identifier || ""
+        )
+          .trim()
+          .toUpperCase();
+
+
       const ticker =
         String(
-          req.params.ticker ||
-          ""
-        )
-          .trim()
-          .toUpperCase();
-
-
-      const exchange =
-        String(
-          req.query.exchange ||
-          ""
-        )
-          .trim()
-          .toUpperCase();
-
-
-      const companyName =
-        String(
-          req.query.company ||
-          ""
-        ).trim();
-
-
-      const bseCode =
-        String(
-          req.query.bseCode ||
-          ""
+          req.query.ticker || ""
         )
           .trim()
           .toUpperCase();
@@ -4551,269 +4095,327 @@ app.get(
 
       const nseCode =
         String(
-          req.query.nseCode ||
-          ""
+          req.query.nseCode || ""
         )
           .trim()
           .toUpperCase();
 
 
-      const isin =
+      const bseCode =
         String(
-          req.query.isin ||
-          ""
+          req.query.bseCode || ""
         )
           .trim()
           .toUpperCase();
+
+
+      const exchange =
+        String(
+          req.query.exchange || ""
+        )
+          .trim()
+          .toUpperCase();
+
+
+      const companyName =
+        String(
+          req.query.company || ""
+        ).trim();
 
 
       /*
-       * We store ISIN as verification metadata.
+       * ------------------------------------------------------
+       * RESOLVE ONE SYMBOL
+       * ------------------------------------------------------
        *
-       * Alpha Vantage GLOBAL_QUOTE does not use
-       * the ISIN directly here.
+       * IMPORTANT:
+       *
+       * We deliberately make ONE Alpha Vantage request.
+       *
+       * No SYMBOL_SEARCH.
+       * No retry with several symbols.
+       * No automatic second API request.
        */
 
-      const candidates =
-        buildMarketCandidates({
 
-          ticker,
-
-          exchange,
-
-          nseCode,
-
-          bseCode
-
-        });
+      let symbol =
+        null;
 
 
-      if (
-        !candidates.length
-      ) {
+      let identifierSource =
+        null;
+
+
+      /*
+       * BSE security code is preferred because
+       * Alpha Vantage supports global exchange
+       * suffix notation.
+       */
+
+      if (bseCode) {
+
+        symbol =
+          bseCode.endsWith(".BSE")
+
+            ? bseCode
+
+            : `${bseCode}.BSE`;
+
+
+        identifierSource =
+          "BSE security code";
+
+      }
+
+
+      /*
+       * Otherwise use the verified ticker.
+       */
+
+      else if (ticker) {
+
+        if (
+          exchange === "BSE" &&
+          !ticker.endsWith(".BSE")
+        ) {
+
+          symbol =
+            `${ticker}.BSE`;
+
+        }
+
+        else {
+
+          symbol =
+            ticker;
+
+        }
+
+
+        identifierSource =
+          "verified ticker";
+
+      }
+
+
+      /*
+       * NSE code fallback.
+       *
+       * We do NOT invent an exchange suffix here.
+       */
+
+      else if (nseCode) {
+
+        symbol =
+          nseCode;
+
+
+        identifierSource =
+          "NSE code";
+
+      }
+
+
+      /*
+       * Final fallback is the route identifier
+       * already supplied by the frontend.
+       */
+
+      else if (identifier) {
+
+        symbol =
+          identifier;
+
+
+        identifierSource =
+          "market identifier";
+
+      }
+
+
+      if (!symbol) {
 
         return res
           .status(400)
           .json({
-
-            ok:
-              false,
-
+            ok: false,
             error:
-              "No verified BSE code, NSE code or ticker was extracted from the annual report."
-
+              "No verified market identifier is available."
           });
 
       }
 
 
+      console.log(
+        "Alpha Vantage quote request:",
+        {
+          company:
+            companyName,
+
+          symbol,
+
+          identifierSource
+        }
+      );
+
+
       /*
-       * Use identifiers as the cache key.
+       * ------------------------------------------------------
+       * EXACTLY ONE ALPHA VANTAGE REQUEST
+       * ------------------------------------------------------
        */
 
-      const cacheKey =
-
-        [
-          bseCode,
-          nseCode,
-          ticker,
-          exchange
-        ]
-
-          .filter(Boolean)
-          .join("|");
-
-
-      const cached =
-        getCachedMarketQuote(
-          cacheKey
+      const url =
+        new URL(
+          "https://www.alphavantage.co/query"
         );
 
 
-      if (cached) {
-
-        return res.json({
-
-          ...cached,
-
-          cached:
-            true
-
-        });
-
-      }
+      url.searchParams.set(
+        "function",
+        "GLOBAL_QUOTE"
+      );
 
 
-      let selectedQuote =
-        null;
+      url.searchParams.set(
+        "symbol",
+        symbol
+      );
 
 
-      let selectedCandidate =
-        null;
+      url.searchParams.set(
+        "apikey",
+        ALPHA_VANTAGE_API_KEY
+      );
 
 
-      let rateLimitError =
-        null;
+      const response =
+        await fetch(
+          url
+        );
 
 
-      const triedSymbols =
-        [];
+      const data =
+        await response.json();
 
 
       /*
-       * Try identifiers in priority order.
+       * Alpha Vantage often returns HTTP 200
+       * even when its own API limit is reached.
        */
 
-      for (
-        const candidate of
-        candidates
+      if (
+        data.Note ||
+        data.Information
       ) {
 
-        triedSymbols.push({
-
-          symbol:
-            candidate.symbol,
-
-          source:
-            candidate.source
-
-        });
+        const providerMessage =
+          data.Note ||
+          data.Information;
 
 
-        try {
+        console.warn(
+          "Alpha Vantage provider message:",
+          providerMessage
+        );
 
-          const quote =
-            await fetchAlphaQuote(
-              candidate.symbol
-            );
-
-
-          if (quote) {
-
-            selectedQuote =
-              quote;
-
-
-            selectedCandidate =
-              candidate;
-
-
-            break;
-
-          }
-
-        }
-
-        catch (
-          error
-        ) {
-
-          /*
-           * Stop immediately if the provider
-           * says the request limit was reached.
-           */
-
-          if (
-            error?.status ===
-            429
-          ) {
-
-            rateLimitError =
-              error;
-
-            break;
-
-          }
-
-
-          console.warn(
-            `Market lookup failed for ${candidate.symbol}:`,
-            error.message
-          );
-
-        }
-
-      }
-
-
-      /*
-       * Alpha Vantage limit reached.
-       */
-
-      if (rateLimitError) {
 
         return res
           .status(429)
           .json({
-
-            ok:
-              false,
+            ok: false,
 
             error:
-              rateLimitError.message,
+              providerMessage,
 
-            rateLimited:
-              true,
+            provider:
+              "Alpha Vantage",
 
-            triedSymbols
+            symbol,
 
+            identifierSource
           });
 
       }
 
 
-      /*
-       * No identifier returned a quote.
-       */
-
       if (
-        !selectedQuote ||
-        !selectedCandidate
+        data["Error Message"]
       ) {
 
         return res
           .status(404)
           .json({
-
-            ok:
-              false,
+            ok: false,
 
             error:
-              "No market quote was returned for the verified company identifiers.",
+              data["Error Message"],
 
-            companyName:
-              companyName ||
-              null,
+            provider:
+              "Alpha Vantage",
 
-            ticker:
-              ticker ||
-              null,
+            symbol,
 
-            exchange:
-              exchange ||
-              null,
-
-            nseCode:
-              nseCode ||
-              null,
-
-            bseCode:
-              bseCode ||
-              null,
-
-            isin:
-              isin ||
-              null,
-
-            triedSymbols
-
+            identifierSource
           });
 
       }
 
 
+      const quote =
+        data["Global Quote"] ||
+        {};
+
+
+      const price =
+        Number(
+          quote["05. price"]
+        );
+
+
+      if (
+        !Number.isFinite(price) ||
+        price <= 0
+      ) {
+
+        return res
+          .status(404)
+          .json({
+            ok: false,
+
+            error:
+              `Alpha Vantage returned no usable price for ${symbol}.`,
+
+            provider:
+              "Alpha Vantage",
+
+            symbol,
+
+            identifierSource
+          });
+
+      }
+
+
+      function numberValue(key) {
+
+        const value =
+          Number(
+            quote[key]
+          );
+
+
+        return Number.isFinite(value)
+
+          ? value
+
+          : null;
+
+      }
+
+
       /*
-       * Determine currency.
+       * Currency inference.
        */
 
       let currency =
@@ -4821,15 +4423,9 @@ app.get(
 
 
       if (
-        bseCode ||
-        nseCode ||
         exchange === "NSE" ||
         exchange === "BSE" ||
-        selectedQuote
-          .symbol
-          .endsWith(
-            ".BSE"
-          )
+        symbol.endsWith(".BSE")
       ) {
 
         currency =
@@ -4838,14 +4434,12 @@ app.get(
       }
 
 
-      if (
+      else if (
         [
           "NASDAQ",
           "NYSE",
           "AMEX"
-        ].includes(
-          exchange
-        )
+        ].includes(exchange)
       ) {
 
         currency =
@@ -4854,7 +4448,14 @@ app.get(
       }
 
 
-      const result = {
+      console.log(
+        "Alpha Vantage quote successful:",
+        symbol,
+        price
+      );
+
+
+      return res.json({
 
         ok:
           true,
@@ -4862,137 +4463,98 @@ app.get(
         provider:
           "Alpha Vantage",
 
-        companyName:
-          companyName ||
-          null,
+        identifierSource,
+
+        requestedIdentifier:
+          identifier,
+
+        symbol,
 
         ticker:
-          ticker ||
-          null,
+          ticker || null,
+
+        nseCode:
+          nseCode || null,
+
+        bseCode:
+          bseCode || null,
+
+        companyName:
+          companyName || null,
 
         exchange:
-          exchange ||
-          null,
-
-        identifiers: {
-
-          bseCode:
-            bseCode ||
-            null,
-
-          nseCode:
-            nseCode ||
-            null,
-
-          isin:
-            isin ||
-            null
-
-        },
-
-        /*
-         * Actual Alpha Vantage identifier
-         * that produced the quote.
-         */
-
-        symbol:
-          selectedQuote.symbol,
-
-        identifierSource:
-          selectedCandidate.source,
+          exchange || null,
 
         currency,
 
-        price:
-          selectedQuote.price,
+        price,
 
         open:
-          selectedQuote.open,
+          numberValue(
+            "02. open"
+          ),
 
         high:
-          selectedQuote.high,
+          numberValue(
+            "03. high"
+          ),
 
         low:
-          selectedQuote.low,
-
-        previousClose:
-          selectedQuote.previousClose,
-
-        change:
-          selectedQuote.change,
-
-        changePercent:
-          selectedQuote.changePercent,
+          numberValue(
+            "04. low"
+          ),
 
         volume:
-          selectedQuote.volume,
+          numberValue(
+            "06. volume"
+          ),
 
         asOf:
-          selectedQuote.asOf,
+          quote[
+            "07. latest trading day"
+          ] || null,
 
-        freshness:
-          "last available / end-of-day",
+        previousClose:
+          numberValue(
+            "08. previous close"
+          ),
+
+        change:
+          numberValue(
+            "09. change"
+          ),
+
+        changePercent:
+          quote[
+            "10. change percent"
+          ] || null,
 
         live:
           false,
 
-        cached:
-          false,
+        freshness:
+          "last available / end-of-day"
 
-        triedSymbols
-
-      };
-
-
-      cacheMarketQuote(
-        cacheKey,
-        result
-      );
-
-
-      console.log(
-        "Market quote resolved:",
-        companyName ||
-          ticker,
-        "→",
-        result.symbol,
-        `via ${result.identifierSource}`,
-        "→",
-        result.price
-      );
-
-
-      return res.json(
-        result
-      );
+      });
 
     }
 
-    catch (
-      error
-    ) {
+    catch (error) {
 
       console.error(
-        "Market quote error:",
+        "Alpha Vantage market error:",
         error
       );
 
 
       return res
-        .status(
-          error?.status === 429
-            ? 429
-            : 503
-        )
+        .status(503)
         .json({
-
-          ok:
-            false,
+          ok: false,
 
           error:
             error?.message ||
-            "Automatic market-price lookup failed."
-
+            "Alpha Vantage market-price lookup failed."
         });
 
     }
