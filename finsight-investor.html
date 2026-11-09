@@ -35,86 +35,55 @@
   <!-- ======================================================
        HEADER
        ====================================================== -->
-<!DOCTYPE html>
-<html lang="en">
 
-<head>
+  <header class="topbar landing-topbar">
 
-  <meta charset="UTF-8">
+    <div class="brand">
 
-  <meta
-    name="viewport"
-    content="width=device-width, initial-scale=1.0"
-  >
+      <div
+        class="brand-mark brand-chart"
+        aria-hidden="true"
+      >
 
-  <meta
-    name="description"
-    content="FinSight AI — annual-report driven investor research"
-  >
+        <span class="brand-bar bar-1"></span>
+        <span class="brand-bar bar-2"></span>
+        <span class="brand-bar bar-3"></span>
 
-  <title>
-    FinSight AI — Investor Research
-  </title>
-
-  <link
-    rel="stylesheet"
-    href="finsight-investor.css"
-  >
-
-</head>
+      </div>
 
 
-<body>
+      <div class="brand-copy">
 
-<div class="app-shell">
+        <strong>
+          FinSight
+        </strong>
 
+        <span>
+          INVESTOR INTELLIGENCE
+        </span>
 
-  <!-- ======================================================
-       HEADER
-       ====================================================== -->
-
-  <!-- ======================================================
-     HEADER
-     ====================================================== -->
-
-<header class="topbar">
-
-  <div class="brand">
-
-    <div class="brand-mark brand-chart" aria-hidden="true">
-      <span class="brand-bar bar-1"></span>
-      <span class="brand-bar bar-2"></span>
-      <span class="brand-bar bar-3"></span>
-    </div>
-
-    <div class="brand-copy">
-
-      <strong>
-        FinSight
-      </strong>
-
-      <span>
-        INVESTOR INTELLIGENCE
-      </span>
+      </div>
 
     </div>
 
-  </div>
 
+    <div class="top-actions">
 
-  <div class="top-actions">
+      <div
+        id="aiStatus"
+        class="system-status"
+      >
 
-    <div
-      id="aiStatus"
-      class="system-status"
-    >
-      <span class="status-dot"></span>
-      Checking research engine…
+        <span class="status-dot"></span>
+
+        Checking research engine…
+
+      </div>
+
     </div>
 
-  </div>
+  </header>
 
-</header>
 
   <!-- ======================================================
        MAIN
@@ -122,1519 +91,234 @@
 
   <main>
 
-    <!-- ======================================================
-     HEADER
-     ====================================================== -->
 
-<header class="topbar landing-topbar">
+    <!-- ====================================================
+         LANDING HERO / REPORT UPLOAD
+         ==================================================== -->
 
-  <div class="brand">
-
-    <div class="brand-mark" aria-hidden="true">
-      <span class="brand-f">F</span>
-      <span class="brand-spark"></span>
-    </div>
-
-    <div class="brand-copy">
-
-      <strong>
-        FinSight
-      </strong>
-
-      <span>
-        AI INVESTOR RESEARCH
-      </span>
-
-    </div>
-
-  </div>
+    <section class="hero landing-hero">
 
 
-  <div class="top-actions">
-
-    <div
-      id="aiStatus"
-      class="system-status"
-    >
-      <span class="status-dot"></span>
-      Checking research engine…
-    </div>
-
-  </div>
-
-</header>
+      <div
+        class="hero-glow hero-glow-one"
+        aria-hidden="true"
+      ></div>
 
 
-<!-- ======================================================
-     MAIN
-     ====================================================== -->
-
-<main>
-
-
-  <!-- ====================================================
-       UNIFIED LANDING HERO
-       ==================================================== -->
-
-  <section class="hero landing-hero">
-
-    <div
-      class="hero-glow hero-glow-one"
-      aria-hidden="true"
-    ></div>
-
-    <div
-      class="hero-glow hero-glow-two"
-      aria-hidden="true"
-    ></div>
+      <div
+        class="hero-glow hero-glow-two"
+        aria-hidden="true"
+      ></div>
 
 
-    <div class="hero-copy">
+      <div class="hero-copy">
 
-      <span class="eyebrow hero-eyebrow">
-        ANNUAL REPORT
-        <span class="eyebrow-arrow">→</span>
-        INVESTOR INTELLIGENCE
-      </span>
+        <span class="eyebrow hero-eyebrow">
 
+          ANNUAL REPORT
 
-      <h1>
-        Understand a company
-        <span>before you invest.</span>
-      </h1>
+          <span class="eyebrow-arrow">
+            →
+          </span>
 
+          INVESTOR INTELLIGENCE
 
-      <p>
-        Upload the company's annual report. FinSight extracts
-        the financial history, analyzes the business, identifies
-        risks, checks management and governance, and builds an
-        investor research workspace from the supplied evidence.
-      </p>
-
-    </div>
+        </span>
 
 
-    <!-- ==================================================
-         SINGLE UPLOAD CARD
-         ================================================== -->
+        <h1>
 
-    <div class="report-upload-card landing-upload-card">
+          Understand a company
 
-      <input
-        id="companyFile"
-        type="file"
-        accept=".pdf,application/pdf"
-        hidden
-      >
+          <span class="hero-accent">
+            before you invest.
+          </span>
+
+        </h1>
 
 
-      <label
-        class="file-button primary landing-upload-button"
-        for="companyFile"
-      >
+        <p>
+          Turn an annual report into structured financials,
+          business analysis, risk intelligence and valuation —
+          grounded in the company's own disclosures.
+        </p>
 
-        <span class="upload-icon" aria-hidden="true">
+      </div>
 
-          <svg
-            viewBox="0 0 24 24"
-            width="21"
-            height="21"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.8"
-            stroke-linecap="round"
-            stroke-linejoin="round"
+
+      <!-- ==================================================
+           SINGLE UPLOAD CARD
+           ================================================== -->
+
+      <div class="report-upload-card landing-upload-card">
+
+
+        <input
+          id="companyFile"
+          type="file"
+          accept=".pdf,application/pdf"
+          hidden
+        >
+
+
+        <div class="upload-dropzone">
+
+
+          <div
+            class="upload-document-icon"
+            aria-hidden="true"
           >
-            <path d="M12 16V4"></path>
-            <path d="M7.5 8.5 12 4l4.5 4.5"></path>
-            <path d="M5 14v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"></path>
-          </svg>
 
+            <div class="document-corner"></div>
+
+            <span>
+              PDF
+            </span>
+
+          </div>
+
+
+          <div class="upload-copy">
+
+            <strong>
+              Drop an annual report here
+            </strong>
+
+            <small>
+              PDF · up to 45 MB
+            </small>
+
+          </div>
+
+
+          <label
+            class="file-button primary upload-main-button"
+            for="companyFile"
+          >
+
+            <span
+              class="upload-button-icon"
+              aria-hidden="true"
+            >
+              ↑
+            </span>
+
+            <span>
+              Choose annual report
+            </span>
+
+          </label>
+
+        </div>
+
+
+        <!-- ==================================================
+             UPLOAD STATUS
+             ================================================== -->
+
+        <div
+          id="uploadStatus"
+          class="upload-status"
+        >
+          No company loaded.
+        </div>
+
+
+        <!-- ==================================================
+             SCAN PROGRESS
+             ================================================== -->
+
+        <div
+          id="scanProgress"
+          class="scan-progress landing-progress"
+          hidden
+        >
+
+          <div class="scan-progress-header">
+
+            <span class="scan-active">
+
+              <span class="scan-pulse"></span>
+
+              Analyzing report
+
+            </span>
+
+
+            <span id="scanProgressText">
+              Preparing report…
+            </span>
+
+          </div>
+
+
+          <div class="scan-track">
+
+            <div
+              id="scanBar"
+              class="scan-bar"
+            ></div>
+
+          </div>
+
+        </div>
+
+
+        <!-- ==================================================
+             ERROR
+             ================================================== -->
+
+        <div
+          id="error"
+          class="error-box"
+          hidden
+        ></div>
+
+      </div>
+
+
+      <!-- ==================================================
+           LANDING TRUST POINTS
+           ================================================== -->
+
+      <div class="hero-trust-row">
+
+        <span>
+          <i></i>
+          Evidence grounded
         </span>
 
         <span>
-          Upload annual report
+          <i></i>
+          No sample financials
         </span>
 
-      </label>
-
-
-      <div
-        id="uploadStatus"
-        class="upload-status"
-      >
-        PDF annual reports up to 45 MB
-      </div>
-
-
-      <!-- Progress stays INSIDE the same card -->
-
-      <div
-        id="scanProgress"
-        class="scan-progress landing-progress"
-        hidden
-      >
-
-        <div class="scan-progress-header">
-
-          <span class="scan-active">
-
-            <span class="scan-pulse"></span>
-
-            Analyzing report
-
-          </span>
-
-
-          <span id="scanProgressText">
-            Preparing report…
-          </span>
-
-        </div>
-
-
-        <div class="scan-track">
-
-          <div
-            id="scanBar"
-            class="scan-bar"
-          ></div>
-
-        </div>
+        <span>
+          <i></i>
+          Consolidated statements preferred
+        </span>
 
       </div>
 
+    </section>
 
-      <div
-        id="error"
-        class="error-box"
-        hidden
-      ></div>
-
-    </div>
-
-
-    <div class="hero-trust-row">
-
-      <span>
-        <i></i>
-        Evidence grounded
-      </span>
-
-      <span>
-        <i></i>
-        No sample financials
-      </span>
-
-      <span>
-        <i></i>
-        Consolidated statements preferred
-      </span>
-
-    </div>
-
-  </section>
-
-
-  <!--
-    Keep this ID because finsight-investor.js uses it.
-    It is intentionally hidden so we do NOT show a
-    second upload section.
-  -->
-
-  <section
-    id="emptyState"
-    class="empty-state landing-empty-state"
-    hidden
-  ></section>
-
-
-  <!-- ====================================================
-       COMPANY WORKSPACE
-       Keep all your existing content from here onward.
-       ==================================================== -->
-
-  <div
-    id="companyWorkspace"
-    hidden
-  >
-
-  
-    <!-- ====================================================
-         COMPANY WORKSPACE
-         ==================================================== -->
-
-    <div
-      id="companyWorkspace"
-      hidden
-    >
-
-
-      <!-- ==================================================
-           COMPANY IDENTITY
-           ================================================== -->
-
-      <section class="company-header">
-
-        <div>
-
-          <span class="eyebrow">
-            COMPANY RESEARCH
-          </span>
-
-          <h2 id="companyName">
-            —
-          </h2>
-
-          <div class="company-meta">
-
-            <span id="period">
-              —
-            </span>
-
-            <span>
-              ·
-            </span>
-
-            <span id="statementBasis">
-              Consolidated financials
-            </span>
-
-            <span>
-              ·
-            </span>
-
-            <span id="confidence">
-              —
-            </span>
-
-          </div>
-
-        </div>
-
-
-        <!-- MARKET CARD -->
-
-        <div class="company-market">
-
-          <span>
-            MARKET
-          </span>
-
-
-          <strong id="priceDisplay">
-            Price not fetched
-          </strong>
-
-
-          <small id="marketNote">
-            Market data is fetched only when you request it.
-          </small>
-
-
-          <button
-            type="button"
-            id="fetchMarketPrice"
-            class="market-fetch-button"
-          >
-            Fetch price &amp; calculate valuation
-          </button>
-          <div class="manual-price-box">
-
-  <span class="manual-price-label">
-    Or enter share price manually
-  </span>
-
-  <div class="manual-price-row">
-
-    <input
-      id="manualMarketPrice"
-      type="number"
-      min="0"
-      step="0.01"
-      inputmode="decimal"
-      placeholder="Enter share price"
-    >
-
-    <button
-      type="button"
-      id="useManualMarketPrice"
-      class="market-fetch-button manual-price-button"
-    >
-      Calculate valuation
-    </button>
-
-  </div>
-
-  <small>
-    Only the share price is entered manually.
-    Financial data and shares outstanding come from the annual report.
-  </small>
-
-</div>
-
-        </div>
-
-      </section>
-
-
-      <!-- ==================================================
-           YEAR SELECTOR
-           ================================================== -->
-
-      <section class="year-navigation">
-
-        <div
-          id="yearTabs"
-          class="year-tabs"
-        ></div>
-
-      </section>
-
-
-      <!-- ==================================================
-           FINANCIAL SNAPSHOT
-           ================================================== -->
-
-      <section>
-
-        <div class="section-heading">
-
-          <div>
-
-            <span class="eyebrow">
-              FINANCIAL SNAPSHOT
-            </span>
-
-            <h3 id="snapshotTitle">
-              Latest reporting year
-            </h3>
-
-          </div>
-
-        </div>
-
-
-        <div
-          id="metrics"
-          class="metric-grid"
-        ></div>
-
-      </section>
-
-
-      <!-- ==================================================
-           FINANCIAL HISTORY
-           ================================================== -->
-
-      <section class="research-section">
-
-        <div class="section-heading">
-
-          <div>
-
-            <span class="eyebrow">
-              FINANCIAL HISTORY
-            </span>
-
-            <h3>
-              Year-by-year company performance
-            </h3>
-
-          </div>
-
-        </div>
-
-
-        <div class="table-shell">
-
-          <table
-            id="financialHistory"
-            class="financial-table"
-          >
-
-            <thead id="financialHistoryHead">
-            </thead>
-
-            <tbody id="financialHistoryBody">
-            </tbody>
-
-          </table>
-
-        </div>
-
-      </section>
-
-
-      <!-- ==================================================
-           MULTI-YEAR CHART
-           ================================================== -->
-
-      <section class="research-section">
-
-        <div class="section-heading">
-
-          <div>
-
-            <span class="eyebrow">
-              MULTI-YEAR PERFORMANCE
-            </span>
-
-            <h3>
-              Revenue, EBITDA and net profit
-            </h3>
-
-          </div>
-
-        </div>
-
-
-        <div
-          id="chart"
-          class="chart"
-        ></div>
-
-
-        <div class="chart-legend">
-
-          <span>
-            <i class="legend-revenue"></i>
-            Revenue
-          </span>
-
-          <span>
-            <i class="legend-ebitda"></i>
-            EBITDA
-          </span>
-
-          <span>
-            <i class="legend-profit"></i>
-            Net profit
-          </span>
-
-        </div>
-
-      </section>
-
-
-      <!-- ==================================================
-           FINANCIAL HEALTH
-           ================================================== -->
-
-      <section class="score-layout research-section">
-
-        <div class="score-card">
-
-          <div
-            id="ring"
-            class="score-ring"
-          >
-
-            <strong id="score">
-              —
-            </strong>
-
-            <span>
-              /100
-            </span>
-
-          </div>
-
-
-          <div>
-
-            <span class="eyebrow">
-              FINSIGHT FINANCIAL HEALTH
-            </span>
-
-            <h3 id="scoreLabel">
-              —
-            </h3>
-
-            <p id="scoreCopy">
-              —
-            </p>
-
-          </div>
-
-        </div>
-
-
-        <div
-          id="scoreBars"
-          class="score-bars"
-        ></div>
-
-      </section>
-
-
-      <!-- ==================================================
-           INVESTOR SIGNALS
-           ================================================== -->
-
-      <section class="research-section">
-
-        <div class="section-heading">
-
-          <div>
-
-            <span class="eyebrow">
-              INVESTOR SIGNALS
-            </span>
-
-            <h3>
-              Good, bad and watch
-            </h3>
-
-          </div>
-
-        </div>
-
-
-        <div class="signal-grid">
-
-
-          <article class="signal-column good">
-
-            <h4>
-              GOOD
-            </h4>
-
-            <div id="goodList">
-            </div>
-
-          </article>
-
-
-          <article class="signal-column bad">
-
-            <h4>
-              BAD
-            </h4>
-
-            <div id="badList">
-            </div>
-
-          </article>
-
-
-          <article class="signal-column watch">
-
-            <h4>
-              WATCH
-            </h4>
-
-            <div id="watchList">
-            </div>
-
-          </article>
-
-
-        </div>
-
-      </section>
-
-
-      <!-- ==================================================
-           DEEP RESEARCH
-           ================================================== -->
-
-      <section
-        id="research"
-        class="research-section"
-      >
-
-        <div class="section-heading">
-
-          <div>
-
-            <span class="eyebrow">
-              DEEP RESEARCH
-            </span>
-
-            <h3>
-              Company fundamentals
-            </h3>
-
-          </div>
-
-        </div>
-
-
-        <div
-          id="sectionTabs"
-          class="tabs"
-        ></div>
-
-
-        <div
-          id="sectionPanel"
-          class="section-panel"
-        ></div>
-
-      </section>
-
-
-      <!-- ==================================================
-           ANNUAL REPORT AI
-           ================================================== -->
-
-      <section class="ai-section research-section">
-
-        <div class="section-heading">
-
-          <div>
-
-            <span class="eyebrow">
-              FINSIGHT AI
-            </span>
-
-            <h3>
-              Annual-report intelligence
-            </h3>
-
-          </div>
-
-
-          <span class="evidence-badge">
-            Evidence grounded
-          </span>
-
-        </div>
-
-
-        <p class="section-intro">
-          FinSight analyzes management commentary, risks,
-          auditor observations, governance, related parties,
-          capital allocation and changes across reporting years.
-        </p>
-
-
-        <div class="ai-actions">
-
-
-          <input
-            id="aiReportFile"
-            type="file"
-            accept=".pdf,application/pdf"
-            hidden
-          >
-
-
-          <label
-            class="file-button secondary"
-            for="aiReportFile"
-          >
-            Select report for AI
-          </label>
-
-
-          <button
-            id="runAIReport"
-            class="primary"
-            type="button"
-          >
-            Run AI analysis
-          </button>
-
-        </div>
-
-
-        <div
-          id="aiReportResult"
-          class="ai-result"
-        >
-          Upload a company report above to begin.
-        </div>
-
-      </section>
-
-
-      <!-- ==================================================
-           ASK FINSIGHT
-           ================================================== -->
-
-      <section class="ai-section research-section">
-
-        <div class="section-heading">
-
-          <div>
-
-            <span class="eyebrow">
-              ASK FINSIGHT
-            </span>
-
-            <h3>
-              Question the company evidence
-            </h3>
-
-          </div>
-
-        </div>
-
-
-        <p class="section-intro">
-          Ask about the business, financial statements,
-          management, risks, auditor, governance, strategy,
-          valuation or any disclosure in the uploaded report.
-        </p>
-
-
-        <div class="ask-row">
-
-          <input
-            id="aiQuestion"
-            class="ai-question-input"
-            type="text"
-            aria-label="Ask FinSight a question"
-            autocomplete="off"
-          >
-
-
-          <button
-            id="askAI"
-            class="primary"
-            type="button"
-          >
-            Ask AI
-          </button>
-
-        </div>
-
-
-        <div
-          id="aiAnswer"
-          class="ai-result"
-        >
-          Ask a question about the loaded company or annual report.
-        </div>
-
-      </section>
-
-
-      <!-- ==================================================
-           VALUATION
-           ================================================== -->
-
-      <section
-        id="valuationSection"
-        class="research-section"
-      >
-
-        <div class="section-heading">
-
-          <div>
-
-            <span class="eyebrow">
-              AUTOMATIC VALUATION
-            </span>
-
-            <h3>
-              What is the market pricing in?
-            </h3>
-
-          </div>
-
-
-          <strong
-            id="valuationView"
-            class="valuation-view"
-          >
-            Price not requested
-          </strong>
-
-        </div>
-
-
-        <p
-          id="valuationStatus"
-          class="section-intro"
-        >
-          Market valuation is calculated only after you press
-          Fetch price &amp; calculate valuation.
-        </p>
-
-
-        <div
-          id="autoValuationMetrics"
-          class="metric-grid valuation-metrics"
-        ></div>
-
-
-        <div
-          id="valuationResults"
-          class="scenario-grid"
-        ></div>
-
-
-        <div
-          id="aiValuation"
-          class="ai-result"
-        >
-          Fetch the market price to calculate available
-          public-market valuation metrics.
-        </div>
-
-
-        <!-- ================================================
-             ADVANCED VALUATION
-             ================================================ -->
-
-        <details class="advanced-assumptions">
-
-          <summary>
-            Advanced valuation assumptions
-          </summary>
-
-
-          <p>
-            Optional. Change these only if you want to stress-test
-            FinSight's valuation assumptions.
-          </p>
-
-
-          <div class="form-grid">
-
-
-            <label>
-
-              Revenue growth %
-
-              <input
-                id="dcfGrowth"
-                type="number"
-                step="0.1"
-                value="8"
-              >
-
-            </label>
-
-
-            <label>
-
-              EBIT margin %
-
-              <input
-                id="dcfMargin"
-                type="number"
-                step="0.1"
-                value="20"
-              >
-
-            </label>
-
-
-            <label>
-
-              WACC %
-
-              <input
-                id="dcfWacc"
-                type="number"
-                step="0.1"
-                value="10"
-              >
-
-            </label>
-
-
-            <label>
-
-              Terminal growth %
-
-              <input
-                id="dcfTerminal"
-                type="number"
-                step="0.1"
-                value="4"
-              >
-
-            </label>
-
-
-            <label>
-
-              Net debt
-
-              <input
-  id="dcfNetDebt"
-  type="number"
-  step="0.01"
-  placeholder="Use report value"
->
-
-            </label>
-
-
-          </div>
-
-
-          <div class="advanced-actions">
-
-
-            <button
-              id="runDcf"
-              class="secondary"
-              type="button"
-            >
-              Recalculate DCF
-            </button>
-
-
-            <button
-              id="runReverseDcf"
-              class="secondary"
-              type="button"
-            >
-              Recalculate reverse DCF
-            </button>
-
-
-          </div>
-
-
-          <div
-            id="dcfResult"
-            class="ai-result"
-          >
-            DCF assumptions will appear after report extraction.
-          </div>
-
-
-        </details>
-
-      </section>
-
-
-      <!-- ==================================================
-           COMPETITOR INTELLIGENCE
-           ================================================== -->
-
-      <section
-        id="compare"
-        class="research-section compare-ai"
-      >
-
-        <div class="section-heading">
-
-          <div>
-
-            <span class="eyebrow">
-              COMPETITOR INTELLIGENCE
-            </span>
-
-            <h3>
-              Compare two annual reports
-            </h3>
-
-          </div>
-
-        </div>
-
-
-        <p class="section-intro">
-          Upload two annual reports and FinSight will compare
-          business quality, financial trends, cash generation,
-          leverage, management, governance, auditor observations,
-          risks and valuation where available.
-        </p>
-
-
-        <div class="comparison-files">
-
-
-          <input
-            id="aiCompareA"
-            type="file"
-            accept=".pdf,application/pdf"
-            hidden
-          >
-
-
-          <label
-            class="file-button secondary"
-            for="aiCompareA"
-          >
-            Company A PDF
-          </label>
-
-
-          <input
-            id="aiCompareB"
-            type="file"
-            accept=".pdf,application/pdf"
-            hidden
-          >
-
-
-          <label
-            class="file-button secondary"
-            for="aiCompareB"
-          >
-            Company B PDF
-          </label>
-
-
-          <button
-            id="runAICompare"
-            class="primary"
-            type="button"
-          >
-            Compare with AI
-          </button>
-
-
-        </div>
-
-
-        <div
-          id="aiCompareResult"
-          class="ai-result"
-        >
-          Select two annual reports to compare companies.
-        </div>
-
-      </section>
-
-
-      <!-- ==================================================
-           INVESTOR BRIEF
-           ================================================== -->
-
-      <section class="research-section">
-
-        <div class="section-heading">
-
-          <div>
-
-            <span class="eyebrow">
-              INVESTOR BRIEF
-            </span>
-
-            <h3 id="briefTitle">
-              —
-            </h3>
-
-          </div>
-
-        </div>
-
-
-        <p
-          id="brief"
-          class="investor-brief"
-        >
-          —
-        </p>
-
-
-        <div
-          id="questions"
-          class="question-list"
-        ></div>
-
-      </section>
-
-
-      <!-- ==================================================
-           RESEARCH MEMORY
-           ================================================== -->
-
-      <section class="research-section">
-
-        <div class="section-heading">
-
-          <div>
-
-            <span class="eyebrow">
-              RESEARCH MEMORY
-            </span>
-
-            <h3>
-              Save your investment thesis
-            </h3>
-
-          </div>
-
-        </div>
-
-
-        <div class="memory-grid">
-
-
-          <label>
-
-            Investment thesis
-
-            <textarea
-              id="thesisText"
-              rows="5"
-            ></textarea>
-
-          </label>
-
-
-          <label>
-
-            Bull case
-
-            <textarea
-              id="bullCase"
-              rows="5"
-            ></textarea>
-
-          </label>
-
-
-          <label>
-
-            Bear case
-
-            <textarea
-              id="bearCase"
-              rows="5"
-            ></textarea>
-
-          </label>
-
-
-        </div>
-
-
-        <div class="memory-actions">
-
-
-          <button
-            id="saveThesis"
-            class="primary"
-            type="button"
-          >
-            Save thesis
-          </button>
-
-
-          <button
-            id="loadMemory"
-            class="secondary"
-            type="button"
-          >
-            Load research memory
-          </button>
-
-
-        </div>
-
-
-        <div
-          id="memoryResult"
-          class="ai-result"
-        >
-          Research memory is available after a company is identified.
-        </div>
-
-      </section>
-
-
-    </div>
-
-  </main>
-
-
-  <!-- ======================================================
-       FOOTER
-       ====================================================== -->
-
-  <footer>
-
-    <strong>
-      FinSight AI
-    </strong>
-
-    <span>
-      Evidence-first investor research.
-      AI analysis and valuation scenarios are educational tools,
-      not personalized investment advice.
-    </span>
-
-  </footer>
-
-
-</div>
-
-
-<!-- ========================================================
-     LIBRARIES
-     ======================================================== -->
-
-<script
-  src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"
-></script>
-
-
-<script
-  src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"
-></script>
-
-
-<!-- ========================================================
-     APPLICATION
-     ======================================================== -->
-
-<script src="finsight-investor.js"></script>
-
-<script src="finsight-ai.js"></script>
-
-
-</body>
-
-</html>
-
-  <!-- ======================================================
-       MAIN
-       ====================================================== -->
-
-  <main>
-
-
-    <!-- ====================================================
-         HERO / REPORT INPUT
-         ==================================================== -->
-
-   <section class="hero">
-
-  <div class="hero-glow hero-glow-one"></div>
-  <div class="hero-glow hero-glow-two"></div>
-
-
-  <div class="hero-copy">
-
-    <span class="eyebrow hero-eyebrow">
-      ANNUAL REPORT → INVESTOR INTELLIGENCE
-    </span>
-
-    <h1>
-      Understand a company
-      <span class="hero-accent">before you invest.</span>
-    </h1>
-
-    <p>
-      Turn an annual report into structured financials,
-      business analysis, risk intelligence and valuation —
-      grounded in the company's own disclosures.
-    </p>
-
-  </div>
-
-
-  <div class="report-upload-card">
-
-    <!-- DO NOT CHANGE THIS ID -->
-    <input
-      id="companyFile"
-      type="file"
-      accept=".pdf,application/pdf"
-      hidden
-    >
-
-
-    <div class="upload-dropzone">
-
-      <div class="upload-document-icon" aria-hidden="true">
-
-        <div class="document-corner"></div>
-
-        <span>PDF</span>
-
-      </div>
-
-
-      <div class="upload-copy">
-
-        <strong>
-          Drop an annual report here
-        </strong>
-
-        <small>
-          PDF · up to 45 MB
-        </small>
-
-      </div>
-
-
-      <label
-        class="file-button primary upload-main-button"
-        for="companyFile"
-      >
-        <span class="upload-button-icon">↑</span>
-        Choose annual report
-      </label>
-
-    </div>
-
-
-    <!-- KEEP THESE IDs FOR EXISTING JS -->
-
-    <div
-      id="uploadStatus"
-      class="upload-status"
-    >
-      No company loaded.
-    </div>
-
-
-    <div
-      id="scanProgress"
-      class="scan-progress"
-      hidden
-    >
-
-      <div class="scan-track">
-
-        <div
-          id="scanBar"
-          class="scan-bar"
-        ></div>
-
-      </div>
-
-      <span id="scanProgressText">
-        Preparing report…
-      </span>
-
-    </div>
-
-
-    <div
-      id="error"
-      class="error-box"
-      hidden
-    ></div>
-
-  </div>
-
-</section>
 
     <!-- ====================================================
          EMPTY STATE
+
+         Keep this element because finsight-investor.js
+         expects #emptyState.
+
+         It is visually hidden so the landing page contains
+         only the hero/upload area rather than another
+         duplicate upload section.
          ==================================================== -->
 
-  <section
-  id="emptyState"
-  class="empty-state landing-process"
->
-
-  <div class="process-heading">
-
-    <span class="eyebrow">
-      HOW FINSIGHT WORKS
-    </span>
-
-    <h2>
-      From disclosure to decision-ready research
-    </h2>
-
-  </div>
-
-
-  <div class="process-flow">
-
-
-    <article class="process-step">
-
-      <div class="process-number">
-        01
-      </div>
-
-      <div class="process-icon">
-        ↑
-      </div>
-
-      <strong>
-        Upload
-      </strong>
-
-      <p>
-        Provide the company's annual report.
-      </p>
-
-    </article>
-
-
-    <div class="process-connector">
-      <span></span>
-      <b>›</b>
-    </div>
-
-
-    <article class="process-step">
-
-      <div class="process-number">
-        02
-      </div>
-
-      <div class="process-icon process-ai-icon">
-        ✦
-      </div>
-
-      <strong>
-        Analyze
-      </strong>
-
-      <p>
-        FinSight extracts financials, risks,
-        management and report evidence.
-      </p>
-
-    </article>
-
-
-    <div class="process-connector">
-      <span></span>
-      <b>›</b>
-    </div>
-
-
-    <article class="process-step">
-
-      <div class="process-number">
-        03
-      </div>
-
-      <div class="process-icon">
-        ↗
-      </div>
-
-      <strong>
-        Research
-      </strong>
-
-      <p>
-        Explore financial quality, valuation
-        and investor intelligence.
-      </p>
-
-    </article>
-
-
-  </div>
-
-
-  <div class="landing-capabilities">
-
-    <span>Financials</span>
-    <span>Cash flow</span>
-    <span>Management</span>
-    <span>Risk</span>
-    <span>Valuation</span>
-
-  </div>
-
-
-  <p class="landing-trust">
-    Evidence-first analysis · No sample-company financials
-  </p>
-
-</section>
+    <section
+      id="emptyState"
+      class="empty-state landing-empty-state"
+      hidden
+    ></section>
 
 
     <!-- ====================================================
@@ -1659,9 +343,11 @@
             COMPANY RESEARCH
           </span>
 
+
           <h2 id="companyName">
             —
           </h2>
+
 
           <div class="company-meta">
 
@@ -1690,7 +376,9 @@
         </div>
 
 
-        <!-- MARKET CARD -->
+        <!-- ==================================================
+             MARKET CARD
+             ================================================== -->
 
         <div class="company-market">
 
@@ -1716,39 +404,45 @@
           >
             Fetch price &amp; calculate valuation
           </button>
+
+
           <div class="manual-price-box">
 
-  <span class="manual-price-label">
-    Or enter share price manually
-  </span>
+            <span class="manual-price-label">
+              Or enter share price manually
+            </span>
 
-  <div class="manual-price-row">
 
-    <input
-      id="manualMarketPrice"
-      type="number"
-      min="0"
-      step="0.01"
-      inputmode="decimal"
-      placeholder="Enter share price"
-    >
+            <div class="manual-price-row">
 
-    <button
-      type="button"
-      id="useManualMarketPrice"
-      class="market-fetch-button manual-price-button"
-    >
-      Calculate valuation
-    </button>
+              <input
+                id="manualMarketPrice"
+                type="number"
+                min="0"
+                step="0.01"
+                inputmode="decimal"
+                placeholder="Enter share price"
+              >
 
-  </div>
 
-  <small>
-    Only the share price is entered manually.
-    Financial data and shares outstanding come from the annual report.
-  </small>
+              <button
+                type="button"
+                id="useManualMarketPrice"
+                class="market-fetch-button manual-price-button"
+              >
+                Calculate valuation
+              </button>
 
-</div>
+            </div>
+
+
+            <small>
+              Only the share price is entered manually.
+              Financial data and shares outstanding come from
+              the annual report.
+            </small>
+
+          </div>
 
         </div>
 
@@ -1977,8 +671,7 @@
               GOOD
             </h4>
 
-            <div id="goodList">
-            </div>
+            <div id="goodList"></div>
 
           </article>
 
@@ -1989,8 +682,7 @@
               BAD
             </h4>
 
-            <div id="badList">
-            </div>
+            <div id="badList"></div>
 
           </article>
 
@@ -2001,8 +693,7 @@
               WATCH
             </h4>
 
-            <div id="watchList">
-            </div>
+            <div id="watchList"></div>
 
           </article>
 
@@ -2088,7 +779,6 @@
 
 
         <div class="ai-actions">
-
 
           <input
             id="aiReportFile"
@@ -2190,7 +880,7 @@
 
 
       <!-- ==================================================
-           VALUATION
+           AUTOMATIC VALUATION
            ================================================== -->
 
       <section
@@ -2253,9 +943,9 @@
         </div>
 
 
-        <!-- ================================================
-             ADVANCED VALUATION
-             ================================================ -->
+        <!-- ==================================================
+             ADVANCED DCF / REVERSE DCF
+             ================================================== -->
 
         <details class="advanced-assumptions">
 
@@ -2265,8 +955,8 @@
 
 
           <p>
-            Optional. Change these only if you want to stress-test
-            FinSight's valuation assumptions.
+            Optional. Change these only if you want to
+            stress-test FinSight's valuation assumptions.
           </p>
 
 
@@ -2334,11 +1024,11 @@
               Net debt
 
               <input
-  id="dcfNetDebt"
-  type="number"
-  step="0.01"
-  placeholder="Use report value"
->
+                id="dcfNetDebt"
+                type="number"
+                step="0.01"
+                placeholder="Use report value"
+              >
 
             </label>
 
@@ -2347,7 +1037,6 @@
 
 
           <div class="advanced-actions">
-
 
             <button
               id="runDcf"
@@ -2366,7 +1055,6 @@
               Recalculate reverse DCF
             </button>
 
-
           </div>
 
 
@@ -2376,7 +1064,6 @@
           >
             DCF assumptions will appear after report extraction.
           </div>
-
 
         </details>
 
@@ -2459,7 +1146,6 @@
           >
             Compare with AI
           </button>
-
 
         </div>
 
@@ -2580,7 +1266,6 @@
 
         <div class="memory-actions">
 
-
           <button
             id="saveThesis"
             class="primary"
@@ -2597,7 +1282,6 @@
           >
             Load research memory
           </button>
-
 
         </div>
 
@@ -2626,6 +1310,7 @@
     <strong>
       FinSight AI
     </strong>
+
 
     <span>
       Evidence-first investor research.
