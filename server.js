@@ -1266,6 +1266,34 @@ function safeJSON(value) {
    12. GEMINI
    ============================================================ */
 
+/*
+ * Primary model:
+ *
+ * GEMINI_MODEL from environment
+ *
+ * Recommended Render value:
+ *
+ * GEMINI_MODEL=gemini-3.5-flash-lite
+ *
+ *
+ * Fallback model:
+ *
+ * GEMINI_FALLBACK_MODEL from environment
+ *
+ * Recommended Render value:
+ *
+ * GEMINI_FALLBACK_MODEL=gemini-3.8-flash
+ *
+ *
+ * IMPORTANT:
+ *
+ * Do NOT use Gemini 2.5 as the fallback for this project.
+ * Some newer Gemini API projects cannot generate with
+ * Gemini 2.5 even though the model may still appear in
+ * the model catalogue.
+ */
+
+
 const analystInstructions = `
 
 You are FinSight AI, an evidence-first equity research system.
@@ -1315,6 +1343,10 @@ Do not issue personalized buy/sell instructions.
 `;
 
 
+/* ============================================================
+   EXTRACT TEXT FROM GEMINI RESPONSE
+   ============================================================ */
+
 function extractGeminiText(
   payload
 ) {
@@ -1335,7 +1367,7 @@ function extractGeminiText(
 
     .map(
       part =>
-        part.text ||
+        part?.text ||
         ""
     )
 
@@ -1346,289 +1378,30 @@ function extractGeminiText(
 }
 
 
-async function geminiGenerate(
-  parts,
-  {
-    json = false
-  } = {}
-) {
-
-  if (
-    !GEMINI_API_KEY
-  ) {
-
-    throw new Error(
-      "Gemini AI is not configured."
-    );
-
-  }
-
-
-  const url =
-
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-      GEMINI_MODEL
-    )}:generateContent`;
-
-
-  const body = {
-
-    system_instruction: {
-
-      parts: [
-        {
-          text:
-            analystInstructions
-        }
-      ]
-
-    },
-
-    contents: [
-
-      {
-        role:
-          "user",
-
-        parts
-      }
-
-    ],
-
-    generationConfig:
-
-      json
-
-        ? {
-            temperature:
-              0.1,
-
-            responseMimeType:
-              "application/json"
-          }
-
-        : {
-            temperature:
-              0.15
-          }
-
-  };
-
-
-  const requestOptions = {
-
-    method:
-      "POST",
-
-    headers: {
-
-      "Content-Type":
-        "application/json",
-
-      "x-goog-api-key":
-        GEMINI_API_KEY
-
-    },
-
-    body:
-      JSON.stringify(
-        body
-      )
-
-  };
-
-
-  let payload;
-
-  /* ============================================================
-   GEMINI GENERATION — RETRY + MODEL FALLBACK
-   ============================================================ */
-
-const sleep = ms =>
-  new Promise(resolve => setTimeout(resolve, ms));
-
-
-/*
- * Retry temporary Gemini failures.
- *
- * Retry:
- * - 429 rate limit
- * - 500–599 provider/server errors
- *
- * Do not retry:
- * - normal 400 validation errors
- * - authentication/permission errors
- * - other permanent request failures
- */
-const fetchGeminiWithRetry = async (
-  targetUrl,
-  maxAttempts = 4
-) => {
-
-  let lastError = null;
-
-
-  for (
-    let attempt = 0;
-    attempt < maxAttempts;
-    attempt++
-  ) {
-
-    try {
-
-      return await fetchJSON(
-        targetUrl,
-        requestOptions
-      );
-
-    }
-
-    catch (error) {
-
-      lastError = error;
-
-
-      const status =
-        Number(
-          error?.status
-        );
-
-
-      const providerStatus =
-        String(
-          error?.providerStatus || ""
-        ).toUpperCase();
-
-
-      const retryable =
-
-        status === 429
-
-        ||
-
-        (
-          status >= 500 &&
-          status < 600
-        )
-
-        ||
-
-        providerStatus === "UNAVAILABLE"
-
-        ||
-
-        providerStatus === "RESOURCE_EXHAUSTED";
-
-
-      /*
-       * Permanent error:
-       * stop immediately.
-       */
-      if (!retryable) {
-
-        throw error;
-
-      }
-
-
-      /*
-       * Final attempt failed.
-       */
-      if (
-        attempt ===
-        maxAttempts - 1
-      ) {
-
-        throw error;
-
-      }
-
-
-      /*
-       * Exponential backoff:
-       *
-       * attempt 1 -> ~1.2 sec
-       * attempt 2 -> ~2.4 sec
-       * attempt 3 -> ~4.8 sec
-       *
-       * Small random jitter prevents every request
-       * retrying at exactly the same moment.
-       */
-      const baseDelay =
-        1200 *
-        (
-          2 ** attempt
-        );
-
-
-      const jitter =
-        Math.floor(
-          Math.random() * 500
-        );
-
-
-      const delay =
-        baseDelay +
-        jitter;
-
-
-      console.warn(
-        `Gemini request failed (${status || providerStatus || "temporary error"}). ` +
-        `Retrying attempt ${attempt + 2}/${maxAttempts} in ${delay}ms.`
-      );
-
-
-      await sleep(
-        delay
-      );
-
-    }
-
-  }
-
-
-  throw (
-    lastError ||
-    new Error(
-      "Gemini request failed."
-    )
-  );
-
-};
-
-
 /* ============================================================
-   PRIMARY GEMINI REQUEST
+   SLEEP HELPER
    ============================================================ */
 
-try {
+function sleep(ms) {
 
-  payload =
-    await fetchGeminiWithRetry(
-      url
-    );
+  return new Promise(
+    resolve =>
+      setTimeout(
+        resolve,
+        ms
+      )
+  );
 
 }
 
-catch (error) {
 
-  /*
-   * ----------------------------------------------------------
-   * MODEL FALLBACK
-   * ----------------------------------------------------------
-   *
-   * Fall back when:
-   *
-   * 1. Primary model does not exist / is unavailable
-   * 2. Primary model is temporarily overloaded
-   * 3. Provider returns a temporary server error
-   *
-   * This fixes the Render error:
-   *
-   * status: 503
-   * providerStatus: UNAVAILABLE
-   */
+/* ============================================================
+   GEMINI ERROR CLASSIFICATION
+   ============================================================ */
 
+function isGeminiRetryableError(
+  error
+) {
 
   const status =
     Number(
@@ -1638,20 +1411,19 @@ catch (error) {
 
   const providerStatus =
     String(
-      error?.providerStatus || ""
-    ).toUpperCase();
+      error?.providerStatus ||
+      ""
+    )
+      .trim()
+      .toUpperCase();
 
 
-  const modelMissing =
+  /*
+   * Retry only failures that may disappear
+   * if the same request is attempted again.
+   */
 
-    status === 404
-
-    ||
-
-    providerStatus === "NOT_FOUND";
-
-
-  const temporarilyUnavailable =
+  return (
 
     status === 429
 
@@ -1664,164 +1436,694 @@ catch (error) {
 
     ||
 
-    providerStatus === "UNAVAILABLE"
+    providerStatus ===
+      "UNAVAILABLE"
 
     ||
 
-    providerStatus === "RESOURCE_EXHAUSTED";
-
-
-  const shouldFallback =
-
-    modelMissing
+    providerStatus ===
+      "RESOURCE_EXHAUSTED"
 
     ||
 
-    temporarilyUnavailable;
+    providerStatus ===
+      "INTERNAL"
 
-
-  /*
-   * If this was not a model/capacity problem,
-   * preserve the real error.
-   */
-  if (!shouldFallback) {
-
-    throw error;
-
-  }
-
-
-  /*
-   * IMPORTANT:
-   *
-   * Put a Gemini model here that you KNOW is
-   * available to your API project.
-   *
-   * Keep the fallback different from GEMINI_MODEL,
-   * otherwise we would simply retry the same model.
-   */
-  const fallbackModel =
-    process.env.GEMINI_FALLBACK_MODEL ||
-    "gemini-2.5-flash-lite";
-
-
-  /*
-   * Prevent pointless fallback if both environment
-   * variables resolve to the same model.
-   */
-  if (
-    String(fallbackModel).trim() ===
-    String(GEMINI_MODEL).trim()
-  ) {
-
-    console.error(
-      `Gemini primary and fallback models are identical: ${GEMINI_MODEL}`
-    );
-
-
-    throw error;
-
-  }
-
-
-  const fallbackUrl =
-
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(
-      fallbackModel
-    )}:generateContent`;
-
-
-  console.warn(
-    `Gemini primary model ${GEMINI_MODEL} failed ` +
-    `(${status || providerStatus || "provider unavailable"}). ` +
-    `Trying fallback model ${fallbackModel}.`
   );
 
+}
 
-  try {
 
-    payload =
-      await fetchGeminiWithRetry(
-        fallbackUrl,
-        3
-      );
+function isGeminiModelUnavailable(
+  error
+) {
 
-  }
-
-  catch (fallbackError) {
-
-    console.error(
-      "Gemini fallback model also failed:",
-      fallbackError
+  const status =
+    Number(
+      error?.status
     );
 
 
-    /*
-     * Give frontend a clean, understandable
-     * error instead of exposing provider internals.
-     */
-    const finalError =
-      new Error(
-        "The AI extraction provider is temporarily unavailable. Please try again shortly."
-      );
-
-
-    finalError.status =
-      fallbackError?.status ||
-      error?.status ||
-      503;
-
-
-    finalError.providerStatus =
-      fallbackError?.providerStatus ||
+  const providerStatus =
+    String(
       error?.providerStatus ||
-      "UNAVAILABLE";
+      ""
+    )
+      .trim()
+      .toUpperCase();
 
 
-    throw finalError;
+  return (
 
-  }
+    status === 404
+
+    ||
+
+    providerStatus ===
+      "NOT_FOUND"
+
+  );
 
 }
 
 
 /* ============================================================
-   EXTRACT GEMINI RESPONSE TEXT
+   GEMINI MODEL URL
    ============================================================ */
 
-const text =
-  extractGeminiText(
-    payload
+function geminiModelUrl(
+  model
+) {
+
+  return (
+
+    "https://generativelanguage.googleapis.com/v1beta/models/"
+
+    +
+
+    encodeURIComponent(
+      model
+    )
+
+    +
+
+    ":generateContent"
+
   );
 
-
-if (!text) {
-
-  const blockReason =
-    payload
-      ?.promptFeedback
-      ?.blockReason;
+}
 
 
-  if (blockReason) {
+/* ============================================================
+   GEMINI GENERATION
+   ============================================================ */
+
+async function geminiGenerate(
+  parts,
+  {
+    json = false
+  } = {}
+) {
+
+  /* ----------------------------------------------------------
+     API KEY CHECK
+     ---------------------------------------------------------- */
+
+  if (
+    !GEMINI_API_KEY
+  ) {
 
     throw new Error(
-      `Gemini returned no usable response: ${blockReason}.`
+      "Gemini AI is not configured."
     );
 
   }
 
 
-  throw new Error(
-    "Gemini returned no usable response."
+  /* ----------------------------------------------------------
+     MODEL CONFIGURATION
+     ---------------------------------------------------------- */
+
+  const primaryModel =
+
+    String(
+      GEMINI_MODEL ||
+      "gemini-3.5-flash-lite"
+    )
+      .trim();
+
+
+  /*
+   * Use a current-generation fallback.
+   *
+   * This replaces the old:
+   *
+   * gemini-2.5-flash-lite
+   *
+   * fallback.
+   */
+
+  const fallbackModel =
+
+    String(
+      process.env
+        .GEMINI_FALLBACK_MODEL
+
+      ||
+
+      "gemini-3.8-flash"
+    )
+      .trim();
+
+
+  if (
+    !primaryModel
+  ) {
+
+    throw new Error(
+      "Gemini primary model is not configured."
+    );
+
+  }
+
+
+  /* ----------------------------------------------------------
+     REQUEST BODY
+     ---------------------------------------------------------- */
+
+  const body = {
+
+    system_instruction: {
+
+      parts: [
+
+        {
+          text:
+            analystInstructions
+        }
+
+      ]
+
+    },
+
+
+    contents: [
+
+      {
+
+        role:
+          "user",
+
+        parts
+
+      }
+
+    ],
+
+
+    generationConfig:
+
+      json
+
+        ? {
+
+            temperature:
+              0.1,
+
+            responseMimeType:
+              "application/json"
+
+          }
+
+        : {
+
+            temperature:
+              0.15
+
+          }
+
+  };
+
+
+  /* ----------------------------------------------------------
+     REQUEST OPTIONS
+     ---------------------------------------------------------- */
+
+  const requestOptions = {
+
+    method:
+      "POST",
+
+
+    headers: {
+
+      "Content-Type":
+        "application/json",
+
+      "x-goog-api-key":
+        GEMINI_API_KEY
+
+    },
+
+
+    body:
+      JSON.stringify(
+        body
+      )
+
+  };
+
+
+  /* ==========================================================
+     REQUEST ONE MODEL WITH RETRIES
+     ========================================================== */
+
+  async function requestModel(
+    model,
+    maxAttempts = 4
+  ) {
+
+    const targetUrl =
+      geminiModelUrl(
+        model
+      );
+
+
+    let lastError =
+      null;
+
+
+    for (
+      let attempt = 1;
+      attempt <= maxAttempts;
+      attempt++
+    ) {
+
+      try {
+
+        console.log(
+          `Gemini ${model}: request ${attempt}/${maxAttempts}`
+        );
+
+
+        const response =
+          await fetchJSON(
+            targetUrl,
+            requestOptions
+          );
+
+
+        return response;
+
+      }
+
+      catch (
+        error
+      ) {
+
+        lastError =
+          error;
+
+
+        const retryable =
+          isGeminiRetryableError(
+            error
+          );
+
+
+        /*
+         * A missing model should NOT be retried
+         * several times.
+         *
+         * Immediately allow the fallback model
+         * to be attempted.
+         */
+
+        if (
+          isGeminiModelUnavailable(
+            error
+          )
+        ) {
+
+          console.warn(
+            `Gemini model ${model} is unavailable.`
+          );
+
+
+          throw error;
+
+        }
+
+
+        /*
+         * Permanent provider error.
+         *
+         * Examples:
+         *
+         * 400 invalid request
+         * 401 authentication
+         * 403 permission
+         */
+
+        if (
+          !retryable
+        ) {
+
+          throw error;
+
+        }
+
+
+        /*
+         * Last retry already failed.
+         */
+
+        if (
+          attempt >=
+          maxAttempts
+        ) {
+
+          throw error;
+
+        }
+
+
+        /*
+         * Exponential backoff.
+         *
+         * Approximate delays:
+         *
+         * 1 -> 1.2 seconds
+         * 2 -> 2.4 seconds
+         * 3 -> 4.8 seconds
+         *
+         * plus jitter.
+         */
+
+        const baseDelay =
+
+          1200 *
+
+          (
+            2 **
+            (
+              attempt - 1
+            )
+          );
+
+
+        const jitter =
+
+          Math.floor(
+            Math.random() *
+            600
+          );
+
+
+        const delay =
+          baseDelay +
+          jitter;
+
+
+        console.warn(
+
+          `Gemini ${model} failed ` +
+
+          `(${error?.status || error?.providerStatus || "temporary error"}). ` +
+
+          `Retrying ${attempt + 1}/${maxAttempts} in ${delay}ms.`
+
+        );
+
+
+        await sleep(
+          delay
+        );
+
+      }
+
+    }
+
+
+    throw (
+
+      lastError
+
+      ||
+
+      new Error(
+        `Gemini model ${model} failed.`
+      )
+
+    );
+
+  }
+
+
+  /* ==========================================================
+     PRIMARY MODEL
+     ========================================================== */
+
+  let payload;
+
+  let modelUsed =
+    primaryModel;
+
+
+  try {
+
+    payload =
+      await requestModel(
+        primaryModel,
+        4
+      );
+
+  }
+
+  catch (
+    primaryError
+  ) {
+
+    const modelUnavailable =
+      isGeminiModelUnavailable(
+        primaryError
+      );
+
+
+    const temporaryFailure =
+      isGeminiRetryableError(
+        primaryError
+      );
+
+
+    /*
+     * Only switch models for:
+     *
+     * 404 / NOT_FOUND
+     *
+     * 429 / RESOURCE_EXHAUSTED
+     *
+     * 5xx / UNAVAILABLE
+     *
+     * Do NOT hide authentication,
+     * permissions or malformed requests.
+     */
+
+    const shouldFallback =
+
+      modelUnavailable
+
+      ||
+
+      temporaryFailure;
+
+
+    if (
+      !shouldFallback
+    ) {
+
+      throw primaryError;
+
+    }
+
+
+    /*
+     * Prevent accidentally calling the
+     * same model twice.
+     */
+
+    if (
+      !fallbackModel ||
+      fallbackModel ===
+        primaryModel
+    ) {
+
+      console.error(
+
+        "Gemini fallback unavailable because primary and fallback models are identical.",
+
+        {
+          primaryModel,
+          fallbackModel
+        }
+
+      );
+
+
+      throw primaryError;
+
+    }
+
+
+    console.warn(
+
+      `Gemini primary model ${primaryModel} failed. ` +
+
+      `Trying fallback model ${fallbackModel}.`
+
+    );
+
+
+    try {
+
+      payload =
+        await requestModel(
+          fallbackModel,
+          3
+        );
+
+
+      modelUsed =
+        fallbackModel;
+
+    }
+
+    catch (
+      fallbackError
+    ) {
+
+      console.error(
+
+        "Gemini primary and fallback models failed:",
+
+        {
+
+          primaryModel,
+
+          primaryStatus:
+            primaryError?.status,
+
+          primaryProviderStatus:
+            primaryError
+              ?.providerStatus,
+
+          fallbackModel,
+
+          fallbackStatus:
+            fallbackError?.status,
+
+          fallbackProviderStatus:
+            fallbackError
+              ?.providerStatus
+
+        }
+
+      );
+
+
+      /*
+       * Return a clean error to the
+       * FinSight routes/frontend.
+       */
+
+      const finalError =
+        new Error(
+
+          "The AI extraction provider is temporarily unavailable. Please try again shortly."
+
+        );
+
+
+      finalError.status =
+
+        fallbackError?.status
+
+        ||
+
+        primaryError?.status
+
+        ||
+
+        503;
+
+
+      finalError.providerStatus =
+
+        fallbackError
+          ?.providerStatus
+
+        ||
+
+        primaryError
+          ?.providerStatus
+
+        ||
+
+        "UNAVAILABLE";
+
+
+      finalError.primaryModel =
+        primaryModel;
+
+
+      finalError.fallbackModel =
+        fallbackModel;
+
+
+      throw finalError;
+
+    }
+
+  }
+
+
+  /* ==========================================================
+     EXTRACT RESPONSE
+     ========================================================== */
+
+  const text =
+    extractGeminiText(
+      payload
+    );
+
+
+  if (
+    !text
+  ) {
+
+    const blockReason =
+
+      payload
+        ?.promptFeedback
+        ?.blockReason;
+
+
+    if (
+      blockReason
+    ) {
+
+      throw new Error(
+
+        `Gemini returned no usable response: ${blockReason}.`
+
+      );
+
+    }
+
+
+    throw new Error(
+      "Gemini returned no usable response."
+    );
+
+  }
+
+
+  /*
+   * Useful Render diagnostic.
+   *
+   * This lets you see whether the request
+   * succeeded through the primary or fallback.
+   */
+
+  console.log(
+    `Gemini generation successful using ${modelUsed}.`
   );
 
-}
 
-
-return text;
+  return text;
 
 }
+
 
 
 /* ============================================================
