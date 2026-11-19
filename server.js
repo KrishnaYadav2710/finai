@@ -3571,26 +3571,68 @@ Do not invent missing values.
 
       let code =
         "FINANCIAL_EXTRACTION_FAILED";
+/* ------------------------------------------------------
+   GEMINI / INPUT BAD REQUEST
+   ------------------------------------------------------ */
+
+if (
+  upstreamStatus === 400
+) {
+
+  status = 400;
+
+  code = "AI_BAD_REQUEST";
 
 
-      /* ------------------------------------------------------
-         BAD / UNREADABLE INPUT
-         ------------------------------------------------------ */
+  /*
+   * IMPORTANT:
+   *
+   * HTTP 400 from Gemini does NOT automatically mean
+   * the uploaded PDF is unreadable.
+   *
+   * Preserve the actual provider message so we can see
+   * whether the problem is:
+   *
+   * - PDF payload
+   * - unsupported model feature
+   * - request size
+   * - JSON response mode
+   * - malformed Gemini request
+   * - genuinely unreadable document
+   */
 
-      if (
-        upstreamStatus === 400
-      ) {
+  const providerMessage =
+    typeof error?.message === "string"
+      ? error.message.trim()
+      : "";
 
-        status =
-          400;
 
-        code =
-          "INVALID_REPORT";
+  console.error(
+    "Gemini 400 financial extraction error:",
+    {
+      message: providerMessage,
+      status: error?.status,
+      providerStatus: error?.providerStatus,
+      providerDetails: error?.providerDetails
+    }
+  );
 
-        message =
-          "The annual report could not be processed. Confirm that the PDF is readable and contains financial statements.";
 
-      }
+  if (providerMessage) {
+
+    message =
+      `AI extraction request failed: ${providerMessage}`;
+
+  }
+
+  else {
+
+    message =
+      "The AI provider rejected the annual-report extraction request.";
+
+  }
+
+}
 
 
       /* ------------------------------------------------------
