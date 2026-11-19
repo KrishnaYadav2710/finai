@@ -1267,30 +1267,19 @@ function safeJSON(value) {
    ============================================================ */
 
 /*
- * Primary model:
+ * FinSight Gemini architecture
  *
- * GEMINI_MODEL from environment
+ * Small PDF:
+ *   PDF -> inlineData -> generateContent
  *
- * Recommended Render value:
+ * Large PDF:
+ *   PDF -> Gemini Files API -> fileData -> generateContent
  *
- * GEMINI_MODEL=gemini-3.5-flash-lite
- *
- *
- * Fallback model:
- *
- * GEMINI_FALLBACK_MODEL from environment
- *
- * Recommended Render value:
- *
- * GEMINI_FALLBACK_MODEL=gemini-3.8-flash
- *
+ * FinSight itself accepts PDFs up to 45 MB.
  *
  * IMPORTANT:
- *
- * Do NOT use Gemini 2.5 as the fallback for this project.
- * Some newer Gemini API projects cannot generate with
- * Gemini 2.5 even though the model may still appear in
- * the model catalogue.
+ * Large PDFs must NOT be converted to base64 and embedded
+ * directly inside generateContent.
  */
 
 
@@ -1344,12 +1333,43 @@ Do not issue personalized buy/sell instructions.
 
 
 /* ============================================================
-   EXTRACT TEXT FROM GEMINI RESPONSE
+   GEMINI CONSTANTS
    ============================================================ */
 
-function extractGeminiText(
-  payload
-) {
+/*
+ * Stay comfortably below the inline request limit.
+ *
+ * Base64 increases payload size substantially, therefore
+ * FinSight switches to Files API well before 20 MB.
+ */
+
+const GEMINI_INLINE_PDF_LIMIT =
+  12 * 1024 * 1024;
+
+
+/*
+ * FinSight application limit.
+ *
+ * Must match the Multer limit.
+ */
+
+const FINSIGHT_MAX_PDF_SIZE =
+  45 * 1024 * 1024;
+
+
+/*
+ * Files API processing timeout.
+ */
+
+const GEMINI_FILE_READY_TIMEOUT =
+  120000;
+
+
+/* ============================================================
+   RESPONSE TEXT
+   ============================================================ */
+
+function extractGeminiText(payload) {
 
   return (
 
@@ -1364,22 +1384,19 @@ function extractGeminiText(
     []
 
   )
-
     .map(
       part =>
         part?.text ||
         ""
     )
-
     .join("\n")
-
     .trim();
 
 }
 
 
 /* ============================================================
-   SLEEP HELPER
+   SLEEP
    ============================================================ */
 
 function sleep(ms) {
@@ -1396,12 +1413,10 @@ function sleep(ms) {
 
 
 /* ============================================================
-   GEMINI ERROR CLASSIFICATION
+   GEMINI ERROR HELPERS
    ============================================================ */
 
-function isGeminiRetryableError(
-  error
-) {
+function isGeminiRetryableError(error) {
 
   const status =
     Number(
@@ -1417,11 +1432,6 @@ function isGeminiRetryableError(
       .trim()
       .toUpperCase();
 
-
-  /*
-   * Retry only failures that may disappear
-   * if the same request is attempted again.
-   */
 
   return (
 
@@ -1454,9 +1464,7 @@ function isGeminiRetryableError(
 }
 
 
-function isGeminiModelUnavailable(
-  error
-) {
+function isGeminiModelUnavailable(error) {
 
   const status =
     Number(
@@ -1488,12 +1496,10 @@ function isGeminiModelUnavailable(
 
 
 /* ============================================================
-   GEMINI MODEL URL
+   MODEL URL
    ============================================================ */
 
-function geminiModelUrl(
-  model
-) {
+function geminiModelUrl(model) {
 
   return (
 
@@ -1515,7 +1521,7 @@ function geminiModelUrl(
 
 
 /* ============================================================
-   GEMINI GENERATION
+   GENERATE CONTENT
    ============================================================ */
 
 async function geminiGenerate(
@@ -1525,13 +1531,7 @@ async function geminiGenerate(
   } = {}
 ) {
 
-  /* ----------------------------------------------------------
-     API KEY CHECK
-     ---------------------------------------------------------- */
-
-  if (
-    !GEMINI_API_KEY
-  ) {
+  if (!GEMINI_API_KEY) {
 
     throw new Error(
       "Gemini AI is not configured."
@@ -1540,68 +1540,37 @@ async function geminiGenerate(
   }
 
 
-  /* ----------------------------------------------------------
-     MODEL CONFIGURATION
-     ---------------------------------------------------------- */
-
   const primaryModel =
-
     String(
       GEMINI_MODEL ||
       "gemini-3.5-flash-lite"
-    )
-      .trim();
+    ).trim();
 
 
   /*
-   * Use a current-generation fallback.
+   * Current fallback.
    *
-   * This replaces the old:
+   * Render:
    *
-   * gemini-2.5-flash-lite
-   *
-   * fallback.
+   * GEMINI_FALLBACK_MODEL=gemini-3.8-flash
    */
 
   const fallbackModel =
-
     String(
-      process.env
-        .GEMINI_FALLBACK_MODEL
-
-      ||
-
+      process.env.GEMINI_FALLBACK_MODEL ||
       "gemini-3.8-flash"
-    )
-      .trim();
+    ).trim();
 
-
-  if (
-    !primaryModel
-  ) {
-
-    throw new Error(
-      "Gemini primary model is not configured."
-    );
-
-  }
-
-
-  /* ----------------------------------------------------------
-     REQUEST BODY
-     ---------------------------------------------------------- */
 
   const body = {
 
     system_instruction: {
 
       parts: [
-
         {
           text:
             analystInstructions
         }
-
       ]
 
     },
@@ -1645,15 +1614,10 @@ async function geminiGenerate(
   };
 
 
-  /* ----------------------------------------------------------
-     REQUEST OPTIONS
-     ---------------------------------------------------------- */
-
   const requestOptions = {
 
     method:
       "POST",
-
 
     headers: {
 
@@ -1665,7 +1629,6 @@ async function geminiGenerate(
 
     },
 
-
     body:
       JSON.stringify(
         body
@@ -1675,7 +1638,7 @@ async function geminiGenerate(
 
 
   /* ==========================================================
-     REQUEST ONE MODEL WITH RETRIES
+     REQUEST MODEL
      ========================================================== */
 
   async function requestModel(
@@ -1706,37 +1669,22 @@ async function geminiGenerate(
         );
 
 
-        const response =
-          await fetchJSON(
-            targetUrl,
-            requestOptions
-          );
-
-
-        return response;
+        return await fetchJSON(
+          targetUrl,
+          requestOptions
+        );
 
       }
 
-      catch (
-        error
-      ) {
+      catch (error) {
 
         lastError =
           error;
 
 
-        const retryable =
-          isGeminiRetryableError(
-            error
-          );
-
-
         /*
-         * A missing model should NOT be retried
-         * several times.
-         *
-         * Immediately allow the fallback model
-         * to be attempted.
+         * Missing model:
+         * immediately try fallback.
          */
 
         if (
@@ -1745,38 +1693,28 @@ async function geminiGenerate(
           )
         ) {
 
-          console.warn(
-            `Gemini model ${model} is unavailable.`
-          );
-
-
           throw error;
 
         }
 
 
         /*
-         * Permanent provider error.
+         * 400 / 401 / 403 etc.
          *
-         * Examples:
-         *
-         * 400 invalid request
-         * 401 authentication
-         * 403 permission
+         * These are normally request/configuration
+         * problems and should not be blindly retried.
          */
 
         if (
-          !retryable
+          !isGeminiRetryableError(
+            error
+          )
         ) {
 
           throw error;
 
         }
 
-
-        /*
-         * Last retry already failed.
-         */
 
         if (
           attempt >=
@@ -1788,22 +1726,8 @@ async function geminiGenerate(
         }
 
 
-        /*
-         * Exponential backoff.
-         *
-         * Approximate delays:
-         *
-         * 1 -> 1.2 seconds
-         * 2 -> 2.4 seconds
-         * 3 -> 4.8 seconds
-         *
-         * plus jitter.
-         */
-
         const baseDelay =
-
           1200 *
-
           (
             2 **
             (
@@ -1813,10 +1737,9 @@ async function geminiGenerate(
 
 
         const jitter =
-
           Math.floor(
             Math.random() *
-            600
+            500
           );
 
 
@@ -1829,7 +1752,7 @@ async function geminiGenerate(
 
           `Gemini ${model} failed ` +
 
-          `(${error?.status || error?.providerStatus || "temporary error"}). ` +
+          `(${error?.status || error?.providerStatus || "temporary"}). ` +
 
           `Retrying ${attempt + 1}/${maxAttempts} in ${delay}ms.`
 
@@ -1852,7 +1775,7 @@ async function geminiGenerate(
       ||
 
       new Error(
-        `Gemini model ${model} failed.`
+        `Gemini ${model} failed.`
       )
 
     );
@@ -1861,7 +1784,7 @@ async function geminiGenerate(
 
 
   /* ==========================================================
-     PRIMARY MODEL
+     PRIMARY + FALLBACK
      ========================================================== */
 
   let payload;
@@ -1880,75 +1803,37 @@ async function geminiGenerate(
 
   }
 
-  catch (
-    primaryError
-  ) {
+  catch (primaryError) {
 
-    const modelUnavailable =
+    const shouldFallback =
+
       isGeminiModelUnavailable(
         primaryError
-      );
+      )
 
+      ||
 
-    const temporaryFailure =
       isGeminiRetryableError(
         primaryError
       );
 
 
     /*
-     * Only switch models for:
-     *
-     * 404 / NOT_FOUND
-     *
-     * 429 / RESOURCE_EXHAUSTED
-     *
-     * 5xx / UNAVAILABLE
-     *
-     * Do NOT hide authentication,
-     * permissions or malformed requests.
+     * A genuine bad request should be preserved.
      */
 
-    const shouldFallback =
-
-      modelUnavailable
-
-      ||
-
-      temporaryFailure;
-
-
-    if (
-      !shouldFallback
-    ) {
+    if (!shouldFallback) {
 
       throw primaryError;
 
     }
 
 
-    /*
-     * Prevent accidentally calling the
-     * same model twice.
-     */
-
     if (
       !fallbackModel ||
       fallbackModel ===
         primaryModel
     ) {
-
-      console.error(
-
-        "Gemini fallback unavailable because primary and fallback models are identical.",
-
-        {
-          primaryModel,
-          fallbackModel
-        }
-
-      );
-
 
       throw primaryError;
 
@@ -1957,9 +1842,9 @@ async function geminiGenerate(
 
     console.warn(
 
-      `Gemini primary model ${primaryModel} failed. ` +
+      `Gemini primary ${primaryModel} failed. ` +
 
-      `Trying fallback model ${fallbackModel}.`
+      `Trying ${fallbackModel}.`
 
     );
 
@@ -1978,24 +1863,21 @@ async function geminiGenerate(
 
     }
 
-    catch (
-      fallbackError
-    ) {
+    catch (fallbackError) {
 
       console.error(
-
-        "Gemini primary and fallback models failed:",
-
+        "Gemini primary and fallback failed:",
         {
-
           primaryModel,
 
           primaryStatus:
             primaryError?.status,
 
           primaryProviderStatus:
-            primaryError
-              ?.providerStatus,
+            primaryError?.providerStatus,
+
+          primaryMessage:
+            primaryError?.message,
 
           fallbackModel,
 
@@ -2003,61 +1885,45 @@ async function geminiGenerate(
             fallbackError?.status,
 
           fallbackProviderStatus:
-            fallbackError
-              ?.providerStatus
+            fallbackError?.providerStatus,
 
+          fallbackMessage:
+            fallbackError?.message
         }
-
       );
 
 
       /*
-       * Return a clean error to the
-       * FinSight routes/frontend.
+       * Preserve authentication/configuration errors.
        */
+
+      if (
+        fallbackError?.status === 400 ||
+        fallbackError?.status === 401 ||
+        fallbackError?.status === 403
+      ) {
+
+        throw fallbackError;
+
+      }
+
 
       const finalError =
         new Error(
-
           "The AI extraction provider is temporarily unavailable. Please try again shortly."
-
         );
 
 
       finalError.status =
-
-        fallbackError?.status
-
-        ||
-
-        primaryError?.status
-
-        ||
-
+        fallbackError?.status ||
+        primaryError?.status ||
         503;
 
 
       finalError.providerStatus =
-
-        fallbackError
-          ?.providerStatus
-
-        ||
-
-        primaryError
-          ?.providerStatus
-
-        ||
-
+        fallbackError?.providerStatus ||
+        primaryError?.providerStatus ||
         "UNAVAILABLE";
-
-
-      finalError.primaryModel =
-        primaryModel;
-
-
-      finalError.fallbackModel =
-        fallbackModel;
 
 
       throw finalError;
@@ -2067,35 +1933,24 @@ async function geminiGenerate(
   }
 
 
-  /* ==========================================================
-     EXTRACT RESPONSE
-     ========================================================== */
-
   const text =
     extractGeminiText(
       payload
     );
 
 
-  if (
-    !text
-  ) {
+  if (!text) {
 
     const blockReason =
-
       payload
         ?.promptFeedback
         ?.blockReason;
 
 
-    if (
-      blockReason
-    ) {
+    if (blockReason) {
 
       throw new Error(
-
         `Gemini returned no usable response: ${blockReason}.`
-
       );
 
     }
@@ -2108,13 +1963,6 @@ async function geminiGenerate(
   }
 
 
-  /*
-   * Useful Render diagnostic.
-   *
-   * This lets you see whether the request
-   * succeeded through the primary or fallback.
-   */
-
   console.log(
     `Gemini generation successful using ${modelUsed}.`
   );
@@ -2125,12 +1973,16 @@ async function geminiGenerate(
 }
 
 
-
 /* ============================================================
-   13. PDF PART
+   13. PDF INPUT / GEMINI FILES API
    ============================================================ */
 
-function pdfPart(file) {
+
+/* ============================================================
+   INLINE PDF
+   ============================================================ */
+
+function inlinePdfPart(file) {
 
   return {
 
@@ -2150,507 +2002,790 @@ function pdfPart(file) {
   };
 
 }
+
+
 /* ============================================================
-   FINANCIAL UNIT NORMALIZATION
-
-   IMPORTANT:
-   Gemini returns RAW statement values.
-   The SERVER performs the conversion exactly once.
-
-   All monetary values sent to the frontend:
-   INR crore
-
-   Shares outstanding:
-   crore shares
+   START GEMINI RESUMABLE FILE UPLOAD
    ============================================================ */
 
+async function startGeminiFileUpload(file) {
 
-function finiteFinancialNumber(value) {
+  if (!GEMINI_API_KEY) {
+
+    throw new Error(
+      "Gemini AI is not configured."
+    );
+
+  }
+
+
+  if (!file?.buffer) {
+
+    throw new Error(
+      "PDF upload buffer is unavailable."
+    );
+
+  }
+
+
+  const size =
+    file.buffer.length;
+
+
+  if (
+    size >
+    FINSIGHT_MAX_PDF_SIZE
+  ) {
+
+    const error =
+      new Error(
+        "The annual-report PDF exceeds FinSight's 45 MB upload limit."
+      );
+
+
+    error.status =
+      413;
+
+
+    throw error;
+
+  }
+
+
+  const displayName =
+    String(
+      file.originalname ||
+      "annual-report.pdf"
+    )
+      .replace(
+        /[\r\n"]/g,
+        " "
+      )
+      .slice(
+        0,
+        500
+      );
+
 
   /*
-   * Never allow missing values to become zero.
+   * STEP 1
    *
-   * Number(null) === 0
-   * Number("")   === 0
-   *
-   * Both are dangerous for financial analysis.
+   * Ask Gemini for a resumable upload URL.
    */
 
-  if (
-    value === null ||
-    value === undefined
-  ) {
-    return null;
-  }
+  const startResponse =
+    await fetch(
 
+      "https://generativelanguage.googleapis.com/upload/v1beta/files",
 
-  if (
-    typeof value === "string" &&
-    value.trim() === ""
-  ) {
-    return null;
-  }
+      {
 
+        method:
+          "POST",
 
-  const parsed =
-    Number(value);
+        headers: {
 
+          "x-goog-api-key":
+            GEMINI_API_KEY,
 
-  return Number.isFinite(parsed)
-    ? parsed
-    : null;
+          "X-Goog-Upload-Protocol":
+            "resumable",
 
-}
+          "X-Goog-Upload-Command":
+            "start",
 
+          "X-Goog-Upload-Header-Content-Length":
+            String(
+              size
+            ),
 
-/*
- * Return the multiplier required to convert
- * the source monetary unit into INR crore.
- *
- * million -> crore = × 0.1
- * lakh    -> crore = × 0.01
- * billion -> crore = × 100
- * crore   -> crore = × 1
- */
+          "X-Goog-Upload-Header-Content-Type":
+            "application/pdf",
 
-function monetaryCroreFactor(sourceUnit) {
+          "Content-Type":
+            "application/json"
 
-  const unit =
-    String(
-      sourceUnit || ""
-    )
-      .toLowerCase()
-      .replace(/[,()]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
+        },
 
+        body:
+          JSON.stringify({
 
-  if (!unit) {
-    return null;
-  }
+            file: {
 
+              display_name:
+                displayName
 
-  if (
-    /\b(crore|crores|cr)\b/.test(unit)
-  ) {
-    return 1;
-  }
+            }
 
+          })
 
-  if (
-    /\b(million|millions|mn|mio)\b/.test(unit)
-  ) {
-    return 0.1;
-  }
+      }
 
-
-  if (
-    /\b(lakh|lakhs|lac|lacs)\b/.test(unit)
-  ) {
-    return 0.01;
-  }
-
-
-  if (
-    /\b(billion|billions|bn)\b/.test(unit)
-  ) {
-    return 100;
-  }
-
-
-  return null;
-
-}
-
-
-/*
- * Shares need their own unit conversion.
- *
- * The monetary statement may say "INR million",
- * while the share note may say:
- *
- * - 125,000,000 shares
- * - 1,250 lakh shares
- * - 12.5 crore shares
- *
- * Therefore shares MUST NOT use source_unit.
- */
-
-function sharesToCrore(
-  value,
-  sharesUnit
-) {
-
-  const shares =
-    finiteFinancialNumber(
-      value
     );
 
 
-  if (shares == null) {
-    return null;
+  if (!startResponse.ok) {
+
+    const text =
+      await startResponse.text();
+
+
+    const error =
+      new Error(
+        text ||
+        `Gemini file upload initialization failed (${startResponse.status}).`
+      );
+
+
+    error.status =
+      startResponse.status;
+
+
+    throw error;
+
+  }
+
+
+  const uploadUrl =
+    startResponse.headers.get(
+      "x-goog-upload-url"
+    );
+
+
+  if (!uploadUrl) {
+
+    throw new Error(
+      "Gemini did not return a resumable file-upload URL."
+    );
+
   }
 
 
-  const unit =
-    String(
-      sharesUnit || ""
-    )
-      .toLowerCase()
-      .replace(/[,()]/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
+  console.log(
+    `Gemini Files API upload started: ${displayName} (${(
+      size /
+      1024 /
+      1024
+    ).toFixed(1)} MB)`
+  );
 
 
-  if (!unit) {
+  /*
+   * STEP 2
+   *
+   * Upload actual PDF bytes and finalize.
+   */
 
-    /*
-     * Do not guess.
-     *
-     * Gemini is instructed to provide
-     * shares_outstanding_unit.
-     */
+  const uploadResponse =
+    await fetch(
+      uploadUrl,
+      {
 
-    return null;
+        method:
+          "POST",
+
+        headers: {
+
+          "Content-Length":
+            String(
+              size
+            ),
+
+          "X-Goog-Upload-Offset":
+            "0",
+
+          "X-Goog-Upload-Command":
+            "upload, finalize",
+
+          "Content-Type":
+            "application/pdf"
+
+        },
+
+        body:
+          file.buffer
+
+      }
+    );
+
+
+  const uploadText =
+    await uploadResponse.text();
+
+
+  let uploadPayload =
+    {};
+
+
+  if (uploadText) {
+
+    try {
+
+      uploadPayload =
+        JSON.parse(
+          uploadText
+        );
+
+    }
+
+    catch {
+
+      uploadPayload = {
+        raw:
+          uploadText
+      };
+
+    }
 
   }
+
+
+  if (!uploadResponse.ok) {
+
+    const providerMessage =
+
+      uploadPayload
+        ?.error
+        ?.message
+
+      ||
+
+      uploadPayload
+        ?.error
+
+      ||
+
+      uploadPayload
+        ?.raw
+
+      ||
+
+      `Gemini file upload failed (${uploadResponse.status}).`;
+
+
+    const error =
+      new Error(
+        String(
+          providerMessage
+        )
+      );
+
+
+    error.status =
+      uploadResponse.status;
+
+
+    error.providerStatus =
+      uploadPayload
+        ?.error
+        ?.status ||
+      null;
+
+
+    throw error;
+
+  }
+
+
+  const uploadedFile =
+    uploadPayload?.file;
 
 
   if (
-    /\b(crore|crores|cr)\b/.test(unit)
+    !uploadedFile?.name ||
+    !uploadedFile?.uri
   ) {
 
-    return shares;
+    throw new Error(
+      "Gemini uploaded the PDF but returned incomplete file metadata."
+    );
 
   }
 
 
-  if (
-    /\b(lakh|lakhs|lac|lacs)\b/.test(unit)
-  ) {
-
-    return shares / 100;
-
-  }
-
-
-  if (
-    /\b(million|millions|mn)\b/.test(unit)
-  ) {
-
-    /*
-     * 10 million shares = 1 crore shares.
-     */
-
-    return shares / 10;
-
-  }
-
-
-  if (
-    /\b(billion|billions|bn)\b/.test(unit)
-  ) {
-
-    /*
-     * 1 billion shares = 100 crore shares.
-     */
-
-    return shares * 100;
-
-  }
-
-
-  if (
-    /\b(number|shares|share|units|absolute)\b/.test(unit)
-  ) {
-
-    /*
-     * 1 crore = 10,000,000 shares.
-     */
-
-    return shares / 10000000;
-
-  }
-
-
-  return null;
+  return uploadedFile;
 
 }
 
 
-function normalizeFinancialUnitsToCrore(
-  financials
+/* ============================================================
+   GET GEMINI FILE METADATA
+   ============================================================ */
+
+async function getGeminiFile(
+  fileName
 ) {
 
-  if (
-    !Array.isArray(
-      financials
+  const normalizedName =
+    String(
+      fileName ||
+      ""
     )
-  ) {
-    return [];
+      .replace(
+        /^\/+/,
+        ""
+      );
+
+
+  if (!normalizedName) {
+
+    throw new Error(
+      "Gemini file name is unavailable."
+    );
+
   }
 
 
-  const monetaryFields = [
+  return fetchJSON(
 
-    "revenue",
-    "ebitda",
-    "cogs",
-    "operating_income",
-    "net_income",
+    `https://generativelanguage.googleapis.com/v1beta/${normalizedName}`,
 
-    "total_assets",
-    "current_assets",
-    "current_liabilities",
+    {
 
-    "total_debt",
-    "cash",
-    "total_equity",
+      method:
+        "GET",
 
-    "operating_cash_flow",
-    "capex",
+      headers: {
 
-    "inventory",
-    "accounts_receivable",
-    "accounts_payable",
-
-    "finance_cost"
-
-  ];
-
-
-  return financials.map(
-    rawRow => {
-
-      const row =
-        rawRow &&
-        typeof rawRow === "object"
-
-          ? rawRow
-
-          : {};
-
-
-      const normalized = {
-        ...row
-      };
-
-
-      const sourceUnit =
-        row.source_unit ||
-        null;
-
-
-      const factor =
-        monetaryCroreFactor(
-          sourceUnit
-        );
-
-
-      /*
-       * ------------------------------------------------------
-       * MONETARY VALUES
-       * ------------------------------------------------------
-       */
-
-      if (
-        factor != null
-      ) {
-
-        for (
-          const field
-          of monetaryFields
-        ) {
-
-          const rawValue =
-            finiteFinancialNumber(
-              row[field]
-            );
-
-
-          normalized[field] =
-
-            rawValue == null
-
-              ? null
-
-              : rawValue *
-                factor;
-
-        }
-
-
-        normalized.original_source_unit =
-          sourceUnit;
-
-
-        normalized.source_unit =
-          "INR crore";
+        "x-goog-api-key":
+          GEMINI_API_KEY
 
       }
-
-      else {
-
-        /*
-         * Unknown unit means the scale is unsafe.
-         * Never pass raw monetary values to a frontend that
-         * displays normalized values as INR crore.
-         */
-
-        for (
-          const field
-          of monetaryFields
-        ) {
-
-          normalized[field] = null;
-
-        }
-
-
-        normalized.original_source_unit =
-          sourceUnit;
-
-
-        normalized.source_unit = null;
-
-      }
-
-
-      /*
-       * ------------------------------------------------------
-       * SHARES OUTSTANDING
-       * ------------------------------------------------------
-       */
-
-      const normalizedShares =
-        sharesToCrore(
-
-          row.shares_outstanding,
-
-          row.shares_outstanding_unit
-
-        );
-
-
-      normalized.shares_outstanding =
-        normalizedShares;
-
-
-      normalized.original_shares_outstanding =
-        finiteFinancialNumber(
-          row.shares_outstanding
-        );
-
-
-      normalized.original_shares_outstanding_unit =
-        row.shares_outstanding_unit ||
-        null;
-
-
-      normalized.shares_outstanding_unit =
-
-        normalizedShares == null
-
-          ? row.shares_outstanding_unit ||
-            null
-
-          : "crore shares";
-
-
-      /*
-       * ------------------------------------------------------
-       * OTHER NUMERIC CLEANUP
-       * ------------------------------------------------------
-       */
-
-      normalized.year =
-        finiteFinancialNumber(
-          row.year ??
-          row.end_year
-        );
-
-
-      normalized.source_pages =
-
-        Array.isArray(
-          row.source_pages
-        )
-
-          ? row.source_pages
-
-          : [];
-
-
-      /*
-       * ------------------------------------------------------
-       * VALIDATION NOTES
-       * ------------------------------------------------------
-       */
-
-      const notes =
-        [];
-
-
-      if (
-        row.extraction_notes
-      ) {
-
-        notes.push(
-          String(
-            row.extraction_notes
-          )
-        );
-
-      }
-
-
-      if (
-        factor == null
-      ) {
-
-        notes.push(
-
-          `Monetary unit "${sourceUnit || "unknown"}" could not be normalized safely. Monetary values were withheld (null) rather than risk displaying an incorrect crore scale.`
-
-        );
-
-      }
-
-      else if (
-        factor !== 1
-      ) {
-
-        notes.push(
-
-          `Server converted monetary values from ${sourceUnit} to INR crore.`
-
-        );
-
-      }
-
-
-      if (
-        row.shares_outstanding != null &&
-        normalizedShares == null
-      ) {
-
-        notes.push(
-
-          `Shares outstanding were present but could not be converted safely because the share unit "${row.shares_outstanding_unit || "unknown"}" was not reliable.`
-
-        );
-
-      }
-
-
-      normalized.extraction_notes =
-        notes.join(" ");
-
-
-      return normalized;
 
     }
+
   );
+
+}
+
+
+/* ============================================================
+   WAIT FOR FILE PROCESSING
+   ============================================================ */
+
+async function waitForGeminiFile(
+  uploadedFile
+) {
+
+  const started =
+    Date.now();
+
+
+  let file =
+    uploadedFile;
+
+
+  while (
+    Date.now() -
+    started <
+    GEMINI_FILE_READY_TIMEOUT
+  ) {
+
+    const state =
+      String(
+        file?.state ||
+        ""
+      )
+        .trim()
+        .toUpperCase();
+
+
+    /*
+     * Gemini may return ACTIVE immediately.
+     */
+
+    if (
+      state === "ACTIVE"
+    ) {
+
+      console.log(
+        `Gemini file ready: ${file.name}`
+      );
+
+
+      return file;
+
+    }
+
+
+    if (
+      state === "FAILED"
+    ) {
+
+      const providerMessage =
+
+        file
+          ?.error
+          ?.message
+
+        ||
+
+        "Gemini failed to process the uploaded PDF.";
+
+
+      const error =
+        new Error(
+          providerMessage
+        );
+
+
+      error.providerStatus =
+        file
+          ?.error
+          ?.status ||
+        "FAILED";
+
+
+      throw error;
+
+    }
+
+
+    /*
+     * Empty state can occasionally appear directly
+     * after upload. Give Gemini time to process.
+     */
+
+    await sleep(
+      1500
+    );
+
+
+    file =
+      await getGeminiFile(
+        uploadedFile.name
+      );
+
+  }
+
+
+  const error =
+    new Error(
+      "Gemini PDF processing timed out. Please try the report again."
+    );
+
+
+  error.status =
+    503;
+
+
+  error.providerStatus =
+    "FILE_PROCESSING_TIMEOUT";
+
+
+  throw error;
+
+}
+
+
+/* ============================================================
+   DELETE TEMPORARY GEMINI FILE
+   ============================================================ */
+
+async function deleteGeminiFile(
+  fileName
+) {
+
+  if (!fileName) {
+    return;
+  }
+
+
+  try {
+
+    const normalizedName =
+      String(
+        fileName
+      )
+        .replace(
+          /^\/+/,
+          ""
+        );
+
+
+    const response =
+      await fetch(
+
+        `https://generativelanguage.googleapis.com/v1beta/${normalizedName}`,
+
+        {
+
+          method:
+            "DELETE",
+
+          headers: {
+
+            "x-goog-api-key":
+              GEMINI_API_KEY
+
+          }
+
+        }
+
+      );
+
+
+    if (
+      response.ok ||
+      response.status === 404
+    ) {
+
+      console.log(
+        `Gemini temporary file deleted: ${normalizedName}`
+      );
+
+
+      return;
+
+    }
+
+
+    console.warn(
+      `Could not delete Gemini temporary file ${normalizedName}: ${response.status}`
+    );
+
+  }
+
+  catch (error) {
+
+    /*
+     * Cleanup failure must never destroy a
+     * successful FinSight analysis.
+     */
+
+    console.warn(
+      "Gemini temporary-file cleanup failed:",
+      error?.message
+    );
+
+  }
+
+}
+
+
+/* ============================================================
+   CREATE PDF PART
+   ============================================================ */
+
+/*
+ * This function replaces your old synchronous pdfPart().
+ *
+ * IMPORTANT:
+ *
+ * It is async because large PDFs must first be uploaded
+ * through the Gemini Files API.
+ *
+ * Return:
+ *
+ * {
+ *   part,
+ *   uploadedFile
+ * }
+ */
+
+async function prepareGeminiPdf(file) {
+
+  if (
+    !file?.buffer
+  ) {
+
+    throw new Error(
+      "Annual-report PDF is unavailable."
+    );
+
+  }
+
+
+  const size =
+    file.buffer.length;
+
+
+  if (
+    size >
+    FINSIGHT_MAX_PDF_SIZE
+  ) {
+
+    const error =
+      new Error(
+        "The annual-report PDF exceeds FinSight's 45 MB upload limit."
+      );
+
+
+    error.status =
+      413;
+
+
+    throw error;
+
+  }
+
+
+  /*
+   * SMALL PDF
+   *
+   * Inline is faster and avoids an extra upload request.
+   */
+
+  if (
+    size <=
+    GEMINI_INLINE_PDF_LIMIT
+  ) {
+
+    console.log(
+      `Gemini PDF mode: inline (${(
+        size /
+        1024 /
+        1024
+      ).toFixed(1)} MB)`
+    );
+
+
+    return {
+
+      part:
+        inlinePdfPart(
+          file
+        ),
+
+      uploadedFile:
+        null
+
+    };
+
+  }
+
+
+  /*
+   * LARGE PDF
+   *
+   * Do NOT Base64 encode inside generateContent.
+   */
+
+  console.log(
+    `Gemini PDF mode: Files API (${(
+      size /
+      1024 /
+      1024
+    ).toFixed(1)} MB)`
+  );
+
+
+  const uploadedFile =
+    await startGeminiFileUpload(
+      file
+    );
+
+
+  const readyFile =
+    await waitForGeminiFile(
+      uploadedFile
+    );
+
+
+  return {
+
+    part: {
+
+      fileData: {
+
+        mimeType:
+          "application/pdf",
+
+        fileUri:
+          readyFile.uri
+
+      }
+
+    },
+
+    uploadedFile:
+      readyFile
+
+  };
+
+}
+
+
+/* ============================================================
+   RUN GEMINI WITH PDF
+   ============================================================ */
+
+/*
+ * Use this helper everywhere a route currently does:
+ *
+ * geminiGenerate([
+ *   { text: prompt },
+ *   pdfPart(req.file)
+ * ])
+ *
+ * It automatically chooses inline or Files API.
+ */
+
+async function geminiGenerateWithPdf(
+  file,
+  prompt,
+  {
+    json = false
+  } = {}
+) {
+
+  let uploadedFile =
+    null;
+
+
+  try {
+
+    const prepared =
+      await prepareGeminiPdf(
+        file
+      );
+
+
+    uploadedFile =
+      prepared.uploadedFile;
+
+
+    return await geminiGenerate(
+
+      [
+
+        {
+          text:
+            prompt
+        },
+
+        prepared.part
+
+      ],
+
+      {
+        json
+      }
+
+    );
+
+  }
+
+  finally {
+
+    /*
+     * Files API documents are temporary.
+     *
+     * FinSight currently needs each uploaded Gemini file
+     * for only one generation call, so remove it afterwards.
+     */
+
+    if (
+      uploadedFile?.name
+    ) {
+
+      await deleteGeminiFile(
+        uploadedFile.name
+      );
+
+    }
+
+  }
 
 }
 
@@ -3106,21 +3241,14 @@ Do not invent missing values.
          CALL GEMINI
          ------------------------------------------------------ */
 
-      const text =
-        await geminiGenerate(
-          [
-            {
-              text: prompt
-            },
-
-            pdfPart(
-              req.file
-            )
-          ],
-          {
-            json: true
-          }
-        );
+    const text =
+  await geminiGenerateWithPdf(
+    req.file,
+    prompt,
+    {
+      json: true
+    }
+  );
 
 
       const result =
@@ -4074,27 +4202,18 @@ For good, bad, watch, red_flags and growth_drivers use:
 }
 
 Do not invent evidence.
-
 `;
 
 
-      const text =
-        await geminiGenerate(
-          [
-            {
-              text:
-                prompt
-            },
 
-            pdfPart(
-              req.file
-            )
-          ],
-          {
-            json:
-              true
-          }
-        );
+    const text =
+  await geminiGenerateWithPdf(
+    req.file,
+    prompt,
+    {
+      json: true
+    }
+  );  
 
 
       const analysis =
@@ -4840,22 +4959,13 @@ Use exactly this structure:
 
 
       const resultText =
-        await geminiGenerate(
-          [
-            {
-              text:
-                prompt
-            },
-
-            pdfPart(
-              report
-            )
-          ],
-          {
-            json:
-              true
-          }
-        );
+  await geminiGenerateWithPdf(
+    report,
+    prompt,
+    {
+      json: true
+    }
+  );
 
 
       const research =
