@@ -22,6 +22,7 @@ import multer from "multer";
 import path from "node:path";
 import crypto from "node:crypto";
 import pg from "pg";
+import OpenAI from "openai";
 
 import {
   fileURLToPath
@@ -71,6 +72,21 @@ const GEMINI_MODEL =
 const GEMINI_API_KEY =
   process.env.GEMINI_API_KEY ||
   "";
+
+const OPENAI_API_KEY =
+  process.env.OPENAI_API_KEY ||
+  "";
+
+const OPENAI_MODEL =
+  process.env.OPENAI_MODEL ||
+  "gpt-6-luna";
+
+const openai =
+  OPENAI_API_KEY
+    ? new OpenAI({
+        apiKey: OPENAI_API_KEY
+      })
+    : null;
 
 
 const ALPHA_VANTAGE_API_KEY =
