@@ -12,6 +12,7 @@
     "dotenv": "latest",
     "express": "latest",
     "multer": "latest",
+    "openai": "7.60.0",
     "pg": "latest"
   }
 }
