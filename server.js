@@ -1391,18 +1391,7 @@ const GEMINI_FILE_READY_TIMEOUT =
   120000;
 
 
-const GEMINI_TEXT_TIMEOUT_MS =
-  Number(
-    process.env.GEMINI_TEXT_TIMEOUT_MS ||
-    60000
-  );
 
-
-const GEMINI_PDF_TIMEOUT_MS =
-  Number(
-    process.env.GEMINI_PDF_TIMEOUT_MS ||
-    180000
-  );
 
 
 /* ============================================================
