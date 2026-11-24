@@ -2824,12 +2824,29 @@ function extractAccountingNumbers(
   text
 ) {
 
-  const matches =
+  const source =
     String(
       text ||
       ""
-    ).match(
-      /$begin:math:text$\?\-\?\\d\[\\d\,\]\*\(\?\:\\\.\\d\+\)\?$end:math:text$?/g
+    );
+
+
+  /*
+   * Matches common annual-report accounting values:
+   *
+   * 123
+   * 1,234
+   * 12,345.67
+   * -1,234
+   * (1,234)
+   * (1,234.56)
+   *
+   * Does NOT treat ordinary text as a number.
+   */
+
+  const matches =
+    source.match(
+      /\(?-?\d[\d,]*(?:\.\d+)?\)?/g
     );
 
 
@@ -2844,7 +2861,10 @@ function extractAccountingNumbers(
 
   return matches
     .map(
-      finiteFinancialNumber
+      value =>
+        finiteFinancialNumber(
+          value
+        )
     )
     .filter(
       value =>
@@ -2852,7 +2872,6 @@ function extractAccountingNumbers(
     );
 
 }
-
 
 /* ============================================================
    EXTRACT LINE VALUES
