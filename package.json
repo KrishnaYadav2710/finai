@@ -14,5 +14,6 @@
     "multer": "latest",
     "openai": "7.60.0",
     "pg": "latest"
+    "pdf-parse": "^1.1.1"
   }
 }
