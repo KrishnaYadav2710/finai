@@ -4776,20 +4776,7 @@ function extractEbitdaByYear(
    13W. LOCAL FINANCIAL EXTRACTION ENGINE
    ============================================================ */
 
-console.log(
-  "PROFIT STATEMENT HEADER DEBUG:\n",
-  profitStatement?.text?.slice(0, 3000) || "NOT FOUND"
-);
 
-console.log(
-  "BALANCE SHEET HEADER DEBUG:\n",
-  balanceStatement?.text?.slice(0, 3000) || "NOT FOUND"
-);
-
-console.log(
-  "CASH FLOW HEADER DEBUG:\n",
-  cashStatement?.text?.slice(0, 3000) || "NOT FOUND"
-);
 function extractFinancialsLocally(
   pdfData
 ) {
@@ -5053,6 +5040,34 @@ function extractFinancialsLocally(
       cashFactor
     }
   );
+
+   /* ----------------------------------------------------------
+   TEMPORARY STATEMENT DEBUG
+   ---------------------------------------------------------- */
+
+console.log(
+  "\n========== PROFIT STATEMENT DEBUG ==========\n",
+  profitStatement.text
+    ? profitStatement.text.slice(0, 12000)
+    : "NOT FOUND",
+  "\n========== END PROFIT STATEMENT DEBUG ==========\n"
+);
+
+console.log(
+  "\n========== BALANCE SHEET DEBUG ==========\n",
+  balanceStatement.text
+    ? balanceStatement.text.slice(0, 12000)
+    : "NOT FOUND",
+  "\n========== END BALANCE SHEET DEBUG ==========\n"
+);
+
+console.log(
+  "\n========== CASH FLOW DEBUG ==========\n",
+  cashStatement.text
+    ? cashStatement.text.slice(0, 12000)
+    : "NOT FOUND",
+  "\n========== END CASH FLOW DEBUG ==========\n"
+);
 
 
   /* ----------------------------------------------------------
