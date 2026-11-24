@@ -21,6 +21,7 @@ import express from "express";
 import multer from "multer";
 import path from "node:path";
 import crypto from "node:crypto";
+import pdfParse from "pdf-parse";
 import pg from "pg";
 import OpenAI, { toFile } from "openai";
 
