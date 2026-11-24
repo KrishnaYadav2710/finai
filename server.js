@@ -4776,6 +4776,20 @@ function extractEbitdaByYear(
    13W. LOCAL FINANCIAL EXTRACTION ENGINE
    ============================================================ */
 
+console.log(
+  "PROFIT STATEMENT HEADER DEBUG:\n",
+  profitStatement?.text?.slice(0, 3000) || "NOT FOUND"
+);
+
+console.log(
+  "BALANCE SHEET HEADER DEBUG:\n",
+  balanceStatement?.text?.slice(0, 3000) || "NOT FOUND"
+);
+
+console.log(
+  "CASH FLOW HEADER DEBUG:\n",
+  cashStatement?.text?.slice(0, 3000) || "NOT FOUND"
+);
 function extractFinancialsLocally(
   pdfData
 ) {
