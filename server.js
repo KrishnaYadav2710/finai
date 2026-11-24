@@ -2790,10 +2790,7 @@ function detectStatementBasis(
 /* ============================================================
    13I. FINANCIAL UNIT DETECTION
    ============================================================ */
-
-function detectFinancialUnit(
-  section
-) {
+function detectFinancialUnit(section) {
 
   const text =
     typeof section === "string"
@@ -2801,131 +2798,239 @@ function detectFinancialUnit(
       : section?.text || "";
 
 
+  if (!text) {
+    return null;
+  }
+
+
+  /*
+   * Unit declarations normally occur around the statement
+   * heading/header. Search a generous window but do not infer
+   * a unit merely because words such as "million" occur in
+   * narrative text elsewhere in the annual report.
+   */
+
   const sample =
     String(text)
-      .slice(
-        0,
-        30000
-      );
+      .slice(0, 50000)
+      .replace(/\u00a0/g, " ")
+      .replace(/[ \t]+/g, " ");
 
 
   const patterns = [
 
-    {
-      regex:
-        /\b(?:amounts?|figures?)\s+(?:are\s+)?(?:stated\s+)?(?:in\s+)?(?:₹|rs\.?|inr)?\s*crores?\b/i,
+    /* ======================================================
+       CRORE
+       ====================================================== */
 
-      unit:
-        "INR crore"
-    },
+    /\b(?:inr|rs\.?|rupees?|indian rupees?)\s*(?:in\s+)?crores?\b/i,
 
-    {
-      regex:
-        /\b(?:₹|rs\.?|inr)\s*(?:in\s+)?crores?\b/i,
+    /₹\s*(?:in\s+)?crores?\b/i,
 
-      unit:
-        "INR crore"
-    },
+    /\b(?:amounts?|figures?|values?)\s+(?:are\s+)?(?:stated\s+|presented\s+|expressed\s+)?(?:in\s+)?(?:inr|rs\.?|₹)?\s*crores?\b/i,
 
-    {
-      regex:
-        /\b(?:amounts?|figures?)\s+(?:are\s+)?(?:stated\s+)?(?:in\s+)?(?:₹|rs\.?|inr)?\s*millions?\b/i,
+    /\(\s*(?:inr|rs\.?|₹)?\s*(?:in\s+)?crores?\s*\)/i,
 
-      unit:
-        "INR million"
-    },
 
-    {
-      regex:
-        /\b(?:₹|rs\.?|inr)\s*(?:in\s+)?millions?\b/i,
+    /* ======================================================
+       MILLION
+       ====================================================== */
 
-      unit:
-        "INR million"
-    },
+    /\b(?:inr|rs\.?|rupees?|indian rupees?)\s*(?:in\s+)?millions?\b/i,
 
-    {
-      regex:
-        /\b(?:amounts?|figures?)\s+(?:are\s+)?(?:stated\s+)?(?:in\s+)?(?:₹|rs\.?|inr)?\s*lakhs?\b/i,
+    /₹\s*(?:in\s+)?millions?\b/i,
 
-      unit:
-        "INR lakh"
-    },
+    /\b(?:amounts?|figures?|values?)\s+(?:are\s+)?(?:stated\s+|presented\s+|expressed\s+)?(?:in\s+)?(?:inr|rs\.?|₹)?\s*millions?\b/i,
 
-    {
-      regex:
-        /\b(?:₹|rs\.?|inr)\s*(?:in\s+)?lakhs?\b/i,
+    /\(\s*(?:inr|rs\.?|₹)?\s*(?:in\s+)?millions?\s*\)/i,
 
-      unit:
-        "INR lakh"
-    },
+    /\b(?:inr|rs\.?|₹)\s*(?:mn|mio)\b/i,
 
-    {
-      regex:
-        /\b(?:amounts?|figures?)\s+(?:are\s+)?(?:stated\s+)?(?:in\s+)?(?:₹|rs\.?|inr)?\s*billions?\b/i,
 
-      unit:
-        "INR billion"
-    },
+    /* ======================================================
+       LAKH
+       ====================================================== */
 
-    {
-      regex:
-        /\b(?:₹|rs\.?|inr)\s*(?:in\s+)?billions?\b/i,
+    /\b(?:inr|rs\.?|rupees?|indian rupees?)\s*(?:in\s+)?(?:lakhs?|lacs?)\b/i,
 
-      unit:
-        "INR billion"
-    },
+    /₹\s*(?:in\s+)?(?:lakhs?|lacs?)\b/i,
 
-    {
-      regex:
-        /\binr\s+crores?\b/i,
+    /\b(?:amounts?|figures?|values?)\s+(?:are\s+)?(?:stated\s+|presented\s+|expressed\s+)?(?:in\s+)?(?:inr|rs\.?|₹)?\s*(?:lakhs?|lacs?)\b/i,
 
-      unit:
-        "INR crore"
-    },
+    /\(\s*(?:inr|rs\.?|₹)?\s*(?:in\s+)?(?:lakhs?|lacs?)\s*\)/i,
 
-    {
-      regex:
-        /\binr\s+millions?\b/i,
 
-      unit:
-        "INR million"
-    },
+    /* ======================================================
+       BILLION
+       ====================================================== */
 
-    {
-      regex:
-        /\binr\s+lakhs?\b/i,
+    /\b(?:inr|rs\.?|rupees?|indian rupees?)\s*(?:in\s+)?billions?\b/i,
 
-      unit:
-        "INR lakh"
-    },
+    /₹\s*(?:in\s+)?billions?\b/i,
 
-    {
-      regex:
-        /\binr\s+billions?\b/i,
+    /\b(?:amounts?|figures?|values?)\s+(?:are\s+)?(?:stated\s+|presented\s+|expressed\s+)?(?:in\s+)?(?:inr|rs\.?|₹)?\s*billions?\b/i,
 
-      unit:
-        "INR billion"
-    }
+    /\(\s*(?:inr|rs\.?|₹)?\s*(?:in\s+)?billions?\s*\)/i,
+
+    /\b(?:inr|rs\.?|₹)\s*bn\b/i
 
   ];
 
 
+  /*
+   * Keep the return value explicitly tied to each group.
+   */
+
+  for (let i = 0; i < patterns.length; i++) {
+
+    if (!patterns[i].test(sample)) {
+      continue;
+    }
+
+
+    if (i <= 3) {
+      return "INR crore";
+    }
+
+
+    if (i <= 8) {
+      return "INR million";
+    }
+
+
+    if (i <= 12) {
+      return "INR lakh";
+    }
+
+
+    return "INR billion";
+  }
+
+
+  /* ========================================================
+     SECOND PASS — LINE-BASED UNIT DECLARATIONS
+     ========================================================
+
+     Handles pdf-parse output such as:
+
+     ₹
+     in million
+
+     or:
+
+     INR
+     Million
+
+     without treating arbitrary narrative mentions of
+     "million" as the statement unit.
+     ======================================================== */
+
+  const lines =
+    sample
+      .split("\n")
+      .map(line =>
+        line
+          .replace(/\s+/g, " ")
+          .trim()
+      )
+      .filter(Boolean);
+
+
   for (
-    const candidate
-    of patterns
+    let i = 0;
+    i < lines.length;
+    i++
   ) {
 
+    const current =
+      lines[i];
+
+
+    const next =
+      lines[i + 1] || "";
+
+
+    const combined =
+      `${current} ${next}`
+        .replace(/\s+/g, " ")
+        .trim();
+
+
+    /*
+     * Require currency/unit-style context.
+     */
+
+    const hasCurrency =
+      /(?:₹|\binr\b|\brs\.?\b|\brupees?\b)/i.test(
+        combined
+      );
+
+
+    const looksLikeUnitHeader =
+      hasCurrency
+
+      ||
+
+      /\b(?:amounts?|figures?|values?)\b/i.test(
+        combined
+      );
+
+
+    if (!looksLikeUnitHeader) {
+      continue;
+    }
+
+
     if (
-      candidate.regex.test(
-        sample
+      /\bcrores?\b/i.test(
+        combined
       )
     ) {
 
-      return candidate.unit;
+      return "INR crore";
+    }
+
+
+    if (
+      /\b(?:millions?|mn|mio)\b/i.test(
+        combined
+      )
+    ) {
+
+      return "INR million";
+    }
+
+
+    if (
+      /\b(?:lakhs?|lacs?)\b/i.test(
+        combined
+      )
+    ) {
+
+      return "INR lakh";
+    }
+
+
+    if (
+      /\b(?:billions?|bn)\b/i.test(
+        combined
+      )
+    ) {
+
+      return "INR billion";
     }
 
   }
 
+
+  /*
+   * IMPORTANT:
+   *
+   * Never default to crore.
+   *
+   * An unknown unit must remain null because interpreting
+   * INR million as INR crore would create a 10× error.
+   */
 
   return null;
 }
