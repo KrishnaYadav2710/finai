@@ -2441,47 +2441,155 @@ function detectYearsFromText(text) {
     );
 }
 
-
 function detectStatementYears(section) {
 
   if (!section) {
+    return [];
+  }
 
+  /*
+   * Only inspect the beginning of the actual statement.
+   * Statement column years should occur very close to
+   * the statement heading.
+   *
+   * Do NOT scan 15,000 characters because that reaches
+   * notes, accounting standards and unrelated historical
+   * dates such as 2013 / 2019.
+   */
+
+  const header =
+    String(section)
+      .slice(0, 5000);
+
+  const currentYear =
+    new Date().getFullYear();
+
+  const candidates =
+    new Map();
+
+  const matches =
+    header.matchAll(
+      /\b(20\d{2})\b/g
+    );
+
+  for (const match of matches) {
+
+    const year =
+      Number(match[1]);
+
+    if (
+      !Number.isInteger(year) ||
+      year < 2000 ||
+      year > currentYear + 2
+    ) {
+      continue;
+    }
+
+    /*
+     * Earlier occurrences are much more likely to be
+     * actual statement-column headers.
+     */
+
+    const position =
+      match.index || 0;
+
+    const positionScore =
+      Math.max(
+        0,
+        5000 - position
+      );
+
+    const existing =
+      candidates.get(year) || {
+        count: 0,
+        score: 0
+      };
+
+    existing.count += 1;
+    existing.score += positionScore;
+
+    candidates.set(
+      year,
+      existing
+    );
+  }
+
+
+  const ranked =
+    [...candidates.entries()]
+      .sort((a, b) => {
+
+        /*
+         * Prefer repeated years and years appearing
+         * nearest the statement heading.
+         */
+
+        const scoreA =
+          a[1].count * 10000 +
+          a[1].score;
+
+        const scoreB =
+          b[1].count * 10000 +
+          b[1].score;
+
+        if (scoreB !== scoreA) {
+          return scoreB - scoreA;
+        }
+
+        return b[0] - a[0];
+      })
+      .map(entry => entry[0]);
+
+
+  if (!ranked.length) {
     return [];
   }
 
 
   /*
-   * Financial statement headers are normally near
-   * the beginning of the statement.
+   * Financial statements normally contain current year
+   * and previous year.
+   *
+   * Once the latest year is established, ONLY accept
+   * consecutive comparative years.
+   *
+   * This prevents:
+   *
+   * 2026, 2025, 2019, 2013
+   *
+   * becoming four financial columns.
    */
 
-  const header =
-    section.slice(
-      0,
-      15000
-    );
+  const latest =
+    Math.max(...ranked);
 
+  const result = [];
 
-  const detected =
-    detectYearsFromText(
-      header
-    );
+  if (
+    candidates.has(latest)
+  ) {
+    result.push(latest);
+  }
+
+  if (
+    candidates.has(latest - 1)
+  ) {
+    result.push(latest - 1);
+  }
 
 
   /*
-   * Maximum 4 columns.
-   *
-   * Usually:
-   * current year + comparative year.
+   * In unusual cases only one year may be detected.
    */
 
-  return detected
-    .slice(0, 4)
-    .sort(
-      (a, b) =>
-        b - a
-    );
+  if (!result.length) {
+    result.push(latest);
+  }
+
+
+  return result;
 }
+
 
 
 function financialYearLabel(year) {
@@ -3300,51 +3408,136 @@ function detectFinancialUnit(
   fallbackText = ""
 ) {
 
-  /*
-   * Statement-local evidence gets priority.
-   */
+  function detect(source) {
 
-  const local =
-    detectFinancialUnitCandidates(
-      String(
-        statementText || ""
-      ).slice(
-        0,
-        30000
+    const text =
+      String(source || "")
+        .slice(0, 50000)
+        .replace(/\u00a0/g, " ")
+        .replace(/\s+/g, " ")
+        .toLowerCase();
+
+
+    /*
+     * CRORE
+     *
+     * Handles examples such as:
+     *
+     * ₹ in crore
+     * ₹ in crores
+     * Rs. in crore
+     * INR crore
+     * amounts in crore
+     * figures in crore
+     * rupees in crore
+     */
+
+    if (
+      /(?:₹|rs\.?|inr|rupees?|amounts?|figures?)[^.!?\n]{0,120}\bcrores?\b/i.test(
+        text
+      ) ||
+      /\bcrores?\b[^.!?\n]{0,80}(?:₹|rs\.?|inr|rupees?)/i.test(
+        text
       )
-    );
+    ) {
+
+      return "INR crore";
+    }
 
 
-  if (
-    local.length
-  ) {
+    /*
+     * MILLION
+     */
 
-    return local[0].unit;
+    if (
+      /(?:₹|rs\.?|inr|rupees?|amounts?|figures?)[^.!?\n]{0,120}\bmillions?\b/i.test(
+        text
+      ) ||
+      /\bmillions?\b[^.!?\n]{0,80}(?:₹|rs\.?|inr|rupees?)/i.test(
+        text
+      )
+    ) {
+
+      return "INR million";
+    }
+
+
+    /*
+     * LAKH
+     */
+
+    if (
+      /(?:₹|rs\.?|inr|rupees?|amounts?|figures?)[^.!?\n]{0,120}\blakhs?\b/i.test(
+        text
+      ) ||
+      /\blakhs?\b[^.!?\n]{0,80}(?:₹|rs\.?|inr|rupees?)/i.test(
+        text
+      )
+    ) {
+
+      return "INR lakh";
+    }
+
+
+    /*
+     * BILLION
+     */
+
+    if (
+      /(?:₹|rs\.?|inr|rupees?|amounts?|figures?)[^.!?\n]{0,120}\bbillions?\b/i.test(
+        text
+      ) ||
+      /\bbillions?\b[^.!?\n]{0,80}(?:₹|rs\.?|inr|rupees?)/i.test(
+        text
+      )
+    ) {
+
+      return "INR billion";
+    }
+
+
+    return null;
   }
 
 
   /*
-   * Search broader report only if statement itself
-   * does not expose the unit.
+   * 1. Statement itself.
    */
 
-  const fallback =
-    detectFinancialUnitCandidates(
+  const statementUnit =
+    detect(
+      statementText
+    );
+
+
+  if (statementUnit) {
+
+    return statementUnit;
+  }
+
+
+  /*
+   * 2. Wider report fallback.
+   *
+   * IMPORTANT:
+   * We do not blindly assume crore merely because the
+   * report is Indian.
+   */
+
+  const reportUnit =
+    detect(
       fallbackText
     );
 
 
-  if (
-    fallback.length
-  ) {
+  if (reportUnit) {
 
-    return fallback[0].unit;
+    return reportUnit;
   }
 
 
   return null;
 }
-
 
 function monetaryCroreFactor(
   sourceUnit
