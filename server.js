@@ -75,11 +75,7 @@ const GEMINI_API_KEY =
   "";
 
 
-function aiTimeoutSetting(name, fallback) {
-  const value = Number(process.env[name]);
-  return Number.isInteger(value) && value >= 15000 && value <= 300000
-    ? value : fallback;
-}
+
 
 const GEMINI_TEXT_TIMEOUT_MS = aiTimeoutSetting("GEMINI_TEXT_TIMEOUT_MS", 60000);
 const GEMINI_PDF_TIMEOUT_MS = aiTimeoutSetting("GEMINI_PDF_TIMEOUT_MS", 180000);
