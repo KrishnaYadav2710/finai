@@ -67,25 +67,13 @@ const PORT =
 
 const GEMINI_MODEL =
   process.env.GEMINI_MODEL ||
-  "gemini-3.5-flash-lite";
+  "gemini-3.8-flash";
 
 
 const GEMINI_API_KEY =
   process.env.GEMINI_API_KEY ||
   "";
 
-const OPENAI_API_KEY =
-  process.env.OPENAI_API_KEY ||
-  "";
-
-const OPENAI_MODEL =
-  process.env.OPENAI_MODEL ||
-  "gpt-4.1-mini";
-
-// Leave the cross-provider fallback installed; disable it explicitly while
-// the OpenAI API project is unfunded. This never changes Gemini's priority.
-const OPENAI_FALLBACK_ENABLED =
-  String(process.env.OPENAI_FALLBACK_ENABLED ?? "true").trim().toLowerCase() !== "false";
 
 function aiTimeoutSetting(name, fallback) {
   const value = Number(process.env[name]);
@@ -95,15 +83,6 @@ function aiTimeoutSetting(name, fallback) {
 
 const GEMINI_TEXT_TIMEOUT_MS = aiTimeoutSetting("GEMINI_TEXT_TIMEOUT_MS", 60000);
 const GEMINI_PDF_TIMEOUT_MS = aiTimeoutSetting("GEMINI_PDF_TIMEOUT_MS", 180000);
-
-const openai =
-  OPENAI_API_KEY
-    ? new OpenAI({
-        apiKey: OPENAI_API_KEY,
-        timeout: 120000,
-        maxRetries: 0
-      })
-    : null;
 
 
 const ALPHA_VANTAGE_API_KEY =
