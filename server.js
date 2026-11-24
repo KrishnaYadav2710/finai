@@ -1319,30 +1319,9 @@ function safeJSON(value) {
 
 }
 
-
 /* ============================================================
-   12. GEMINI
+   12. AI PROVIDER — GEMINI PRIMARY + OPENAI FALLBACK
    ============================================================ */
-
-/*
- * FinSight AI architecture: one generation attempt per provider/model.
- * Gemini primary -> Gemini fallback -> OpenAI on temporary provider failures.
- * Text routes use aiGenerate(); PDF routes use aiGenerateWithPdf().
- * OpenAI receives its own uploaded PDF, never Gemini inlineData/fileData.
- *
- * Small PDF:
- *   PDF -> inlineData -> generateContent
- *
- * Large PDF:
- *   PDF -> Gemini Files API -> fileData -> generateContent
- *
- * FinSight itself accepts PDFs up to 45 MB.
- *
- * IMPORTANT:
- * Large PDFs must NOT be converted to base64 and embedded
- * directly inside generateContent.
- */
-
 
 const analystInstructions = `
 
@@ -1351,7 +1330,6 @@ You are FinSight AI, an evidence-first equity research system.
 The supplied annual report is the primary source of truth.
 
 Never invent missing financial values.
-
 Never substitute example-company data.
 
 Never invent:
@@ -1369,11 +1347,8 @@ Never invent:
 Distinguish:
 
 REPORTED FACT
-
 CALCULATED METRIC
-
 MANAGEMENT CLAIM
-
 AI INTERPRETATION
 
 When consolidated financial statements are available,
@@ -1394,40 +1369,44 @@ Do not issue personalized buy/sell instructions.
 
 
 /* ============================================================
-   GEMINI CONSTANTS
+   PROVIDER SETTINGS
    ============================================================ */
 
-/*
- * Stay comfortably below the inline request limit.
- *
- * Base64 increases payload size substantially, therefore
- * FinSight switches to Files API well before 20 MB.
- */
+const GEMINI_FALLBACK_MODEL =
+  String(
+    process.env.GEMINI_FALLBACK_MODEL ||
+    ""
+  ).trim();
+
 
 const GEMINI_INLINE_PDF_LIMIT =
   12 * 1024 * 1024;
 
 
-/*
- * FinSight application limit.
- *
- * Must match the Multer limit.
- */
-
 const FINSIGHT_MAX_PDF_SIZE =
   45 * 1024 * 1024;
 
-
-/*
- * Files API processing timeout.
- */
 
 const GEMINI_FILE_READY_TIMEOUT =
   120000;
 
 
+const GEMINI_TEXT_TIMEOUT_MS =
+  Number(
+    process.env.GEMINI_TEXT_TIMEOUT_MS ||
+    60000
+  );
+
+
+const GEMINI_PDF_TIMEOUT_MS =
+  Number(
+    process.env.GEMINI_PDF_TIMEOUT_MS ||
+    180000
+  );
+
+
 /* ============================================================
-   RESPONSE TEXT
+   GEMINI RESPONSE TEXT
    ============================================================ */
 
 function extractGeminiText(payload) {
@@ -1474,254 +1453,69 @@ function sleep(ms) {
 
 
 /* ============================================================
-   GEMINI ERROR HELPERS
+   SAFE PROVIDER ERROR
    ============================================================ */
 
-/* Safe provider errors deliberately omit SDK request objects and headers. */
-function redactProviderText(value) {
-  let text = String(value ?? "");
-  for (const secret of [
-    GEMINI_API_KEY, OPENAI_API_KEY, ALPHA_VANTAGE_API_KEY,
-    FINSIGHT_PASSWORD, process.env.DATABASE_URL
-  ]) {
-    if (secret) text = text.split(secret).join("[REDACTED]");
-  }
-  return text
-    .replace(/\b(?:sk-|AIza)[A-Za-z0-9_-]+/g, "[REDACTED]")
-    .replace(/(authorization["']?\s*[:=]\s*["']?)(?:Bearer|Basic)\s+[^\s"',}]+/gi, "$1[REDACTED]")
-    .replace(/((?:api[_-]?key|key|password|token)\s*["']?\s*[:=]\s*["']?)[^\s"'&,}]+/gi, "$1[REDACTED]")
-    .replace(/postgres(?:ql)?:\/\/[^\s"']+/gi, "[REDACTED DATABASE URL]")
-    .slice(0, 2000);
-}
+function safeProviderError(
+  error,
+  provider = "AI"
+) {
 
-function isAIBillingError(error) {
-  const code = String(error?.providerStatus || error?.code || "").trim().toLowerCase();
-  return [
-    "credit_balance_exhausted", "insufficient_quota",
-    "billing_hard_limit_reached", "billing_not_active"
-  ].includes(code);
-}
+  const message =
+    typeof error?.message === "string"
 
-function safeAIError(error, provider) {
-  const safe = new Error(redactProviderText(error?.message || `${provider} request failed.`));
-  const status = Number(error?.status);
-  if (Number.isInteger(status) && status >= 400 && status < 600) safe.status = status;
-  safe.provider = provider;
-  safe.providerStatus = redactProviderText(error?.providerStatus || error?.code || "") || null;
-  const transportCodes = new Set([
-    "ECONNRESET", "ECONNREFUSED", "EPIPE", "ENOTFOUND", "EAI_AGAIN", "ETIMEDOUT",
-    "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "UND_ERR_SOCKET"
-  ]);
-  const transportCode = error?.cause?.code || error?.cause?.cause?.code || error?.code;
-  const isTimeout = ["TimeoutError", "AbortError", "APIConnectionTimeoutError"].includes(error?.name)
-    || /TIMEOUT|ETIMEDOUT/.test(String(transportCode || ""));
-  const isNetworkFailure = transportCodes.has(transportCode)
-    || error?.name === "APIConnectionError"
-    || (error?.name === "TypeError" && /^fetch failed$/i.test(error?.message || ""));
-  if (!safe.status && (isTimeout || isNetworkFailure)) {
-    safe.status = isTimeout ? 504 : 502;
-    safe.providerStatus = isTimeout ? "PROVIDER_TIMEOUT" : "NETWORK_ERROR";
+      ? error.message
+
+      : `${provider} request failed.`;
+
+
+  const safe =
+    new Error(
+      message
+    );
+
+
+  if (
+    Number.isInteger(
+      Number(error?.status)
+    )
+  ) {
+
+    safe.status =
+      Number(
+        error.status
+      );
+
   }
-  if (provider === "openai" && isAIBillingError(safe)) {
-    safe.message = "OpenAI API credits are exhausted or the API billing quota has been reached. The service owner must check OpenAI API billing before retrying.";
-  }
-  // Preserve useful structured diagnostics, but never carry raw SDK objects.
-  if (error?.providerDetails) {
-    safe.providerDetails = redactProviderText(JSON.stringify(error.providerDetails));
-  }
+
+
+  safe.provider =
+    provider;
+
+
+  safe.providerStatus =
+    error?.providerStatus ||
+    error?.code ||
+    null;
+
+
+  safe.providerDetails =
+    error?.providerDetails ||
+    null;
+
+
   return safe;
-}
 
-function isGeminiRetryableError(error) {
-  const status = Number(error?.status);
-  // HTTP request/auth/model errors take priority over any provider status text.
-  if (status >= 400 && status < 500 && status !== 429) return false;
-  const providerStatus = String(error?.providerStatus || "").trim().toUpperCase();
-  return [429, 500, 502, 503, 504].includes(status)
-    || ["UNAVAILABLE", "RESOURCE_EXHAUSTED", "INTERNAL"].includes(providerStatus);
-}
-
-function aiErrorHttpStatus(error) {
-  const status = Number(error?.status);
-  if (Number.isInteger(status) && status >= 400 && status < 600) return status;
-  if (error?.message === "Gemini AI is not configured.") return 503;
-  if (isGeminiRetryableError(error)) {
-    return error?.providerStatus === "RESOURCE_EXHAUSTED" ? 429 : 503;
-  }
-  return 500;
-}
-
-/* Text only: Gemini inlineData/fileData must never reach OpenAI. */
-function validateTextParts(parts) {
-  if (!Array.isArray(parts) || !parts.length || parts.some(part =>
-    !part || typeof part !== "object" || Array.isArray(part)
-    || typeof part.text !== "string"
-    || Object.keys(part).some(key => key !== "text")
-  )) {
-    const error = new Error("Text generation accepts text parts only; PDF/file inputs require aiGenerateWithPdf().");
-    error.status = 400;
-    throw error;
-  }
-}
-
-async function openaiGenerate(parts, options = {}) {
-  validateTextParts(parts);
-  return openaiGenerateContent(
-    parts.map(part => ({ type: "input_text", text: part.text })), options
-  );
-}
-
-// Internal helper: callers construct only supported Responses API content.
-async function openaiGenerateContent(content, { json = false, metadata } = {}) {
-  if (!openai) {
-    const error = new Error("OpenAI fallback is not configured.");
-    error.status = 503;
-    error.providerStatus = "NOT_CONFIGURED";
-    throw error;
-  }
-
-  console.log(`OpenAI ${OPENAI_MODEL}: request`);
-  try {
-    // Responses API JSON mode uses text.format, rather than Chat Completions'
-    // response_format. Existing route prompts already define the JSON shape.
-    const response = await openai.responses.create({
-      model: OPENAI_MODEL,
-      instructions: analystInstructions,
-      input: [{
-        role: "user",
-        content
-      }],
-      ...(json ? { text: { format: { type: "json_object" } } } : {}),
-      store: false
-    });
-
-    if (response.error || (response.status && response.status !== "completed")) {
-      const error = new Error(response.error?.message || "OpenAI did not complete the response.");
-      error.status = 502;
-      error.providerStatus = response.error?.code || "INCOMPLETE_RESPONSE";
-      throw error;
-    }
-    const text = typeof response.output_text === "string" ? response.output_text.trim() : "";
-    if (!text) {
-      const error = new Error("OpenAI returned no usable response.");
-      error.status = 502;
-      error.providerStatus = "EMPTY_RESPONSE";
-      throw error;
-    }
-    if (metadata) Object.assign(metadata, { provider: "openai", model: response.model || OPENAI_MODEL });
-    console.log(`OpenAI generation successful using ${response.model || OPENAI_MODEL}.`);
-    return text;
-  } catch (error) {
-    const safe = safeAIError(error, "openai");
-    // SDK connection/timeouts have no HTTP response; represent them as gateway failures.
-    if (!safe.status && ["APIConnectionError", "APIConnectionTimeoutError"].includes(error?.name)) {
-      safe.status = error.name === "APIConnectionTimeoutError" ? 504 : 502;
-    }
-    console.error("OpenAI generation failed:", {
-      status: safe.status, providerStatus: safe.providerStatus, message: safe.message
-    });
-    throw safe;
-  }
-}
-
-function validatePdfUpload(file) {
-  if (!Buffer.isBuffer(file?.buffer) || !file.buffer.length) {
-    const error = new Error("Annual-report PDF upload buffer is unavailable or empty.");
-    error.status = 400;
-    throw error;
-  }
-  // Responses PDF inputs support files below 50 MB, with 50 MB total per
-  // request. One FinSight PDF of at most 45 MiB fits within both limits.
-  const limit = Math.min(FINSIGHT_MAX_PDF_SIZE, 50 * 1000 * 1000);
-  if (file.buffer.length > limit) {
-    const error = new Error("The annual-report PDF exceeds FinSight's 45 MB upload limit.");
-    error.status = 413;
-    throw error;
-  }
-}
-
-async function openaiGenerateWithPdf(file, prompt, options = {}) {
-  validatePdfUpload(file);
-  if (!openai) {
-    const error = new Error("OpenAI fallback is not configured.");
-    error.status = 503;
-    error.providerStatus = "NOT_CONFIGURED";
-    throw error;
-  }
-  let uploadedFileId = null;
-  try {
-    const filename = path.basename(String(file.originalname || "annual-report.pdf"))
-      .replace(/[\x00-\x1f\x7f"]/g, " ").slice(0, 180);
-    console.log("OpenAI PDF: uploading annual report for fallback.");
-    const uploaded = await openai.files.create({
-      purpose: "user_data",
-      file: await toFile(file.buffer, /\.pdf$/i.test(filename) ? filename : "annual-report.pdf", {
-        type: "application/pdf"
-      }),
-      // Delete in finally; expiration also bounds retention if cleanup fails.
-      expires_after: { anchor: "created_at", seconds: 3600 }
-    });
-    uploadedFileId = uploaded.id;
-    if (!uploadedFileId) {
-      const error = new Error("OpenAI PDF upload returned no file ID.");
-      error.status = 502;
-      throw error;
-    }
-    return await openaiGenerateContent([
-      { type: "input_text", text: prompt },
-      { type: "input_file", file_id: uploadedFileId }
-    ], options);
-  } catch (error) {
-    throw safeAIError(error, "openai");
-  } finally {
-    if (uploadedFileId) {
-      try {
-        await openai.files.delete(uploadedFileId, { timeout: 10000, maxRetries: 0 });
-        console.log("OpenAI temporary PDF deleted.");
-      } catch (error) {
-        // Cleanup must never discard a successful analysis or hide its error.
-        const safe = safeAIError(error, "openai");
-        console.warn("OpenAI temporary-PDF cleanup failed; file expires automatically:", {
-          status: safe.status, providerStatus: safe.providerStatus, message: safe.message
-        });
-      }
-    }
-  }
-}
-
-async function aiGenerateWithPdf(file, prompt, options = {}) {
-  validatePdfUpload(file);
-  try {
-    return await geminiGenerateWithPdf(file, prompt, options);
-  } catch (error) {
-    if (!isGeminiRetryableError(error) || !OPENAI_FALLBACK_ENABLED || !openai) throw safeAIError(error, "gemini");
-    // Gemini's wrapper finishes temporary-file cleanup before switching.
-    // A shared Gemini upload/processing outage can occur before either model
-    // can run; use the original Buffer for an independent OpenAI upload.
-    console.warn("Gemini PDF processing temporarily unavailable. Switching to OpenAI...", {
-      status: error.status, providerStatus: error.providerStatus
-    });
-    return openaiGenerateWithPdf(file, prompt, options);
-  }
-}
-
-async function aiGenerate(parts, options = {}) {
-  validateTextParts(parts);
-  try {
-    return await geminiGenerate(parts, options);
-  } catch (error) {
-    // A missing Gemini key, invalid request, auth failure, missing model, empty
-    // response or invalid output must not silently switch providers.
-    if (!isGeminiRetryableError(error) || !OPENAI_FALLBACK_ENABLED || !openai) throw safeAIError(error, "gemini");
-    console.warn("Gemini models temporarily unavailable. Switching to OpenAI...", {
-      status: error.status, providerStatus: error.providerStatus
-    });
-    return openaiGenerate(parts, options);
-  }
 }
 
 
-function isGeminiModelUnavailable(error) {
+/* ============================================================
+   GEMINI ERROR CLASSIFICATION
+   ============================================================ */
+
+function isGeminiModelUnavailable(
+  error
+) {
 
   const status =
     Number(
@@ -1752,11 +1546,117 @@ function isGeminiModelUnavailable(error) {
 }
 
 
+function isGeminiTemporaryFailure(
+  error
+) {
+
+  const status =
+    Number(
+      error?.status
+    );
+
+
+  const providerStatus =
+    String(
+      error?.providerStatus ||
+      ""
+    )
+      .trim()
+      .toUpperCase();
+
+
+  return (
+
+    status === 429
+
+    ||
+
+    status === 500
+
+    ||
+
+    status === 502
+
+    ||
+
+    status === 503
+
+    ||
+
+    status === 504
+
+    ||
+
+    providerStatus ===
+      "UNAVAILABLE"
+
+    ||
+
+    providerStatus ===
+      "RESOURCE_EXHAUSTED"
+
+    ||
+
+    providerStatus ===
+      "INTERNAL"
+
+    ||
+
+    providerStatus ===
+      "PROVIDER_TIMEOUT"
+
+    ||
+
+    providerStatus ===
+      "NETWORK_ERROR"
+
+    ||
+
+    providerStatus ===
+      "FILE_PROCESSING_TIMEOUT"
+
+  );
+
+}
+
+
 /* ============================================================
-   MODEL URL
+   PROVIDER HTTP STATUS
    ============================================================ */
 
-function geminiModelUrl(model) {
+function aiErrorHttpStatus(
+  error
+) {
+
+  const status =
+    Number(
+      error?.status
+    );
+
+
+  if (
+    Number.isInteger(status) &&
+    status >= 400 &&
+    status < 600
+  ) {
+
+    return status;
+
+  }
+
+
+  return 500;
+
+}
+
+
+/* ============================================================
+   GEMINI MODEL URL
+   ============================================================ */
+
+function geminiModelUrl(
+  model
+) {
 
   return (
 
@@ -1778,47 +1678,58 @@ function geminiModelUrl(model) {
 
 
 /* ============================================================
-   GENERATE CONTENT
+   GEMINI TEXT GENERATION
    ============================================================ */
 
 async function geminiGenerate(
   parts,
   {
     json = false,
-    metadata,
+    metadata = null,
     timeoutMs = GEMINI_TEXT_TIMEOUT_MS
   } = {}
 ) {
 
-  if (!GEMINI_API_KEY) {
+  if (
+    !GEMINI_API_KEY
+  ) {
 
-    throw new Error(
-      "Gemini AI is not configured."
-    );
+    const error =
+      new Error(
+        "Gemini AI is not configured."
+      );
+
+
+    error.status =
+      503;
+
+
+    throw error;
 
   }
 
 
   const primaryModel =
     String(
-      GEMINI_MODEL ||
-      "gemini-3.5-flash-lite"
+      GEMINI_MODEL
     ).trim();
 
 
-  /*
-   * Current fallback.
-   *
-   * Render:
-   *
-   * GEMINI_FALLBACK_MODEL=gemini-3.8-flash
-   */
+  if (!primaryModel) {
 
-  const fallbackModel =
-    String(
-      process.env.GEMINI_FALLBACK_MODEL ||
-      "gemini-3.8-flash"
-    ).trim();
+    const error =
+      new Error(
+        "Gemini model is not configured."
+      );
+
+
+    error.status =
+      503;
+
+
+    throw error;
+
+  }
 
 
   const body = {
@@ -1838,12 +1749,10 @@ async function geminiGenerate(
     contents: [
 
       {
-
         role:
           "user",
 
         parts
-
       }
 
     ],
@@ -1873,55 +1782,91 @@ async function geminiGenerate(
   };
 
 
-  const requestOptions = {
+  async function requestModel(
+    model
+  ) {
 
-    method:
-      "POST",
-
-    headers: {
-
-      "Content-Type":
-        "application/json",
-
-      "x-goog-api-key":
-        GEMINI_API_KEY
-
-    },
-
-    body:
-      JSON.stringify(
-        body
-      )
-
-  };
+    console.log(
+      `Gemini request: ${model}`
+    );
 
 
-  /* ==========================================================
-     REQUEST MODEL
-     ========================================================== */
-
-  async function requestModel(model) {
-    const role = model === primaryModel ? "primary" : "fallback";
-    console.log(`Gemini ${role} ${model}: request 1/1`);
     try {
-      return await fetchJSON(geminiModelUrl(model), {
-        ...requestOptions,
-        // Bound each attempt, including response-body reading. No retries.
-        signal: AbortSignal.timeout(timeoutMs)
-      });
-    } catch (upstreamError) {
-      const error = safeAIError(upstreamError, "gemini");
-      console.warn(`Gemini ${role} ${model} failed:`, {
-        status: error.status, providerStatus: error.providerStatus, message: error.message
-      });
-      throw error;
+
+      return await fetchJSON(
+
+        geminiModelUrl(
+          model
+        ),
+
+        {
+
+          method:
+            "POST",
+
+          headers: {
+
+            "Content-Type":
+              "application/json",
+
+            "x-goog-api-key":
+              GEMINI_API_KEY
+
+          },
+
+          body:
+            JSON.stringify(
+              body
+            ),
+
+          signal:
+            AbortSignal.timeout(
+              timeoutMs
+            )
+
+        }
+
+      );
+
     }
+
+    catch (error) {
+
+      if (
+        error?.name ===
+          "TimeoutError"
+
+        ||
+
+        error?.name ===
+          "AbortError"
+      ) {
+
+        const timeoutError =
+          new Error(
+            `Gemini request timed out after ${timeoutMs} ms.`
+          );
+
+
+        timeoutError.status =
+          504;
+
+
+        timeoutError.providerStatus =
+          "PROVIDER_TIMEOUT";
+
+
+        throw timeoutError;
+
+      }
+
+
+      throw error;
+
+    }
+
   }
 
-
-  /* ==========================================================
-     PRIMARY + FALLBACK
-     ========================================================== */
 
   let payload;
 
@@ -1932,40 +1877,42 @@ async function geminiGenerate(
   try {
 
     payload =
-      await requestModel(primaryModel);
+      await requestModel(
+        primaryModel
+      );
 
   }
 
-  catch (primaryError) {
+  catch (
+    primaryError
+  ) {
 
-    const shouldFallback =
+    const canTryFallback =
 
-      isGeminiModelUnavailable(
-        primaryError
-      )
+      GEMINI_FALLBACK_MODEL
 
-      ||
+      &&
 
-      isGeminiRetryableError(
-        primaryError
+      GEMINI_FALLBACK_MODEL !==
+        primaryModel
+
+      &&
+
+      (
+        isGeminiModelUnavailable(
+          primaryError
+        )
+
+        ||
+
+        isGeminiTemporaryFailure(
+          primaryError
+        )
       );
 
 
-    /*
-     * A genuine bad request should be preserved.
-     */
-
-    if (!shouldFallback) {
-
-      throw primaryError;
-
-    }
-
-
     if (
-      !fallbackModel ||
-      fallbackModel ===
-        primaryModel
+      !canTryFallback
     ) {
 
       throw primaryError;
@@ -1974,61 +1921,18 @@ async function geminiGenerate(
 
 
     console.warn(
-
-      `Gemini primary ${primaryModel} failed. ` +
-
-      `Trying ${fallbackModel}.`
-
+      `Gemini ${primaryModel} failed. Trying ${GEMINI_FALLBACK_MODEL}.`
     );
 
 
-    try {
-
-      payload =
-        await requestModel(fallbackModel);
-
-
-      modelUsed =
-        fallbackModel;
-
-    }
-
-    catch (fallbackError) {
-
-      console.error(
-        "Gemini primary and fallback failed:",
-        {
-          primaryModel,
-
-          primaryStatus:
-            primaryError?.status,
-
-          primaryProviderStatus:
-            primaryError?.providerStatus,
-
-          primaryMessage:
-            primaryError?.message,
-
-          fallbackModel,
-
-          fallbackStatus:
-            fallbackError?.status,
-
-          fallbackProviderStatus:
-            fallbackError?.providerStatus,
-
-          fallbackMessage:
-            fallbackError?.message
-        }
+    payload =
+      await requestModel(
+        GEMINI_FALLBACK_MODEL
       );
 
 
-      // Preserve the final upstream error exactly enough to classify it.
-      // In particular a fallback 400/401/403/404 must never trigger OpenAI,
-      // even when the primary model previously failed temporarily.
-      throw safeAIError(fallbackError, "gemini");
-
-    }
+    modelUsed =
+      GEMINI_FALLBACK_MODEL;
 
   }
 
@@ -2041,49 +1945,419 @@ async function geminiGenerate(
 
   if (!text) {
 
-    const blockReason =
+    const reason =
       payload
         ?.promptFeedback
         ?.blockReason;
 
 
-    if (blockReason) {
+    const error =
+      new Error(
 
-      throw new Error(
-        `Gemini returned no usable response: ${blockReason}.`
+        reason
+
+          ? `Gemini returned no usable response: ${reason}.`
+
+          : "Gemini returned no usable response."
+
       );
 
-    }
+
+    error.status =
+      502;
 
 
-    throw new Error(
-      "Gemini returned no usable response."
-    );
+    throw error;
+
+  }
+
+
+  if (metadata) {
+
+    metadata.provider =
+      "gemini";
+
+
+    metadata.model =
+      modelUsed;
 
   }
 
 
   console.log(
-    `Gemini generation successful using ${modelUsed}.`
+    `Gemini generation successful: ${modelUsed}`
   );
 
 
-  if (metadata) Object.assign(metadata, { provider: "gemini", model: modelUsed });
   return text;
 
 }
 
 
 /* ============================================================
-   13. PDF INPUT / GEMINI FILES API
+   OPENAI TEXT GENERATION
+   ============================================================ */
+
+function validateTextParts(
+  parts
+) {
+
+  if (
+    !Array.isArray(parts) ||
+    !parts.length
+  ) {
+
+    throw new Error(
+      "AI text input is empty."
+    );
+
+  }
+
+
+  for (
+    const part of parts
+  ) {
+
+    if (
+      !part ||
+      typeof part.text !==
+        "string"
+    ) {
+
+      throw new Error(
+        "Text AI requests must contain text only."
+      );
+
+    }
+
+  }
+
+}
+
+
+async function openaiGenerate(
+  parts,
+  {
+    json = false,
+    metadata = null
+  } = {}
+) {
+
+  validateTextParts(
+    parts
+  );
+
+
+  if (!openai) {
+
+    const error =
+      new Error(
+        "OpenAI fallback is not configured."
+      );
+
+
+    error.status =
+      503;
+
+
+    throw error;
+
+  }
+
+
+  const content =
+    parts.map(
+      part => ({
+        type:
+          "input_text",
+
+        text:
+          part.text
+      })
+    );
+
+
+  try {
+
+    const response =
+      await openai.responses.create({
+
+        model:
+          OPENAI_MODEL,
+
+        instructions:
+          analystInstructions,
+
+        input: [
+
+          {
+
+            role:
+              "user",
+
+            content
+
+          }
+
+        ],
+
+        ...(json
+
+          ? {
+
+              text: {
+
+                format: {
+                  type:
+                    "json_object"
+                }
+
+              }
+
+            }
+
+          : {}),
+
+        store:
+          false
+
+      });
+
+
+    const text =
+      String(
+        response?.output_text ||
+        ""
+      ).trim();
+
+
+    if (!text) {
+
+      const error =
+        new Error(
+          "OpenAI returned no usable response."
+        );
+
+
+      error.status =
+        502;
+
+
+      throw error;
+
+    }
+
+
+    if (metadata) {
+
+      metadata.provider =
+        "openai";
+
+
+      metadata.model =
+        response?.model ||
+        OPENAI_MODEL;
+
+    }
+
+
+    console.log(
+      `OpenAI generation successful: ${response?.model || OPENAI_MODEL}`
+    );
+
+
+    return text;
+
+  }
+
+  catch (error) {
+
+    throw safeProviderError(
+      error,
+      "openai"
+    );
+
+  }
+
+}
+
+
+/* ============================================================
+   TEXT AI ROUTER
+   ============================================================ */
+
+async function aiGenerate(
+  parts,
+  options = {}
+) {
+
+  validateTextParts(
+    parts
+  );
+
+
+  try {
+
+    return await geminiGenerate(
+      parts,
+      options
+    );
+
+  }
+
+  catch (
+    geminiError
+  ) {
+
+    console.error(
+      "Gemini text generation failed:",
+      {
+        status:
+          geminiError?.status,
+
+        providerStatus:
+          geminiError?.providerStatus,
+
+        message:
+          geminiError?.message
+      }
+    );
+
+
+    /*
+     * Do not switch provider for malformed requests,
+     * authentication errors or other permanent failures.
+     */
+
+    if (
+      !OPENAI_FALLBACK_ENABLED ||
+      !openai ||
+      !isGeminiTemporaryFailure(
+        geminiError
+      )
+    ) {
+
+      throw geminiError;
+
+    }
+
+
+    console.warn(
+      "Gemini temporarily unavailable. Switching text request to OpenAI."
+    );
+
+
+    return openaiGenerate(
+      parts,
+      options
+    );
+
+  }
+
+}
+
+
+/* ============================================================
+   13. PDF INPUT
+   GEMINI INLINE + FILES API + OPENAI PDF FALLBACK
    ============================================================ */
 
 
 /* ============================================================
-   INLINE PDF
+   VALIDATE PDF
    ============================================================ */
 
-function inlinePdfPart(file) {
+function validatePdfUpload(
+  file
+) {
+
+  if (
+    !file ||
+    !Buffer.isBuffer(
+      file.buffer
+    ) ||
+    !file.buffer.length
+  ) {
+
+    const error =
+      new Error(
+        "Annual-report PDF upload is empty or unavailable."
+      );
+
+
+    error.status =
+      400;
+
+
+    throw error;
+
+  }
+
+
+  if (
+    file.buffer.length >
+    FINSIGHT_MAX_PDF_SIZE
+  ) {
+
+    const error =
+      new Error(
+        "The annual-report PDF exceeds FinSight's 45 MB upload limit."
+      );
+
+
+    error.status =
+      413;
+
+
+    throw error;
+
+  }
+
+
+  /*
+   * Basic PDF signature validation.
+   */
+
+  const signature =
+    file.buffer
+      .subarray(
+        0,
+        5
+      )
+      .toString(
+        "ascii"
+      );
+
+
+  if (
+    signature !==
+    "%PDF-"
+  ) {
+
+    const error =
+      new Error(
+        "The uploaded file does not appear to be a valid PDF."
+      );
+
+
+    error.status =
+      400;
+
+
+    throw error;
+
+  }
+
+}
+
+
+/* ============================================================
+   INLINE GEMINI PDF
+   ============================================================ */
+
+function inlinePdfPart(
+  file
+) {
 
   return {
 
@@ -2106,51 +2380,37 @@ function inlinePdfPart(file) {
 
 
 /* ============================================================
-   START GEMINI RESUMABLE FILE UPLOAD
+   START GEMINI FILE UPLOAD
    ============================================================ */
 
-async function startGeminiFileUpload(file) {
+async function startGeminiFileUpload(
+  file
+) {
+
+  validatePdfUpload(
+    file
+  );
+
 
   if (!GEMINI_API_KEY) {
 
-    throw new Error(
-      "Gemini AI is not configured."
-    );
+    const error =
+      new Error(
+        "Gemini AI is not configured."
+      );
 
-  }
+
+    error.status =
+      503;
 
 
-  if (!file?.buffer) {
-
-    throw new Error(
-      "PDF upload buffer is unavailable."
-    );
+    throw error;
 
   }
 
 
   const size =
     file.buffer.length;
-
-
-  if (
-    size >
-    FINSIGHT_MAX_PDF_SIZE
-  ) {
-
-    const error =
-      new Error(
-        "The annual-report PDF exceeds FinSight's 45 MB upload limit."
-      );
-
-
-    error.status =
-      413;
-
-
-    throw error;
-
-  }
 
 
   const displayName =
@@ -2164,68 +2424,96 @@ async function startGeminiFileUpload(file) {
       )
       .slice(
         0,
-        500
+        300
       );
 
 
-  /*
-   * STEP 1
-   *
-   * Ask Gemini for a resumable upload URL.
-   */
-
-  const startResponse =
-    await fetch(
-
-      "https://generativelanguage.googleapis.com/upload/v1beta/files",
-
-      {
-
-        method:
-          "POST",
-
-        headers: {
-
-          "x-goog-api-key":
-            GEMINI_API_KEY,
-
-          "X-Goog-Upload-Protocol":
-            "resumable",
-
-          "X-Goog-Upload-Command":
-            "start",
-
-          "X-Goog-Upload-Header-Content-Length":
-            String(
-              size
-            ),
-
-          "X-Goog-Upload-Header-Content-Type":
-            "application/pdf",
-
-          "Content-Type":
-            "application/json"
-
-        },
-
-        body:
-          JSON.stringify({
-
-            file: {
-
-              display_name:
-                displayName
-
-            }
-
-          })
-
-      }
-
-    );
+  let startResponse;
 
 
-  if (!startResponse.ok) {
+  try {
+
+    startResponse =
+      await fetch(
+
+        "https://generativelanguage.googleapis.com/upload/v1beta/files",
+
+        {
+
+          method:
+            "POST",
+
+          headers: {
+
+            "x-goog-api-key":
+              GEMINI_API_KEY,
+
+            "X-Goog-Upload-Protocol":
+              "resumable",
+
+            "X-Goog-Upload-Command":
+              "start",
+
+            "X-Goog-Upload-Header-Content-Length":
+              String(
+                size
+              ),
+
+            "X-Goog-Upload-Header-Content-Type":
+              "application/pdf",
+
+            "Content-Type":
+              "application/json"
+
+          },
+
+          body:
+            JSON.stringify({
+
+              file: {
+
+                display_name:
+                  displayName
+
+              }
+
+            }),
+
+          signal:
+            AbortSignal.timeout(
+              30000
+            )
+
+        }
+
+      );
+
+  }
+
+  catch (error) {
+
+    const wrapped =
+      new Error(
+        `Gemini file upload initialization failed: ${error?.message || "network error"}`
+      );
+
+
+    wrapped.status =
+      503;
+
+
+    wrapped.providerStatus =
+      "NETWORK_ERROR";
+
+
+    throw wrapped;
+
+  }
+
+
+  if (
+    !startResponse.ok
+  ) {
 
     const text =
       await startResponse.text();
@@ -2255,120 +2543,138 @@ async function startGeminiFileUpload(file) {
 
   if (!uploadUrl) {
 
-    throw new Error(
-      "Gemini did not return a resumable file-upload URL."
-    );
+    const error =
+      new Error(
+        "Gemini did not return a file upload URL."
+      );
+
+
+    error.status =
+      502;
+
+
+    throw error;
 
   }
 
 
   console.log(
-    `Gemini Files API upload started: ${displayName} (${(
-      size /
-      1024 /
-      1024
-    ).toFixed(1)} MB)`
+    `Uploading ${(size / 1024 / 1024).toFixed(1)} MB PDF to Gemini Files API.`
   );
 
 
-  /*
-   * STEP 2
-   *
-   * Upload actual PDF bytes and finalize.
-   */
-
-  const uploadResponse =
-    await fetch(
-      uploadUrl,
-      {
-
-        method:
-          "POST",
-
-        headers: {
-
-          "Content-Length":
-            String(
-              size
-            ),
-
-          "X-Goog-Upload-Offset":
-            "0",
-
-          "X-Goog-Upload-Command":
-            "upload, finalize",
-
-          "Content-Type":
-            "application/pdf"
-
-        },
-
-        body:
-          file.buffer
-
-      }
-    );
+  let uploadResponse;
 
 
-  const uploadText =
-    await uploadResponse.text();
+  try {
+
+    uploadResponse =
+      await fetch(
+        uploadUrl,
+        {
+
+          method:
+            "POST",
+
+          headers: {
+
+            "Content-Length":
+              String(
+                size
+              ),
+
+            "X-Goog-Upload-Offset":
+              "0",
+
+            "X-Goog-Upload-Command":
+              "upload, finalize",
+
+            "Content-Type":
+              "application/pdf"
+
+          },
+
+          body:
+            file.buffer,
+
+          signal:
+            AbortSignal.timeout(
+              120000
+            )
+
+        }
+      );
+
+  }
+
+  catch (error) {
+
+    const wrapped =
+      new Error(
+        `Gemini PDF upload failed: ${error?.message || "network error"}`
+      );
 
 
-  let uploadPayload =
-    {};
+    wrapped.status =
+      503;
 
 
-  if (uploadText) {
+    wrapped.providerStatus =
+      "NETWORK_ERROR";
 
-    try {
 
-      uploadPayload =
-        JSON.parse(
-          uploadText
-        );
-
-    }
-
-    catch {
-
-      uploadPayload = {
-        raw:
-          uploadText
-      };
-
-    }
+    throw wrapped;
 
   }
 
 
-  if (!uploadResponse.ok) {
+  const text =
+    await uploadResponse.text();
 
-    const providerMessage =
 
-      uploadPayload
-        ?.error
-        ?.message
+  let payload =
+    {};
 
-      ||
 
-      uploadPayload
-        ?.error
+  try {
 
-      ||
+    payload =
+      text
+        ? JSON.parse(text)
+        : {};
 
-      uploadPayload
-        ?.raw
+  }
 
-      ||
+  catch {
 
-      `Gemini file upload failed (${uploadResponse.status}).`;
+    payload = {
+      raw:
+        text
+    };
 
+  }
+
+
+  if (
+    !uploadResponse.ok
+  ) {
 
     const error =
       new Error(
-        String(
-          providerMessage
-        )
+
+        payload
+          ?.error
+          ?.message
+
+        ||
+
+        payload
+          ?.raw
+
+        ||
+
+        `Gemini PDF upload failed (${uploadResponse.status}).`
+
       );
 
 
@@ -2377,7 +2683,7 @@ async function startGeminiFileUpload(file) {
 
 
     error.providerStatus =
-      uploadPayload
+      payload
         ?.error
         ?.status ||
       null;
@@ -2388,59 +2694,56 @@ async function startGeminiFileUpload(file) {
   }
 
 
-  const uploadedFile =
-    uploadPayload?.file;
+  const uploaded =
+    payload?.file;
 
 
   if (
-    !uploadedFile?.name ||
-    !uploadedFile?.uri
+    !uploaded?.name ||
+    !uploaded?.uri
   ) {
 
-    if (uploadedFile?.name) await deleteGeminiFile(uploadedFile.name);
-    throw new Error(
-      "Gemini uploaded the PDF but returned incomplete file metadata."
-    );
+    const error =
+      new Error(
+        "Gemini PDF upload returned incomplete file metadata."
+      );
+
+
+    error.status =
+      502;
+
+
+    throw error;
 
   }
 
 
-  return uploadedFile;
+  return uploaded;
 
 }
 
 
 /* ============================================================
-   GET GEMINI FILE METADATA
+   GET GEMINI FILE
    ============================================================ */
 
 async function getGeminiFile(
   fileName
 ) {
 
-  const normalizedName =
+  const normalized =
     String(
       fileName ||
       ""
-    )
-      .replace(
-        /^\/+/,
-        ""
-      );
-
-
-  if (!normalizedName) {
-
-    throw new Error(
-      "Gemini file name is unavailable."
+    ).replace(
+      /^\/+/,
+      ""
     );
-
-  }
 
 
   return fetchJSON(
 
-    `https://generativelanguage.googleapis.com/v1beta/${normalizedName}`,
+    `https://generativelanguage.googleapis.com/v1beta/${normalized}`,
 
     {
 
@@ -2452,7 +2755,12 @@ async function getGeminiFile(
         "x-goog-api-key":
           GEMINI_API_KEY
 
-      }
+      },
+
+      signal:
+        AbortSignal.timeout(
+          20000
+        )
 
     }
 
@@ -2462,7 +2770,7 @@ async function getGeminiFile(
 
 
 /* ============================================================
-   WAIT FOR FILE PROCESSING
+   WAIT FOR GEMINI FILE
    ============================================================ */
 
 async function waitForGeminiFile(
@@ -2492,18 +2800,10 @@ async function waitForGeminiFile(
         .toUpperCase();
 
 
-    /*
-     * Gemini may return ACTIVE immediately.
-     */
-
     if (
-      state === "ACTIVE"
+      state ===
+      "ACTIVE"
     ) {
-
-      console.log(
-        `Gemini file ready: ${file.name}`
-      );
-
 
       return file;
 
@@ -2511,24 +2811,21 @@ async function waitForGeminiFile(
 
 
     if (
-      state === "FAILED"
+      state ===
+      "FAILED"
     ) {
-
-      const providerMessage =
-
-        file
-          ?.error
-          ?.message
-
-        ||
-
-        "Gemini failed to process the uploaded PDF.";
-
 
       const error =
         new Error(
-          providerMessage
+          file
+            ?.error
+            ?.message ||
+          "Gemini failed to process the uploaded PDF."
         );
+
+
+      error.status =
+        503;
 
 
       error.providerStatus =
@@ -2542,11 +2839,6 @@ async function waitForGeminiFile(
 
     }
 
-
-    /*
-     * Empty state can occasionally appear directly
-     * after upload. Give Gemini time to process.
-     */
 
     await sleep(
       1500
@@ -2563,12 +2855,12 @@ async function waitForGeminiFile(
 
   const error =
     new Error(
-      "Gemini PDF processing timed out. Please try the report again."
+      "Gemini PDF processing timed out."
     );
 
 
   error.status =
-    503;
+    504;
 
 
   error.providerStatus =
@@ -2581,7 +2873,7 @@ async function waitForGeminiFile(
 
 
 /* ============================================================
-   DELETE TEMPORARY GEMINI FILE
+   DELETE GEMINI TEMP FILE
    ============================================================ */
 
 async function deleteGeminiFile(
@@ -2593,72 +2885,48 @@ async function deleteGeminiFile(
   }
 
 
+  const normalized =
+    String(
+      fileName
+    ).replace(
+      /^\/+/,
+      ""
+    );
+
+
   try {
 
-    const normalizedName =
-      String(
-        fileName
-      )
-        .replace(
-          /^\/+/,
-          ""
-        );
+    await fetch(
 
+      `https://generativelanguage.googleapis.com/v1beta/${normalized}`,
 
-    const response =
-      await fetch(
+      {
 
-        `https://generativelanguage.googleapis.com/v1beta/${normalizedName}`,
+        method:
+          "DELETE",
 
-        {
+        headers: {
 
-          method:
-            "DELETE",
+          "x-goog-api-key":
+            GEMINI_API_KEY
 
-          signal: AbortSignal.timeout(10000),
+        },
 
-          headers: {
+        signal:
+          AbortSignal.timeout(
+            10000
+          )
 
-            "x-goog-api-key":
-              GEMINI_API_KEY
+      }
 
-          }
-
-        }
-
-      );
-
-
-    if (
-      response.ok ||
-      response.status === 404
-    ) {
-
-      console.log(
-        `Gemini temporary file deleted: ${normalizedName}`
-      );
-
-
-      return;
-
-    }
-
-
-    console.warn(
-      `Could not delete Gemini temporary file ${normalizedName}: ${response.status}`
     );
 
   }
 
   catch (error) {
 
-    /*
-     * Cleanup failure must never destroy a
-     * successful FinSight analysis.
-     */
-
     console.warn(
-      "Gemini temporary-file cleanup failed:",
+      "Gemini temporary PDF cleanup failed:",
       error?.message
     );
 
@@ -2668,36 +2936,16 @@ async function deleteGeminiFile(
 
 
 /* ============================================================
-   CREATE PDF PART
+   PREPARE GEMINI PDF
    ============================================================ */
 
-/*
- * This function replaces your old synchronous pdfPart().
- *
- * IMPORTANT:
- *
- * It is async because large PDFs must first be uploaded
- * through the Gemini Files API.
- *
- * Return:
- *
- * {
- *   part,
- *   uploadedFile
- * }
- */
+async function prepareGeminiPdf(
+  file
+) {
 
-async function prepareGeminiPdf(file) {
-
-  if (
-    !file?.buffer
-  ) {
-
-    throw new Error(
-      "Annual-report PDF is unavailable."
-    );
-
-  }
+  validatePdfUpload(
+    file
+  );
 
 
   const size =
@@ -2705,42 +2953,12 @@ async function prepareGeminiPdf(file) {
 
 
   if (
-    size >
-    FINSIGHT_MAX_PDF_SIZE
-  ) {
-
-    const error =
-      new Error(
-        "The annual-report PDF exceeds FinSight's 45 MB upload limit."
-      );
-
-
-    error.status =
-      413;
-
-
-    throw error;
-
-  }
-
-
-  /*
-   * SMALL PDF
-   *
-   * Inline is faster and avoids an extra upload request.
-   */
-
-  if (
     size <=
     GEMINI_INLINE_PDF_LIMIT
   ) {
 
     console.log(
-      `Gemini PDF mode: inline (${(
-        size /
-        1024 /
-        1024
-      ).toFixed(1)} MB)`
+      `Gemini PDF mode: inline (${(size / 1024 / 1024).toFixed(1)} MB)`
     );
 
 
@@ -2759,18 +2977,8 @@ async function prepareGeminiPdf(file) {
   }
 
 
-  /*
-   * LARGE PDF
-   *
-   * Do NOT Base64 encode inside generateContent.
-   */
-
   console.log(
-    `Gemini PDF mode: Files API (${(
-      size /
-      1024 /
-      1024
-    ).toFixed(1)} MB)`
+    `Gemini PDF mode: Files API (${(size / 1024 / 1024).toFixed(1)} MB)`
   );
 
 
@@ -2780,61 +2988,61 @@ async function prepareGeminiPdf(file) {
     );
 
 
-  let readyFile;
   try {
-    readyFile = await waitForGeminiFile(uploadedFile);
-  } catch (error) {
-    await deleteGeminiFile(uploadedFile.name);
-    throw error;
+
+    const readyFile =
+      await waitForGeminiFile(
+        uploadedFile
+      );
+
+
+    return {
+
+      part: {
+
+        fileData: {
+
+          mimeType:
+            "application/pdf",
+
+          fileUri:
+            readyFile.uri
+
+        }
+
+      },
+
+      uploadedFile:
+        readyFile
+
+    };
+
   }
 
+  catch (error) {
 
-  return {
+    await deleteGeminiFile(
+      uploadedFile.name
+    );
 
-    part: {
 
-      fileData: {
+    throw error;
 
-        mimeType:
-          "application/pdf",
-
-        fileUri:
-          readyFile.uri
-
-      }
-
-    },
-
-    uploadedFile:
-      readyFile
-
-  };
+  }
 
 }
 
 
 /* ============================================================
-   RUN GEMINI WITH PDF — USED BY THE CROSS-PROVIDER PDF ROUTER
+   GEMINI PDF GENERATION
    ============================================================ */
-
-/*
- * Use this helper everywhere a route currently does:
- *
- * geminiGenerate([
- *   { text: prompt },
- *   pdfPart(req.file)
- * ])
- *
- * It automatically chooses inline or Files API.
- */
 
 async function geminiGenerateWithPdf(
   file,
   prompt,
   {
     json = false,
-    metadata,
-    timeoutMs = GEMINI_PDF_TIMEOUT_MS
+    metadata = null
   } = {}
 ) {
 
@@ -2868,27 +3076,21 @@ async function geminiGenerateWithPdf(
       ],
 
       {
+
         json,
+
         metadata,
-        timeoutMs
+
+        timeoutMs:
+          GEMINI_PDF_TIMEOUT_MS
+
       }
 
     );
 
   }
 
-  catch (error) {
-    throw safeAIError(error, "gemini");
-  }
-
   finally {
-
-    /*
-     * Files API documents are temporary.
-     *
-     * FinSight currently needs each uploaded Gemini file
-     * for only one generation call, so remove it afterwards.
-     */
 
     if (
       uploadedFile?.name
@@ -2905,90 +3107,902 @@ async function geminiGenerateWithPdf(
 }
 
 
+/* ============================================================
+   OPENAI PDF GENERATION
+   ============================================================ */
 
-/* Deterministic financial normalization. Never use Number(null/"") as zero. */
-function finiteFinancialNumber(value) {
-  if (typeof value === "number") return Number.isFinite(value) ? value : null;
-  if (typeof value !== "string" || !value.trim()) return null;
-  let text = value.trim();
-  const negative = /^\(.+\)$/.test(text);
-  if (negative) text = text.slice(1, -1).trim();
-  // Accept standard Western or Indian digit grouping, without stripping
-  // arbitrary punctuation, currency labels, percentages or unknown suffixes.
-  if (text.includes(",")) {
-    if (!/^[+-]?(?:\d{1,3}(?:,\d{3})+|\d{1,2}(?:,\d{2})*,\d{3})(?:\.\d+)?$/.test(text)) return null;
-    text = text.replace(/,/g, "");
+async function openaiGenerateWithPdf(
+  file,
+  prompt,
+  {
+    json = false,
+    metadata = null
+  } = {}
+) {
+
+  validatePdfUpload(
+    file
+  );
+
+
+  if (!openai) {
+
+    const error =
+      new Error(
+        "OpenAI fallback is not configured."
+      );
+
+
+    error.status =
+      503;
+
+
+    throw error;
+
   }
-  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(text)) return null;
-  if (negative && /^[+-]/.test(text)) return null;
-  const number = Number(text) * (negative ? -1 : 1);
-  return Number.isFinite(number) ? number : null;
+
+
+  let uploadedFileId =
+    null;
+
+
+  try {
+
+    const filename =
+      path
+        .basename(
+          String(
+            file.originalname ||
+            "annual-report.pdf"
+          )
+        )
+        .replace(
+          /[\x00-\x1f\x7f"]/g,
+          " "
+        )
+        .slice(
+          0,
+          180
+        );
+
+
+    console.log(
+      "Uploading PDF to OpenAI fallback."
+    );
+
+
+    const uploaded =
+      await openai.files.create({
+
+        purpose:
+          "user_data",
+
+        file:
+          await toFile(
+
+            file.buffer,
+
+            filename.toLowerCase().endsWith(
+              ".pdf"
+            )
+
+              ? filename
+
+              : "annual-report.pdf",
+
+            {
+              type:
+                "application/pdf"
+            }
+
+          )
+
+      });
+
+
+    uploadedFileId =
+      uploaded?.id;
+
+
+    if (!uploadedFileId) {
+
+      const error =
+        new Error(
+          "OpenAI PDF upload returned no file ID."
+        );
+
+
+      error.status =
+        502;
+
+
+      throw error;
+
+    }
+
+
+    const response =
+      await openai.responses.create({
+
+        model:
+          OPENAI_MODEL,
+
+        instructions:
+          analystInstructions,
+
+        input: [
+
+          {
+
+            role:
+              "user",
+
+            content: [
+
+              {
+
+                type:
+                  "input_text",
+
+                text:
+                  prompt
+
+              },
+
+              {
+
+                type:
+                  "input_file",
+
+                file_id:
+                  uploadedFileId
+
+              }
+
+            ]
+
+          }
+
+        ],
+
+        ...(json
+
+          ? {
+
+              text: {
+
+                format: {
+                  type:
+                    "json_object"
+                }
+
+              }
+
+            }
+
+          : {}),
+
+        store:
+          false
+
+      });
+
+
+    const text =
+      String(
+        response?.output_text ||
+        ""
+      ).trim();
+
+
+    if (!text) {
+
+      const error =
+        new Error(
+          "OpenAI returned no usable PDF analysis."
+        );
+
+
+      error.status =
+        502;
+
+
+      throw error;
+
+    }
+
+
+    if (metadata) {
+
+      metadata.provider =
+        "openai";
+
+
+      metadata.model =
+        response?.model ||
+        OPENAI_MODEL;
+
+    }
+
+
+    return text;
+
+  }
+
+  catch (error) {
+
+    throw safeProviderError(
+      error,
+      "openai"
+    );
+
+  }
+
+  finally {
+
+    if (
+      uploadedFileId
+    ) {
+
+      try {
+
+        await openai.files.delete(
+          uploadedFileId
+        );
+
+      }
+
+      catch (
+        cleanupError
+      ) {
+
+        console.warn(
+          "OpenAI temporary PDF cleanup failed:",
+          cleanupError?.message
+        );
+
+      }
+
+    }
+
+  }
+
 }
 
-function normalizeFinancialUnitsToCrore(rows) {
-  if (!Array.isArray(rows)) return [];
+
+/* ============================================================
+   PDF AI ROUTER
+   ============================================================ */
+
+async function aiGenerateWithPdf(
+  file,
+  prompt,
+  options = {}
+) {
+
+  validatePdfUpload(
+    file
+  );
+
+
+  try {
+
+    return await geminiGenerateWithPdf(
+      file,
+      prompt,
+      options
+    );
+
+  }
+
+  catch (
+    geminiError
+  ) {
+
+    console.error(
+      "Gemini PDF processing failed:",
+      {
+        status:
+          geminiError?.status,
+
+        providerStatus:
+          geminiError?.providerStatus,
+
+        message:
+          geminiError?.message
+      }
+    );
+
+
+    if (
+      !OPENAI_FALLBACK_ENABLED ||
+      !openai ||
+      !isGeminiTemporaryFailure(
+        geminiError
+      )
+    ) {
+
+      throw geminiError;
+
+    }
+
+
+    console.warn(
+      "Gemini PDF service temporarily unavailable. Switching PDF request to OpenAI."
+    );
+
+
+    return openaiGenerateWithPdf(
+      file,
+      prompt,
+      options
+    );
+
+  }
+
+}
+
+
+/* ============================================================
+   FINANCIAL NORMALIZATION
+   ============================================================ */
+
+function finiteFinancialNumber(
+  value
+) {
+
+  if (
+    value === null ||
+    value === undefined
+  ) {
+
+    return null;
+
+  }
+
+
+  if (
+    typeof value ===
+    "number"
+  ) {
+
+    return Number.isFinite(
+      value
+    )
+      ? value
+      : null;
+
+  }
+
+
+  if (
+    typeof value !==
+      "string" ||
+    !value.trim()
+  ) {
+
+    return null;
+
+  }
+
+
+  let text =
+    value.trim();
+
+
+  const negative =
+    /^\(.+\)$/.test(
+      text
+    );
+
+
+  if (negative) {
+
+    text =
+      text
+        .slice(
+          1,
+          -1
+        )
+        .trim();
+
+  }
+
+
+  text =
+    text.replace(
+      /,/g,
+      ""
+    );
+
+
+  if (
+    !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(
+      text
+    )
+  ) {
+
+    return null;
+
+  }
+
+
+  let number =
+    Number(
+      text
+    );
+
+
+  if (
+    !Number.isFinite(
+      number
+    )
+  ) {
+
+    return null;
+
+  }
+
+
+  if (negative) {
+
+    number =
+      -Math.abs(
+        number
+      );
+
+  }
+
+
+  return number;
+
+}
+
+
+/* ============================================================
+   MONETARY UNIT FACTOR
+   ============================================================ */
+
+function monetaryCroreFactor(
+  sourceUnit
+) {
+
+  const unit =
+    String(
+      sourceUnit ||
+      ""
+    )
+      .toLowerCase()
+      .replace(
+        /[,()]/g,
+        " "
+      )
+      .replace(
+        /\s+/g,
+        " "
+      )
+      .trim();
+
+
+  if (!unit) {
+    return null;
+  }
+
+
+  const isINR =
+
+    unit.includes(
+      "inr"
+    )
+
+    ||
+
+    unit.includes(
+      "₹"
+    )
+
+    ||
+
+    unit.includes(
+      "rupee"
+    )
+
+    ||
+
+    /\brs\b/.test(
+      unit
+    );
+
+
+  if (!isINR) {
+
+    return null;
+
+  }
+
+
+  if (
+    /\b(crore|crores|cr)\b/.test(
+      unit
+    )
+  ) {
+
+    return 1;
+
+  }
+
+
+  if (
+    /\b(million|millions|mn|mio)\b/.test(
+      unit
+    )
+  ) {
+
+    return 0.1;
+
+  }
+
+
+  if (
+    /\b(lakh|lakhs|lac|lacs)\b/.test(
+      unit
+    )
+  ) {
+
+    return 0.01;
+
+  }
+
+
+  if (
+    /\b(billion|billions|bn)\b/.test(
+      unit
+    )
+  ) {
+
+    return 100;
+
+  }
+
+
+  return null;
+
+}
+
+
+/* ============================================================
+   SHARES -> CRORE SHARES
+   ============================================================ */
+
+function sharesToCrore(
+  value,
+  sharesUnit
+) {
+
+  const shares =
+    finiteFinancialNumber(
+      value
+    );
+
+
+  if (
+    shares == null ||
+    shares < 0
+  ) {
+
+    return null;
+
+  }
+
+
+  const unit =
+    String(
+      sharesUnit ||
+      ""
+    )
+      .toLowerCase()
+      .replace(
+        /[,()]/g,
+        " "
+      )
+      .replace(
+        /\s+/g,
+        " "
+      )
+      .trim();
+
+
+  if (!unit) {
+    return null;
+  }
+
+
+  if (
+    /\b(crore|crores|cr)\b/.test(
+      unit
+    )
+  ) {
+
+    return shares;
+
+  }
+
+
+  if (
+    /\b(lakh|lakhs|lac|lacs)\b/.test(
+      unit
+    )
+  ) {
+
+    return shares /
+      100;
+
+  }
+
+
+  if (
+    /\b(million|millions|mn)\b/.test(
+      unit
+    )
+  ) {
+
+    return shares /
+      10;
+
+  }
+
+
+  if (
+    /\b(billion|billions|bn)\b/.test(
+      unit
+    )
+  ) {
+
+    return shares *
+      100;
+
+  }
+
+
+  if (
+    /\b(shares|share|number|absolute|units)\b/.test(
+      unit
+    )
+  ) {
+
+    return shares /
+      10000000;
+
+  }
+
+
+  return null;
+
+}
+
+
+/* ============================================================
+   NORMALIZE FINANCIAL DATA TO INR CRORE
+   ============================================================ */
+
+function normalizeFinancialUnitsToCrore(
+  financials
+) {
+
+  if (
+    !Array.isArray(
+      financials
+    )
+  ) {
+
+    return [];
+
+  }
+
+
   const monetaryFields = [
-    "revenue", "ebitda", "cogs", "operating_income", "net_income",
-    "total_assets", "current_assets", "current_liabilities", "total_debt",
-    "cash", "total_equity", "operating_cash_flow", "capex", "inventory",
-    "accounts_receivable", "accounts_payable", "finance_cost"
+
+    "revenue",
+    "ebitda",
+    "cogs",
+    "operating_income",
+    "net_income",
+
+    "total_assets",
+    "current_assets",
+    "current_liabilities",
+
+    "total_debt",
+    "cash",
+    "total_equity",
+
+    "operating_cash_flow",
+    "capex",
+
+    "inventory",
+    "accounts_receivable",
+    "accounts_payable",
+
+    "finance_cost"
+
   ];
-  const monetaryDivisors = { million: 10, lakh: 100, billion: 1, crore: 1 };
-  const shareDivisors = {
-    shares: 10000000, "raw shares": 10000000,
-    "number of shares": 10000000, "number": 10000000,
-    "thousand shares": 10000, "lakh shares": 100,
-    "million shares": 10, "crore shares": 1, "billion shares": 1
-  };
-  return rows.filter(row => row && typeof row === "object" && !Array.isArray(row)).map(row => {
-    const result = { ...row };
-    const notes = [];
-    if (row.financial_units_normalized_to_crore !== true) {
-      result.original_source_unit = row.original_source_unit ?? row.source_unit ?? null;
-      const source = String(row.source_unit || "").toLowerCase().trim();
-      // Require an explicit INR currency and exactly one recognized scale.
-      // USD million and ambiguous/unknown units are never relabeled INR crore.
-      const unit = source
-        .replace(/^(?:inr|₹|rs\.?|rupees|indian rupees)\s*(?:in\s+)?/, "")
-        .replace(/s$/, "").trim();
-      const isINR = /^(?:inr|₹|rs\.?|rupees|indian rupees)(?:\s|$)/.test(source)
-        || source.startsWith("₹");
-      const divisor = isINR && Object.hasOwn(monetaryDivisors, unit)
-        ? monetaryDivisors[unit] : undefined;
-      for (const field of monetaryFields) {
-        const value = finiteFinancialNumber(row[field]);
-        result[field] = divisor === undefined || value === null
-          ? null : finiteFinancialNumber(unit === "billion" ? value * 100 : value / divisor);
+
+
+  return financials
+
+    .filter(
+      row =>
+        row &&
+        typeof row ===
+          "object" &&
+        !Array.isArray(row)
+    )
+
+    .map(
+      row => {
+
+        const normalized = {
+          ...row
+        };
+
+
+        const sourceUnit =
+          row.source_unit ||
+          null;
+
+
+        const factor =
+          monetaryCroreFactor(
+            sourceUnit
+          );
+
+
+        const notes =
+          [];
+
+
+        for (
+          const field of
+          monetaryFields
+        ) {
+
+          const rawValue =
+            finiteFinancialNumber(
+              row[field]
+            );
+
+
+          normalized[field] =
+
+            rawValue == null ||
+            factor == null
+
+              ? null
+
+              : rawValue *
+                factor;
+
+        }
+
+
+        normalized.original_source_unit =
+          sourceUnit;
+
+
+        normalized.source_unit =
+          factor == null
+
+            ? null
+
+            : "INR crore";
+
+
+        if (
+          factor == null
+        ) {
+
+          notes.push(
+            `Monetary unit "${sourceUnit || "unknown"}" could not be safely normalized to INR crore.`
+          );
+
+        }
+
+        else if (
+          factor !== 1
+        ) {
+
+          notes.push(
+            `Server converted monetary values from ${sourceUnit} to INR crore.`
+          );
+
+        }
+
+
+        const rawShares =
+          finiteFinancialNumber(
+            row.shares_outstanding
+          );
+
+
+        const normalizedShares =
+          sharesToCrore(
+
+            rawShares,
+
+            row.shares_outstanding_unit
+
+          );
+
+
+        normalized.original_shares_outstanding =
+          rawShares;
+
+
+        normalized.original_shares_outstanding_unit =
+          row.shares_outstanding_unit ||
+          null;
+
+
+        normalized.shares_outstanding =
+          normalizedShares;
+
+
+        normalized.shares_outstanding_unit =
+
+          normalizedShares == null
+
+            ? null
+
+            : "crore shares";
+
+
+        if (
+          rawShares != null &&
+          normalizedShares == null
+        ) {
+
+          notes.push(
+            `Shares outstanding could not be safely normalized because unit "${row.shares_outstanding_unit || "unknown"}" was unsupported.`
+          );
+
+        }
+
+
+        normalized.year =
+          finiteFinancialNumber(
+            row.year ??
+            row.end_year
+          );
+
+
+        normalized.source_pages =
+          Array.isArray(
+            row.source_pages
+          )
+
+            ? row.source_pages
+
+            : [];
+
+
+        normalized.extraction_notes =
+          [
+
+            row.extraction_notes,
+
+            ...notes
+
+          ]
+            .filter(Boolean)
+            .join(" ");
+
+
+        return normalized;
+
       }
-      result.normalized_unit = divisor === undefined ? null : "₹ crore";
-      result.financial_units_normalized_to_crore = divisor !== undefined;
-      if (divisor === undefined) {
-        notes.push("Monetary values omitted: source currency/unit was not reliably established as INR million, lakh, billion or crore.");
-      }
-      // source_unit remains the report's original unit for auditability.
-      // normalized_unit describes all returned monetary values.
-    }
-    if (row.shares_normalized_to_crore !== true) {
-      result.original_shares_outstanding = row.original_shares_outstanding ?? row.shares_outstanding ?? null;
-      result.original_shares_outstanding_unit = row.original_shares_outstanding_unit ?? row.shares_outstanding_unit ?? null;
-      const unit = String(row.shares_outstanding_unit || "").toLowerCase().trim()
-        .replace(/\s+/g, " ")
-        .replace(/\b(lakhs|crores|millions|billions|thousands)\b/g, word => word.slice(0, -1));
-      const divisor = Object.hasOwn(shareDivisors, unit) ? shareDivisors[unit] : undefined;
-      const shares = finiteFinancialNumber(row.shares_outstanding);
-      result.shares_outstanding = divisor === undefined || shares === null || shares < 0
-        ? null : finiteFinancialNumber(unit === "billion shares" ? shares * 100 : shares / divisor);
-      result.shares_outstanding_unit = result.shares_outstanding === null ? null : "crore shares";
-      result.shares_normalized_to_crore = result.shares_outstanding !== null;
-      if (row.shares_outstanding != null && result.shares_outstanding === null) {
-        notes.push("Shares outstanding omitted: the share count or share unit was invalid or unknown.");
-      }
-    }
-    if (notes.length) {
-      result.extraction_notes = [row.extraction_notes, ...notes].filter(Boolean).join(" ");
-    }
-    return result;
-  });
+
+    );
+
 }
 
 
@@ -2999,27 +4013,40 @@ function normalizeFinancialUnitsToCrore(rows) {
 app.post(
   "/api/ai/extract-financials",
 
-  upload.single("report"),
+  upload.single(
+    "report"
+  ),
 
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
 
     try {
-
-      /* ------------------------------------------------------
-         REQUIRE PDF
-         ------------------------------------------------------ */
 
       if (!req.file) {
 
         return res
           .status(400)
           .json({
-            ok: false,
-            error: "Upload an annual-report PDF.",
-            code: "REPORT_REQUIRED"
+
+            ok:
+              false,
+
+            error:
+              "Upload an annual-report PDF.",
+
+            code:
+              "REPORT_REQUIRED"
+
           });
 
       }
+
+
+      validatePdfUpload(
+        req.file
+      );
 
 
       const pdfContext =
@@ -3028,19 +4055,14 @@ app.post(
         );
 
 
-      /* ------------------------------------------------------
-         EXTRACTION PROMPT
-         ------------------------------------------------------ */
-
       const prompt = `
 
-Extract investor-grade structured financial data from
-the attached annual-report document.
+Extract investor-grade structured financial data from the
+attached annual report.
 
-The PDF may contain one annual report or several annual
-reports from different years.
+The PDF may contain one annual report or several annual reports.
 
-Optional browser context (do not rely on this instead of the audited statements):
+Browser-detected PDF context:
 
 ${JSON.stringify(
   pdfContext || {},
@@ -3048,317 +4070,144 @@ ${JSON.stringify(
   2
 )}
 
+============================================================
+CORE RULES
+============================================================
+
+The annual report is the source of truth.
+
+Prefer audited CONSOLIDATED financial statements.
+
+Do not mix standalone and consolidated figures in one row.
+
+Do not invent missing values.
+
+Missing values must be null, never zero unless the report
+actually reports zero.
+
+Do not guess ticker symbols or exchanges.
+
+Do not infer that a company is currently listed merely because
+the report discusses an IPO or proposed listing.
 
 ============================================================
-COMPANY IDENTITY
+COMPANY
 ============================================================
 
-Identify:
+Extract:
 
-- legal company name
 - common company name
+- legal company name
 - listing status
-- ticker ONLY if explicitly supported
-- exchange ONLY if explicitly supported
-- ISIN where disclosed
+- ticker only when explicitly established
+- exchange only when explicitly established
+- ISIN where available
 - NSE code where explicitly disclosed
 - BSE security code where explicitly disclosed
 - reporting currency
 
-listing_status MUST be one of:
+listing_status must be exactly one of:
 
-"listed"
-"unlisted"
-"pre-IPO"
-"proposed listing"
-"unknown"
-
-
-IMPORTANT:
-
-Do NOT guess ticker or exchange.
-
-Do NOT infer that a company is listed merely because the
-report discusses an IPO, proposed listing or stock exchange.
-
-A proposed IPO does NOT mean the company is already listed.
-
-If the report does not establish a current public ticker,
-return ticker and exchange as null.
-
-Only return nse_code or bse_code when explicitly supported
-by the annual-report evidence.
-
+listed
+unlisted
+pre-IPO
+proposed listing
+unknown
 
 ============================================================
-FINANCIAL SOURCE RULE
+FINANCIAL SOURCE PRIORITY
 ============================================================
 
-For group-level investor analysis:
+First locate:
 
-1. Prefer CONSOLIDATED financial statements.
+1. Audited Consolidated Balance Sheet
+2. Audited Consolidated Statement of Profit and Loss
+3. Audited Consolidated Cash Flow Statement
+4. Relevant audited notes
 
-2. Use standalone figures only when consolidated figures
-   are unavailable.
-
-3. Do not mix standalone and consolidated figures within
-   one financial-year row.
-
-4. If multiple annual reports contain the same financial
-   year as a comparative figure, use the newest audited
-   annual-report presentation unless there is a clear
-   evidence-based reason not to.
-
+Do not substitute highlights, bookings, pre-sales, adjusted PAT,
+investor-presentation KPIs or standalone statements when audited
+consolidated statements are available.
 
 ============================================================
-FINANCIAL UNITS — CRITICAL
+UNITS
 ============================================================
 
-Read the unit printed on the audited financial statement itself.
+Return monetary numbers exactly as printed.
 
-Return every monetary number EXACTLY AS PRINTED in the audited
-financial statement.
+Do NOT convert units.
 
-DO NOT convert million, lakh, billion or crore values yourself.
+The FinSight server performs deterministic conversion.
 
-The FinSight server performs deterministic unit conversion
-after extraction.
+Examples:
 
+INR million:
+166762 must be returned as 166762.
 
-Example 1:
+INR billion:
+166.762 must be returned as 166.762.
 
-If the audited statement says:
+INR crore:
+16676.2 must be returned as 16676.2.
 
-"INR million"
+Each financial-year row must provide source_unit.
 
-and revenue is:
-
-166762
-
-return:
-
-"source_unit": "INR million",
-"revenue": 166762
-
-DO NOT return 16676.2.
-
-
-Example 2:
-
-If the audited statement says:
-
-"INR billion"
-
-and revenue is:
-
-166.762
-
-return:
-
-"source_unit": "INR billion",
-"revenue": 166.762
-
-DO NOT convert it to crore.
-
-
-Example 3:
-
-If the audited statement says:
-
-"₹ crore"
-
-and revenue is:
-
-16676.2
-
-return:
-
-"source_unit": "INR crore",
-"revenue": 16676.2
-
-
-All monetary values within a financial-year row must correspond
-to the declared source_unit.
-
-If different audited statements use different units and the
-values cannot be represented safely under one source_unit,
-do not silently convert or combine them.
-
-Explain the issue in extraction_notes and return unsupported
-fields as null.
-
-Never change the scale of a reported number silently.
-
-If the source unit cannot be established reliably, return the
-affected monetary values as null rather than guessing.
-
-
-============================================================
-MISSING DATA RULE
-============================================================
-
-If a financial value cannot be reliably established:
-
-return null.
-
-Never use zero to represent missing information.
-
-Zero may only be returned when the audited statement actually
-reports zero.
-
-
-============================================================
-EXTRACT EVERY AVAILABLE REPORTING YEAR
-============================================================
-
-SOURCE PRIORITY — MANDATORY:
-
-A. First locate the audited CONSOLIDATED Balance Sheet.
-
-B. Locate the audited CONSOLIDATED Statement of Profit and Loss.
-
-C. Locate the audited CONSOLIDATED Cash Flow Statement.
-
-D. Use relevant audited notes where required.
-
-E. Extract financial-statement numbers from those audited
-   statements and notes.
-
-F. Do NOT use the following as substitutes for audited
-   consolidated financial-statement values when consolidated
-   statements exist:
-
-- Year in Review
-- highlights
-- investor presentation KPIs
-- pre-sales
-- bookings
-- adjusted PAT
-- adjusted EBITDA
-- standalone financial statements
-
-G. Use the exact comparative prior-year column from the newest
-   audited consolidated statements for the prior year.
-
-H. EBITDA may come from an explicitly reported consolidated
-   EBITDA disclosure.
-
-If EBITDA is adjusted/non-GAAP, clearly state this in
-extraction_notes.
-
-I. Return source_unit and source_pages for auditability.
-
+If the monetary unit cannot be reliably established, return
+affected values as null.
 
 ============================================================
 FINANCIAL FIELDS
 ============================================================
 
-For each usable financial year extract where reliably supported:
+For every reliably supported financial year extract:
 
 - revenue
 - EBITDA
 - cost of goods sold / comparable operating cost
 - operating income / EBIT
-- net income appropriate for consolidated group analysis
+- net income
 - total assets
 - current assets
 - current liabilities
-- total borrowings / debt
+- total debt / borrowings
 - cash and cash equivalents
 - total equity
 - operating cash flow
-- capital expenditure
+- capex
 - inventory
 - trade/accounts receivable
 - trade/accounts payable
 - finance cost
-- shares outstanding
-
-
-For each row identify:
-
-- financial year
-- year-end year
-- statement basis
-- exact source unit
-- source pages when reliable
-- extraction notes
-
-
-============================================================
-EBITDA RULE
-============================================================
-
-Use reported EBITDA when explicitly disclosed.
-
-If EBITDA is not explicitly reported but can be reliably
-calculated from disclosed audited financial information,
-calculate it and clearly state that calculation in
-extraction_notes.
-
-If EBITDA cannot be established reliably, return null.
-
-Do not substitute an adjusted operating KPI for EBITDA without
-identifying it as adjusted/non-GAAP.
-
-
-============================================================
-SHARES OUTSTANDING RULE
-============================================================
-
-Extract PERIOD-END issued/outstanding equity shares when
-reliably supported by the annual report.
-
-IMPORTANT:
-
-Return the RAW number exactly as supported by the report.
-
-Also return its unit separately.
-
-
-Example:
-
-125000000 shares:
-
-"shares_outstanding": 125000000,
-"shares_outstanding_unit": "shares"
-
-
-1250 lakh shares:
-
-"shares_outstanding": 1250,
-"shares_outstanding_unit": "lakh shares"
-
-
-12.5 crore shares:
-
-"shares_outstanding": 12.5,
-"shares_outstanding_unit": "crore shares"
-
-
-Do NOT convert shares into crore shares yourself.
-
-The FinSight server performs deterministic conversion.
-
-Do not confuse:
-
-- authorized shares
-- issued shares
-- subscribed shares
-- paid-up shares
-- weighted-average EPS shares
 - period-end shares outstanding
 
-For market capitalization, period-end outstanding equity shares
-are required.
+============================================================
+SHARES
+============================================================
 
-If only weighted-average EPS shares are available, return:
+Return period-end outstanding equity shares exactly as disclosed.
 
-"shares_outstanding": null,
-"shares_outstanding_unit": null
+Return the unit separately.
 
-If the number or unit is uncertain, return null.
+Examples:
 
+125000000 shares
+
+shares_outstanding: 125000000
+shares_outstanding_unit: "shares"
+
+1250 lakh shares
+
+shares_outstanding: 1250
+shares_outstanding_unit: "lakh shares"
+
+12.5 crore shares
+
+shares_outstanding: 12.5
+shares_outstanding_unit: "crore shares"
+
+Do not use weighted-average EPS shares as period-end shares.
+
+If reliable period-end shares cannot be established, return null.
 
 ============================================================
 OUTPUT
@@ -3383,11 +4232,10 @@ Return VALID JSON ONLY:
   "financials": [
     {
       "company": "",
-      "financial_year": "FY2025-26",
-      "year": 2026,
-      "statement_basis": "Consolidated",
-
-      "source_unit": "INR million|INR lakh|INR crore|INR billion|other exact statement unit",
+      "financial_year": "",
+      "year": null,
+      "statement_basis": "Consolidated|Standalone",
+      "source_unit": "",
 
       "revenue": null,
       "ebitda": null,
@@ -3428,40 +4276,50 @@ Return VALID JSON ONLY:
   }
 }
 
-Return only supported reporting years.
-
-Do not manufacture a complete row by combining incompatible
-financial statements.
-
-Do not invent missing values.
-
+Do not invent missing information.
 `;
 
 
-      /* ------------------------------------------------------
-         CALL AI PDF ROUTER
-         ------------------------------------------------------ */
+      const aiMetadata =
+        {};
 
-      const aiMetadata = {};
-      const text = await aiGenerateWithPdf(req.file, prompt, {
-        json: true,
-        metadata: aiMetadata
-      });
+
+      const text =
+        await aiGenerateWithPdf(
+
+          req.file,
+
+          prompt,
+
+          {
+
+            json:
+              true,
+
+            metadata:
+              aiMetadata
+
+          }
+
+        );
 
 
       const result =
-        safeJSON(text);
+        safeJSON(
+          text
+        );
 
-
-      /* ------------------------------------------------------
-         VALIDATE TOP-LEVEL RESPONSE
-         ------------------------------------------------------ */
 
       if (
         !result ||
-        typeof result !== "object" ||
-        Array.isArray(result) ||
-        !Array.isArray(result.financials)
+        typeof result !==
+          "object" ||
+        Array.isArray(
+          result
+        ) ||
+        !Array.isArray(
+          result.financials
+        )
       ) {
 
         throw new Error(
@@ -3471,56 +4329,26 @@ Do not invent missing values.
       }
 
 
-      /* ------------------------------------------------------
-         NORMALIZE MONETARY UNITS
-
-         normalizeFinancialUnitsToCrore() must convert:
-         million -> crore
-         lakh    -> crore
-         billion -> crore
-         crore   -> crore
-         ------------------------------------------------------ */
-
       result.financials =
         normalizeFinancialUnitsToCrore(
           result.financials
         );
 
 
-      /* ------------------------------------------------------
-         SHARES OUTSTANDING
-
-         normalizeFinancialUnitsToCrore() already converts shares
-         exactly once and preserves the original share-unit metadata.
-         ------------------------------------------------------ */
-
-
-      /* ------------------------------------------------------
-         REMOVE MALFORMED / EMPTY FINANCIAL ROWS
-         ------------------------------------------------------ */
-
       result.financials =
         result.financials.filter(
           row => {
 
-            if (
-              !row ||
-              typeof row !== "object"
-            ) {
-
-              return false;
-
-            }
-
-
             const year =
               Number(
-                row.year
+                row?.year
               );
 
 
             if (
-              !Number.isFinite(year) ||
+              !Number.isFinite(
+                year
+              ) ||
               year < 1900 ||
               year > 2200
             ) {
@@ -3530,27 +4358,20 @@ Do not invent missing values.
             }
 
 
-            /*
-             * Require at least one meaningful
-             * financial-statement value.
-             */
-
-            const financialFields = [
+            const fields = [
 
               "revenue",
               "ebitda",
               "operating_income",
               "net_income",
-
               "total_assets",
               "total_equity",
-
               "operating_cash_flow"
 
             ];
 
 
-            return financialFields.some(
+            return fields.some(
               field =>
                 finiteFinancialNumber(
                   row[field]
@@ -3572,32 +4393,32 @@ Do not invent missing values.
       }
 
 
-      /* ------------------------------------------------------
-         COMPANY OBJECT
-         ------------------------------------------------------ */
-
       result.company =
+
         result.company &&
-        typeof result.company === "object" &&
-        !Array.isArray(result.company)
+        typeof result.company ===
+          "object" &&
+        !Array.isArray(
+          result.company
+        )
 
           ? result.company
 
           : {};
 
 
-      /* ------------------------------------------------------
-         LISTING STATUS VALIDATION
-         ------------------------------------------------------ */
-
       const allowedListingStatuses =
-        new Set([
-          "listed",
-          "unlisted",
-          "pre-IPO",
-          "proposed listing",
-          "unknown"
-        ]);
+        new Set(
+          [
+
+            "listed",
+            "unlisted",
+            "pre-IPO",
+            "proposed listing",
+            "unknown"
+
+          ]
+        );
 
 
       if (
@@ -3611,12 +4432,6 @@ Do not invent missing values.
 
       }
 
-
-      /*
-       * Never retain public-market identifiers when the
-       * extraction does not establish that the company is
-       * currently listed.
-       */
 
       if (
         result.company.listing_status !==
@@ -3638,14 +4453,14 @@ Do not invent missing values.
       }
 
 
-      /* ------------------------------------------------------
-         VALIDATION OBJECT
-         ------------------------------------------------------ */
-
       result.validation =
+
         result.validation &&
-        typeof result.validation === "object" &&
-        !Array.isArray(result.validation)
+        typeof result.validation ===
+          "object" &&
+        !Array.isArray(
+          result.validation
+        )
 
           ? result.validation
 
@@ -3664,11 +4479,13 @@ Do not invent missing values.
 
       if (
         !Array.isArray(
-          result.validation.missing_critical_fields
+          result.validation
+            .missing_critical_fields
         )
       ) {
 
-        result.validation.missing_critical_fields =
+        result.validation
+          .missing_critical_fields =
           [];
 
       }
@@ -3685,10 +4502,6 @@ Do not invent missing values.
 
       }
 
-
-      /* ------------------------------------------------------
-         SAVE EXTRACTED REPORT
-         ------------------------------------------------------ */
 
       let persisted =
         null;
@@ -3753,14 +4566,17 @@ Do not invent missing values.
 
           const latestYear =
             years.length
+
               ? Math.max(
                   ...years
                 )
+
               : null;
 
 
           const inserted =
             await dbQuery(
+
               `
               INSERT INTO reports
               (
@@ -3786,7 +4602,9 @@ Do not invent missing values.
                 id,
                 created_at
               `,
+
               [
+
                 companyRow.id,
 
                 req.file.originalname,
@@ -3808,7 +4626,9 @@ Do not invent missing values.
                 {},
 
                 hash
+
               ]
+
             );
 
 
@@ -3828,148 +4648,94 @@ Do not invent missing values.
 
         }
 
-        catch (databaseError) {
-
-          /*
-           * Database failure must NOT destroy a successful
-           * annual-report extraction.
-           */
+        catch (
+          databaseError
+        ) {
 
           console.error(
-            "Failed to persist financial extraction:",
+            "Financial extraction persistence failed:",
             databaseError
           );
 
 
-          result.validation.warnings.push(
-            "Financial extraction succeeded, but the result could not be saved to research memory."
-          );
+          result.validation
+            .warnings
+            .push(
+              "Financial extraction succeeded, but it could not be saved to research memory."
+            );
 
         }
 
       }
 
 
-      /* ------------------------------------------------------
-         SUCCESS
-         ------------------------------------------------------ */
-
       return res.json({
 
-        ok: true,
+        ok:
+          true,
 
         ...result,
 
         persisted,
 
-        model: aiMetadata.model,
-        provider: aiMetadata.provider
+        provider:
+          aiMetadata.provider ||
+          null,
+
+        model:
+          aiMetadata.model ||
+          null
 
       });
 
     }
 
-
-    /* ========================================================
-       EXTRACTION ERROR HANDLER
-       ======================================================== */
-
-    catch (error) {
+    catch (
+      error
+    ) {
 
       console.error(
-        "Financial extraction full error:",
+        "Financial extraction error:",
         error
       );
 
 
       const upstreamStatus =
-        Number.isInteger(
+        Number(
           error?.status
-        )
-          ? error.status
-          : null;
+        );
 
 
       let status =
         500;
 
 
+      let code =
+        "FINANCIAL_EXTRACTION_FAILED";
+
+
       let message =
+        error?.message ||
         "FinSight could not extract reliable financial statements from this annual report.";
 
 
-      let code =
-        "FINANCIAL_EXTRACTION_FAILED";
-/* ------------------------------------------------------
-   AI PROVIDER / INPUT BAD REQUEST
-   ------------------------------------------------------ */
+      if (
+        upstreamStatus ===
+        400
+      ) {
 
-if (
-  upstreamStatus === 400
-) {
+        status =
+          400;
 
-  status = 400;
+        code =
+          "AI_BAD_REQUEST";
 
-  code = "AI_BAD_REQUEST";
+      }
 
-
-  /*
-   * IMPORTANT:
-   *
-   * HTTP 400 from an AI provider does NOT automatically mean
-   * the uploaded PDF is unreadable.
-   *
-   * Preserve the actual provider message so we can see
-   * whether the problem is:
-   *
-   * - PDF payload
-   * - unsupported model feature
-   * - request size
-   * - JSON response mode
-   * - malformed provider request
-   * - genuinely unreadable document
-   */
-
-  const providerMessage =
-    typeof error?.message === "string"
-      ? error.message.trim()
-      : "";
-
-
-  console.error(
-    "AI provider 400 financial extraction error:",
-    {
-      message: providerMessage,
-      status: error?.status,
-      providerStatus: error?.providerStatus,
-      providerDetails: error?.providerDetails
-    }
-  );
-
-
-  if (providerMessage) {
-
-    message =
-      `AI extraction request failed: ${providerMessage}`;
-
-  }
-
-  else {
-
-    message =
-      "The AI provider rejected the annual-report extraction request.";
-
-  }
-
-}
-
-
-      /* ------------------------------------------------------
-         FILE TOO LARGE
-         ------------------------------------------------------ */
 
       else if (
-        upstreamStatus === 413
+        upstreamStatus ===
+        413
       ) {
 
         status =
@@ -3979,25 +4745,14 @@ if (
           "REPORT_TOO_LARGE";
 
         message =
-          "The annual-report file is too large to process.";
+          "The annual-report PDF exceeds FinSight's 45 MB upload limit.";
 
       }
 
-
-      /* Billing/quota failures also use HTTP 429, but waiting alone does
-       * not resolve them. Preserve 429 and report the required action. */
-      else if (isAIBillingError(error)) {
-        status = 429;
-        code = "AI_BILLING_REQUIRED";
-        message = error.message;
-      }
-
-      /* ------------------------------------------------------
-         PROVIDER RATE LIMIT
-         ------------------------------------------------------ */
 
       else if (
-        upstreamStatus === 429
+        upstreamStatus ===
+        429
       ) {
 
         status =
@@ -4006,19 +4761,14 @@ if (
         code =
           "AI_RATE_LIMIT";
 
-        message =
-          "The AI extraction service is temporarily rate-limited. Please try again shortly.";
-
       }
 
 
-      /* ------------------------------------------------------
-         PROVIDER AUTHENTICATION
-         ------------------------------------------------------ */
-
       else if (
-        upstreamStatus === 401 ||
-        upstreamStatus === 403
+        upstreamStatus ===
+          401 ||
+        upstreamStatus ===
+          403
       ) {
 
         status =
@@ -4027,19 +4777,12 @@ if (
         code =
           "AI_AUTH_ERROR";
 
-        message =
-          "The AI extraction service is temporarily unavailable because its API credentials were rejected.";
-
       }
 
 
-      /* ------------------------------------------------------
-         PROVIDER SERVER ERROR
-         ------------------------------------------------------ */
-
       else if (
-        (upstreamStatus != null && upstreamStatus >= 500) ||
-        isGeminiRetryableError(error)
+        upstreamStatus >=
+        500
       ) {
 
         status =
@@ -4048,61 +4791,17 @@ if (
         code =
           "AI_PROVIDER_UNAVAILABLE";
 
-        message =
-          "The AI extraction provider is temporarily unavailable. Please try again.";
-
-      }
-
-
-      /* ------------------------------------------------------
-         GEMINI NOT CONFIGURED
-         ------------------------------------------------------ */
-
-      else if (
-        error?.message ===
-        "Gemini AI is not configured."
-      ) {
-
-        status =
-          503;
-
-        code =
-          "AI_NOT_CONFIGURED";
-
-        message =
-          "FinSight AI extraction is not configured on the server.";
-
-      }
-
-
-      /* ------------------------------------------------------
-         SAFE APPLICATION ERROR
-         ------------------------------------------------------ */
-
-      else if (
-        typeof error?.message === "string" &&
-        error.message.trim()
-      ) {
-
-        const safeMessage =
-          error.message.trim();
-
-
-        message =
-          safeMessage.length <= 500
-
-            ? safeMessage
-
-            : "Financial extraction failed because the AI provider returned an unexpected error.";
-
       }
 
 
       return res
-        .status(status)
+        .status(
+          status
+        )
         .json({
 
-          ok: false,
+          ok:
+            false,
 
           error:
             message,
@@ -4124,6 +4823,7 @@ if (
 /* ============================================================
    15. ANNUAL REPORT AI
    ============================================================ */
+
 app.post(
   "/api/ai/analyze-report",
 
@@ -4152,6 +4852,11 @@ app.post(
       }
 
 
+      validatePdfUpload(
+        req.file
+      );
+
+
       const metrics =
         safeJSON(
           req.body.metrics
@@ -4176,7 +4881,8 @@ app.post(
 
 
       const isMultiReport =
-        detectedReports.length > 1;
+        detectedReports.length >
+        1;
 
 
       const prompt = `
@@ -4203,19 +4909,14 @@ ${JSON.stringify(
 ${
   isMultiReport
 
-    ?
-
-`The PDF appears to contain ${detectedReports.length}
+    ? `The PDF appears to contain ${detectedReports.length}
 annual reports.
 
-Analyze each financial year separately first, then
-compare the years longitudinally.`
+Analyze each financial year separately first, then compare
+the years longitudinally.`
 
-    :
-
-`Analyze the available annual-report period.`
+    : `Analyze the available annual-report period.`
 }
-
 
 ============================================================
 ANALYZE
@@ -4281,7 +4982,6 @@ RISKS
 - cybersecurity
 - execution
 
-
 ============================================================
 MULTI-YEAR ANALYSIS
 ============================================================
@@ -4302,7 +5002,6 @@ Where multiple reporting years exist, analyze:
 - auditor changes
 - governance changes
 
-
 ============================================================
 MANAGEMENT PROMISE TRACKER
 ============================================================
@@ -4318,12 +5017,11 @@ Pending
 Changed
 Not verifiable
 
-
 ============================================================
 OUTPUT
 ============================================================
 
-Return valid JSON only:
+Return VALID JSON ONLY:
 
 {
   "company": "",
@@ -4411,22 +5109,48 @@ For good, bad, watch, red_flags and growth_drivers use:
 }
 
 Do not invent evidence.
+
 `;
 
 
+      const aiMetadata =
+        {};
 
-      const aiMetadata = {};
-      const text = await aiGenerateWithPdf(req.file, prompt, {
-        json: true,
-        metadata: aiMetadata
-      });
+
+      const text =
+        await aiGenerateWithPdf(
+
+          req.file,
+
+          prompt,
+
+          {
+
+            json:
+              true,
+
+            metadata:
+              aiMetadata
+
+          }
+
+        );
 
 
       const analysis =
-        safeJSON(text);
+        safeJSON(
+          text
+        );
 
 
-      if (!analysis) {
+      if (
+        !analysis ||
+        typeof analysis !==
+          "object" ||
+        Array.isArray(
+          analysis
+        )
+      ) {
 
         throw new Error(
           "The AI provider returned an unreadable annual-report analysis."
@@ -4439,9 +5163,13 @@ Do not invent evidence.
 
         analysis,
 
-        model: aiMetadata.model,
+        provider:
+          aiMetadata.provider ||
+          null,
 
-        provider: aiMetadata.provider
+        model:
+          aiMetadata.model ||
+          null
 
       });
 
@@ -4458,12 +5186,20 @@ Do not invent evidence.
 
 
       return res
-        .status(aiErrorHttpStatus(error))
+        .status(
+          aiErrorHttpStatus(
+            error
+          )
+        )
         .json({
 
           error:
-            error.message ||
-            "Annual-report analysis failed."
+            error?.message ||
+            "Annual-report analysis failed.",
+
+          providerStatus:
+            error?.providerStatus ||
+            null
 
         });
 
@@ -4471,6 +5207,7 @@ Do not invent evidence.
 
   }
 );
+
 
 
 /* ============================================================
