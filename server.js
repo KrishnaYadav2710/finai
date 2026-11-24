@@ -1970,34 +1970,37 @@ async function geminiGenerate(
 }
 
 /* ============================================================
-   13. LOCAL PDF FINANCIAL EXTRACTION
+   13. LOCAL PDF EXTRACTION — FINANCIAL STATEMENT ENGINE
    ============================================================ */
 
 /*
  * ARCHITECTURE
  *
  * PDF
- *  ↓
+ *   ↓
  * pdf-parse
- *  ↓
+ *   ↓
  * normalized text
- *  ↓
- * deterministic statement detection
- *  ↓
- * deterministic row/value extraction
- *  ↓
- * INR crore normalization
- *  ↓
- * validated dashboard JSON
+ *   ↓
+ * detect audited CONSOLIDATED statement regions
+ *   ↓
+ * detect comparative year columns
+ *   ↓
+ * extract statement rows
+ *   ↓
+ * normalize monetary values to INR crore
+ *   ↓
+ * merge duplicate comparative years
+ *   ↓
+ * dashboard-ready financial history
  *
- * IMPORTANT:
+ * IMPORTANT
  *
- * - NO Gemini for financial extraction.
- * - NO OpenAI.
- * - Missing / ambiguous values => null.
- * - Never convert missing values to zero.
- * - Prefer consolidated statements.
- * - Never silently mix consolidated and standalone statements.
+ * - NO AI is used here.
+ * - Missing values remain null.
+ * - Zero is accepted only when the report prints zero / dash.
+ * - Consolidated evidence is preferred.
+ * - Standalone evidence is not mixed into consolidated rows.
  */
 
 
@@ -2021,6 +2024,7 @@ async function extractPdfTextLocally(file) {
     error.status = 400;
 
     throw error;
+
   }
 
 
@@ -2037,6 +2041,7 @@ async function extractPdfTextLocally(file) {
     error.status = 413;
 
     throw error;
+
   }
 
 
@@ -2071,12 +2076,13 @@ async function extractPdfTextLocally(file) {
 
     const localError =
       new Error(
-        "The annual-report PDF could not be read locally."
+        "The annual-report PDF could not be read locally. It may be scanned, encrypted or malformed."
       );
 
     localError.status = 400;
 
     throw localError;
+
   }
 
 
@@ -2088,7 +2094,6 @@ async function extractPdfTextLocally(file) {
       .replace(/\u00a0/g, " ")
       .replace(/\r\n?/g, "\n")
       .replace(/[ \t]+/g, " ")
-      .replace(/\n[ \t]+/g, "\n")
       .replace(/\n{4,}/g, "\n\n\n")
       .trim();
 
@@ -2099,12 +2104,13 @@ async function extractPdfTextLocally(file) {
 
     const error =
       new Error(
-        "Very little searchable text could be extracted from this PDF. It may be scanned or image-based."
+        "Very little text could be extracted from the PDF. The report may be image-based."
       );
 
-    error.status = 422;
+    error.status = 400;
 
     throw error;
+
   }
 
 
@@ -2118,14 +2124,15 @@ async function extractPdfTextLocally(file) {
     text,
 
     pages:
-      Number(parsed?.numpages) ||
-      null,
+      Number(
+        parsed?.numpages
+      ) || null,
 
     info:
-      parsed?.info ||
-      {}
+      parsed?.info || {}
 
   };
+
 }
 
 
@@ -2142,14 +2149,15 @@ function normalizeReportText(text) {
     .replace(/\u00a0/g, " ")
     .replace(/\r\n?/g, "\n")
     .replace(/[ \t]+/g, " ")
-    .replace(/\n[ \t]+/g, "\n")
-    .replace(/\n{4,}/g, "\n\n\n")
+    .replace(/[‐-‒–—]/g, "-")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
+
 }
 
 
 /* ============================================================
-   13C. SAFE FINANCIAL NUMBER PARSER
+   13C. FINANCIAL NUMBER PARSER
    ============================================================ */
 
 function finiteFinancialNumber(value) {
@@ -2160,6 +2168,7 @@ function finiteFinancialNumber(value) {
   ) {
 
     return null;
+
   }
 
 
@@ -2170,6 +2179,7 @@ function finiteFinancialNumber(value) {
     return Number.isFinite(value)
       ? value
       : null;
+
   }
 
 
@@ -2181,23 +2191,33 @@ function finiteFinancialNumber(value) {
   if (!text) {
 
     return null;
+
   }
 
 
   /*
-   * Standalone accounting dash.
-   *
-   * Only an actual dash is interpreted as reported zero.
+   * Standalone accounting dash means reported zero.
    */
 
   if (
-    text === "-" ||
-    text === "–" ||
-    text === "—"
+    /^(?:-|–|—)$/.test(text)
   ) {
 
     return 0;
+
   }
+
+
+  /*
+   * Remove common currency glyphs accidentally attached
+   * to extracted values.
+   */
+
+  text =
+    text
+      .replace(/[₹]/g, "")
+      .replace(/\b(?:INR|Rs\.?)\b/gi, "")
+      .trim();
 
 
   let negative =
@@ -2207,12 +2227,11 @@ function finiteFinancialNumber(value) {
   /*
    * Accounting negative:
    *
-   * (1,234.50)
+   * (1,234)
    */
 
   if (
-    text.startsWith("(") &&
-    text.endsWith(")")
+    /^\([^()]+\)$/.test(text)
   ) {
 
     negative = true;
@@ -2221,71 +2240,57 @@ function finiteFinancialNumber(value) {
       text
         .slice(1, -1)
         .trim();
+
   }
 
 
   /*
-   * Remove currency symbols and standard separators only.
+   * Indian/Western comma grouping.
    */
 
-  text =
-    text
-      .replace(/₹/g, "")
-      .replace(/\bINR\b/gi, "")
-      .replace(/\bRs\.?\b/gi, "")
-      .replace(/,/g, "")
-      .trim();
-
-
   if (
-    !/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(
+    !/^[+-]?(?:\d{1,3}(?:,\d{2})*,\d{3}|\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$/.test(
       text
     )
   ) {
 
     return null;
+
   }
 
 
-  const parsed =
+  text =
+    text.replace(
+      /,/g,
+      ""
+    );
+
+
+  const number =
     Number(text);
 
 
   if (
-    !Number.isFinite(parsed)
+    !Number.isFinite(number)
   ) {
 
     return null;
+
   }
 
 
   return negative
-    ? -Math.abs(parsed)
-    : parsed;
+    ? -number
+    : number;
+
 }
 
 
 /* ============================================================
-   13D. ACCOUNTING NUMBERS FROM A LINE
+   13D. ACCOUNTING VALUES FROM ONE LINE
    ============================================================ */
 
 function extractAccountingNumbers(text) {
-
-  /*
-   * Supports:
-   *
-   * 1,234
-   * 1,234.50
-   * 1234
-   * 1234.50
-   * (1,234)
-   * (1,234.50)
-   * -1234
-   *
-   * This deliberately avoids the malformed regex that caused:
-   *
-   * SyntaxError: Invalid regular expression
-   */
 
   const source =
     String(
@@ -2293,38 +2298,108 @@ function extractAccountingNumbers(text) {
     );
 
 
+  /*
+   * Supports:
+   *
+   * 128,218
+   * 1,28,218
+   * 128218
+   * 128.25
+   * (44,349)
+   * -
+   *
+   * We intentionally do NOT treat arbitrary words as zero.
+   */
+
   const regex =
-    /\(?-?(?:\d{1,3}(?:,\d{2,3})+|\d+)(?:\.\d+)?\)?/g;
+    /\(\s*\d[\d,]*(?:\.\d+)?\s*\)|(?<![A-Za-z])[-+]?\d[\d,]*(?:\.\d+)?(?![A-Za-z])/g;
 
 
   const matches =
-    source.match(regex) ||
-    [];
+    source.match(regex) || [];
 
 
   return matches
     .map(
-      raw => ({
-        raw,
+      token => ({
+
+        token,
+
         value:
-          finiteFinancialNumber(raw)
+          finiteFinancialNumber(
+            token
+          )
+
       })
     )
     .filter(
       item =>
         item.value !== null
     );
+
 }
 
 
 /* ============================================================
-   13E. HEADING OCCURRENCES
+   13E. REMOVE NOTE NUMBER
    ============================================================ */
 
-function findHeadingOccurrences(
-  text,
-  headings
+function removeLikelyNoteNumber(
+  values,
+  line
 ) {
+
+  const result =
+    [...values];
+
+
+  if (
+    result.length < 3
+  ) {
+
+    return result;
+
+  }
+
+
+  /*
+   * Typical statement:
+   *
+   * Revenue From Operations 26 1,28,218 1,09,558
+   *
+   * 26 is note number, not financial value.
+   */
+
+  const first =
+    result[0];
+
+
+  if (
+    Number.isInteger(first) &&
+    first >= 1 &&
+    first <= 250
+  ) {
+
+    /*
+     * Only strip when there are enough remaining values
+     * to represent comparative columns.
+     */
+
+    return result.slice(1);
+
+  }
+
+
+  return result;
+
+}
+
+
+/* ============================================================
+   13F. UNIT DETECTION
+   ============================================================ */
+
+function detectFinancialUnit(text) {
 
   const source =
     String(
@@ -2332,1398 +2407,374 @@ function findHeadingOccurrences(
     );
 
 
-  const lower =
-    source.toLowerCase();
-
-
-  const matches =
-    [];
-
-
-  for (
-    const heading
-    of headings
-  ) {
-
-    const needle =
-      String(
-        heading || ""
-      )
-        .toLowerCase()
-        .trim();
-
-
-    if (!needle) {
-      continue;
-    }
-
-
-    let position = 0;
-
-
-    while (
-      position <
-      lower.length
-    ) {
-
-      const index =
-        lower.indexOf(
-          needle,
-          position
-        );
-
-
-      if (
-        index === -1
-      ) {
-
-        break;
-      }
-
-
-      matches.push({
-
-        index,
-
-        heading:
-          needle
-
-      });
-
-
-      position =
-        index +
-        needle.length;
-    }
-
-  }
-
-
-  return matches.sort(
-    (a, b) =>
-      a.index -
-      b.index
-  );
-}
-
-
-/* ============================================================
-   13F. SCORE STATEMENT CANDIDATE
-   ============================================================ */
-
-function scoreStatementCandidate(
-  sample,
-  index,
-  totalLength,
-  type
-) {
-
-  let score = 0;
-
-
-  const lower =
-    sample.toLowerCase();
-
-
   /*
-   * Actual financial statements contain lots
-   * of financial numbers.
-   */
-
-  const numericCount =
-    (
-      sample.match(
-        /\d[\d,]*(?:\.\d+)?/g
-      ) ||
-      []
-    ).length;
-
-
-  if (
-    numericCount >= 20
-  ) {
-
-    score += 4;
-
-  }
-
-  else if (
-    numericCount >= 10
-  ) {
-
-    score += 2;
-
-  }
-
-
-  /*
-   * Financial-year evidence.
-   */
-
-  if (
-    /\b20\d{2}\b/.test(
-      sample
-    )
-  ) {
-
-    score += 2;
-  }
-
-
-  /*
-   * Note column evidence.
-   */
-
-  if (
-    /\bnotes?\b/i.test(
-      sample
-    )
-  ) {
-
-    score += 1;
-  }
-
-
-  /*
-   * Statement-specific vocabulary.
-   */
-
-  if (
-    type === "profit"
-  ) {
-
-    if (
-      /\brevenue\b/.test(lower)
-    ) {
-
-      score += 2;
-    }
-
-
-    if (
-      /\bprofit\b/.test(lower)
-    ) {
-
-      score += 2;
-    }
-
-
-    if (
-      /\bfinance costs?\b/.test(lower)
-    ) {
-
-      score += 1;
-    }
-
-  }
-
-
-  if (
-    type === "balance"
-  ) {
-
-    if (
-      /\bassets\b/.test(lower)
-    ) {
-
-      score += 2;
-    }
-
-
-    if (
-      /\bliabilities\b/.test(lower)
-    ) {
-
-      score += 2;
-    }
-
-
-    if (
-      /\bequity\b/.test(lower)
-    ) {
-
-      score += 1;
-    }
-
-  }
-
-
-  if (
-    type === "cashflow"
-  ) {
-
-    if (
-      /\boperating activities\b/.test(lower)
-    ) {
-
-      score += 2;
-    }
-
-
-    if (
-      /\binvesting activities\b/.test(lower)
-    ) {
-
-      score += 2;
-    }
-
-
-    if (
-      /\bfinancing activities\b/.test(lower)
-    ) {
-
-      score += 2;
-    }
-
-  }
-
-
-  /*
-   * Table of contents normally occurs very early.
+   * pdf-parse can misread ₹ as:
    *
-   * Later occurrences receive a modest bonus.
-   */
-
-  const relative =
-    totalLength > 0
-      ? index / totalLength
-      : 0;
-
-
-  score +=
-    Math.min(
-      relative * 2,
-      2
-    );
-
-
-  /*
-   * Obvious TOC penalty.
+   * C
+   * H
+   * K
+   *
+   * Therefore "(C in crore)" etc. are accepted ONLY
+   * inside a financial-statement context.
    */
 
   if (
-    /\bcontents\b/.test(lower) &&
-    numericCount < 10
+    /\(\s*(?:₹|rs\.?|inr|c|h|k)\s+in\s+crores?\s*\)/i.test(
+      source
+    ) ||
+    /\bamounts?\s+(?:are\s+)?in\s+crores?\b/i.test(
+      source
+    ) ||
+    /\bin\s+crores?\b/i.test(
+      source
+    )
   ) {
 
-    score -= 5;
+    return "INR crore";
+
   }
 
 
-  return score;
+  if (
+    /\(\s*(?:₹|rs\.?|inr|c|h|k)\s+in\s+millions?\s*\)/i.test(
+      source
+    ) ||
+    /\bamounts?\s+(?:are\s+)?in\s+millions?\b/i.test(
+      source
+    )
+  ) {
+
+    return "INR million";
+
+  }
+
+
+  if (
+    /\(\s*(?:₹|rs\.?|inr|c|h|k)\s+in\s+lakhs?\s*\)/i.test(
+      source
+    ) ||
+    /\bamounts?\s+(?:are\s+)?in\s+lakhs?\b/i.test(
+      source
+    )
+  ) {
+
+    return "INR lakh";
+
+  }
+
+
+  if (
+    /\(\s*(?:₹|rs\.?|inr|c|h|k)\s+in\s+billions?\s*\)/i.test(
+      source
+    ) ||
+    /\bamounts?\s+(?:are\s+)?in\s+billions?\b/i.test(
+      source
+    )
+  ) {
+
+    return "INR billion";
+
+  }
+
+
+  return null;
+
 }
 
 
 /* ============================================================
-   13G. FIND BEST STATEMENT SECTION
+   13G. CONVERT MONETARY VALUE TO INR CRORE
    ============================================================ */
 
-function findStatementSection(
-  text,
-  headings,
-  {
-    type = "generic",
-    maxLength = 90000
-  } = {}
+function convertToCrore(
+  value,
+  unit
 ) {
 
-  const source =
-    normalizeReportText(
-      text
-    );
-
-
-  const occurrences =
-    findHeadingOccurrences(
-      source,
-      headings
+  const number =
+    finiteFinancialNumber(
+      value
     );
 
 
   if (
-    !occurrences.length
+    number === null
   ) {
 
-    return {
-      found: false,
-      heading: null,
-      index: -1,
-      text: ""
-    };
-  }
-
-
-  let best =
-    null;
-
-
-  for (
-    const occurrence
-    of occurrences
-  ) {
-
-    const sample =
-      source.slice(
-        occurrence.index,
-        Math.min(
-          source.length,
-          occurrence.index +
-          maxLength
-        )
-      );
-
-
-    const score =
-      scoreStatementCandidate(
-        sample.slice(
-          0,
-          30000
-        ),
-        occurrence.index,
-        source.length,
-        type
-      );
-
-
-    if (
-      !best ||
-      score >
-      best.score
-    ) {
-
-      best = {
-
-        ...occurrence,
-
-        score,
-
-        text:
-          sample
-
-      };
-
-    }
+    return null;
 
   }
 
 
-  if (!best) {
-
-    return {
-      found: false,
-      heading: null,
-      index: -1,
-      text: ""
-    };
-  }
-
-
-  return {
-
-    found:
-      true,
-
-    heading:
-      best.heading,
-
-    index:
-      best.index,
-
-    score:
-      best.score,
-
-    text:
-      best.text
-
-  };
-}
-
-
-/* ============================================================
-   13H. DETECT CONSOLIDATED / STANDALONE
-   ============================================================ */
-
-function detectStatementBasis(
-  ...sections
-) {
-
-  const combined =
-    sections
-      .map(
-        section =>
-          typeof section === "string"
-            ? section
-            : section?.text || ""
-      )
-      .join("\n")
-      .slice(
-        0,
-        30000
-      )
+  const normalized =
+    String(
+      unit || ""
+    )
       .toLowerCase();
 
 
   if (
-    /\bconsolidated\b/.test(
-      combined
-    )
-  ) {
-
-    return "Consolidated";
-  }
-
-
-  if (
-    /\bstandalone\b/.test(
-      combined
-    )
-  ) {
-
-    return "Standalone";
-  }
-
-
-  return "Unknown";
-}
-
-
-/* ============================================================
-   13I. FINANCIAL UNIT DETECTION
-   ============================================================ */
-function detectFinancialUnit(section) {
-
-  const text =
-    typeof section === "string"
-      ? section
-      : section?.text || "";
-
-
-  if (!text) {
-    return null;
-  }
-
-
-  /*
-   * Unit declarations normally occur around the statement
-   * heading/header. Search a generous window but do not infer
-   * a unit merely because words such as "million" occur in
-   * narrative text elsewhere in the annual report.
-   */
-
-  const sample =
-    String(text)
-      .slice(0, 50000)
-      .replace(/\u00a0/g, " ")
-      .replace(/[ \t]+/g, " ");
-
-
-  const patterns = [
-
-    /* ======================================================
-       CRORE
-       ====================================================== */
-
-    /\b(?:inr|rs\.?|rupees?|indian rupees?)\s*(?:in\s+)?crores?\b/i,
-
-    /₹\s*(?:in\s+)?crores?\b/i,
-
-    /\b(?:amounts?|figures?|values?)\s+(?:are\s+)?(?:stated\s+|presented\s+|expressed\s+)?(?:in\s+)?(?:inr|rs\.?|₹)?\s*crores?\b/i,
-
-    /\(\s*(?:inr|rs\.?|₹)?\s*(?:in\s+)?crores?\s*\)/i,
-
-
-    /* ======================================================
-       MILLION
-       ====================================================== */
-
-    /\b(?:inr|rs\.?|rupees?|indian rupees?)\s*(?:in\s+)?millions?\b/i,
-
-    /₹\s*(?:in\s+)?millions?\b/i,
-
-    /\b(?:amounts?|figures?|values?)\s+(?:are\s+)?(?:stated\s+|presented\s+|expressed\s+)?(?:in\s+)?(?:inr|rs\.?|₹)?\s*millions?\b/i,
-
-    /\(\s*(?:inr|rs\.?|₹)?\s*(?:in\s+)?millions?\s*\)/i,
-
-    /\b(?:inr|rs\.?|₹)\s*(?:mn|mio)\b/i,
-
-
-    /* ======================================================
-       LAKH
-       ====================================================== */
-
-    /\b(?:inr|rs\.?|rupees?|indian rupees?)\s*(?:in\s+)?(?:lakhs?|lacs?)\b/i,
-
-    /₹\s*(?:in\s+)?(?:lakhs?|lacs?)\b/i,
-
-    /\b(?:amounts?|figures?|values?)\s+(?:are\s+)?(?:stated\s+|presented\s+|expressed\s+)?(?:in\s+)?(?:inr|rs\.?|₹)?\s*(?:lakhs?|lacs?)\b/i,
-
-    /\(\s*(?:inr|rs\.?|₹)?\s*(?:in\s+)?(?:lakhs?|lacs?)\s*\)/i,
-
-
-    /* ======================================================
-       BILLION
-       ====================================================== */
-
-    /\b(?:inr|rs\.?|rupees?|indian rupees?)\s*(?:in\s+)?billions?\b/i,
-
-    /₹\s*(?:in\s+)?billions?\b/i,
-
-    /\b(?:amounts?|figures?|values?)\s+(?:are\s+)?(?:stated\s+|presented\s+|expressed\s+)?(?:in\s+)?(?:inr|rs\.?|₹)?\s*billions?\b/i,
-
-    /\(\s*(?:inr|rs\.?|₹)?\s*(?:in\s+)?billions?\s*\)/i,
-
-    /\b(?:inr|rs\.?|₹)\s*bn\b/i
-
-  ];
-
-
-  /*
-   * Keep the return value explicitly tied to each group.
-   */
-
-  for (let i = 0; i < patterns.length; i++) {
-
-    if (!patterns[i].test(sample)) {
-      continue;
-    }
-
-
-    if (i <= 3) {
-      return "INR crore";
-    }
-
-
-    if (i <= 8) {
-      return "INR million";
-    }
-
-
-    if (i <= 12) {
-      return "INR lakh";
-    }
-
-
-    return "INR billion";
-  }
-
-
-  /* ========================================================
-     SECOND PASS — LINE-BASED UNIT DECLARATIONS
-     ========================================================
-
-     Handles pdf-parse output such as:
-
-     ₹
-     in million
-
-     or:
-
-     INR
-     Million
-
-     without treating arbitrary narrative mentions of
-     "million" as the statement unit.
-     ======================================================== */
-
-  const lines =
-    sample
-      .split("\n")
-      .map(line =>
-        line
-          .replace(/\s+/g, " ")
-          .trim()
-      )
-      .filter(Boolean);
-
-
-  for (
-    let i = 0;
-    i < lines.length;
-    i++
-  ) {
-
-    const current =
-      lines[i];
-
-
-    const next =
-      lines[i + 1] || "";
-
-
-    const combined =
-      `${current} ${next}`
-        .replace(/\s+/g, " ")
-        .trim();
-
-
-    /*
-     * Require currency/unit-style context.
-     */
-
-    const hasCurrency =
-      /(?:₹|\binr\b|\brs\.?\b|\brupees?\b)/i.test(
-        combined
-      );
-
-
-    const looksLikeUnitHeader =
-      hasCurrency
-
-      ||
-
-      /\b(?:amounts?|figures?|values?)\b/i.test(
-        combined
-      );
-
-
-    if (!looksLikeUnitHeader) {
-      continue;
-    }
-
-
-    if (
-      /\bcrores?\b/i.test(
-        combined
-      )
-    ) {
-
-      return "INR crore";
-    }
-
-
-    if (
-      /\b(?:millions?|mn|mio)\b/i.test(
-        combined
-      )
-    ) {
-
-      return "INR million";
-    }
-
-
-    if (
-      /\b(?:lakhs?|lacs?)\b/i.test(
-        combined
-      )
-    ) {
-
-      return "INR lakh";
-    }
-
-
-    if (
-      /\b(?:billions?|bn)\b/i.test(
-        combined
-      )
-    ) {
-
-      return "INR billion";
-    }
-
-  }
-
-
-  /*
-   * IMPORTANT:
-   *
-   * Never default to crore.
-   *
-   * An unknown unit must remain null because interpreting
-   * INR million as INR crore would create a 10× error.
-   */
-
-  return null;
-}
-
-
-/* ============================================================
-   13J. CONVERSION TO INR CRORE
-   ============================================================ */
-
-function monetaryCroreFactor(
-  sourceUnit
-) {
-
-  const unit =
-    String(
-      sourceUnit || ""
-    )
-      .toLowerCase()
-      .trim();
-
-
-  if (
-    unit.includes(
+    normalized.includes(
       "crore"
     )
   ) {
 
-    return 1;
+    return number;
+
   }
 
 
   if (
-    unit.includes(
+    normalized.includes(
       "million"
     )
   ) {
 
-    return 0.1;
+    return number / 10;
+
   }
 
 
   if (
-    unit.includes(
+    normalized.includes(
       "lakh"
     )
   ) {
 
-    return 0.01;
+    return number / 100;
+
   }
 
 
   if (
-    unit.includes(
+    normalized.includes(
       "billion"
     )
   ) {
 
-    return 100;
+    return number * 100;
+
   }
 
 
   return null;
+
 }
 
 
 /* ============================================================
-   13K. LABEL NORMALIZATION
+   13H. FINANCIAL YEAR HELPERS
    ============================================================ */
 
-function normalizeLabelText(
-  value
+function financialYearFromEndYear(
+  year
 ) {
 
-  return String(
-    value || ""
-  )
-    .toLowerCase()
-    .replace(/&/g, "and")
-    .replace(/[’']/g, "")
-    .replace(/[^a-z0-9 ]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
+  const endYear =
+    Number(year);
 
 
-/* ============================================================
-   13L. MATCH FINANCIAL LABEL
-   ============================================================ */
-
-function lineMatchesLabel(
-  line,
-  labels
-) {
-
-  const normalizedLine =
-    normalizeLabelText(
-      line
-    );
-
-
-  return labels.some(
-    label => {
-
-      const normalizedLabel =
-        normalizeLabelText(
-          label
-        );
-
-
-      if (!normalizedLabel) {
-
-        return false;
-      }
-
-
-      return (
-        normalizedLine ===
-          normalizedLabel
-
-        ||
-
-        normalizedLine.startsWith(
-          `${normalizedLabel} `
-        )
-
-        ||
-
-        normalizedLine.includes(
-          ` ${normalizedLabel} `
-        )
-
-        ||
-
-        normalizedLine.endsWith(
-          ` ${normalizedLabel}`
-        )
-      );
-
-    }
-  );
-}
-
-
-/* ============================================================
-   13M. FIND STATEMENT ROW
-   ============================================================ */
-
-function findStatementRow(
-  section,
-  labels
-) {
-
-  const text =
-    typeof section === "string"
-      ? section
-      : section?.text || "";
-
-
-  if (!text) {
+  if (
+    !Number.isFinite(endYear) ||
+    endYear < 1900 ||
+    endYear > 2200
+  ) {
 
     return null;
+
   }
 
 
-  const lines =
-    text
-      .split("\n")
-      .map(
-        line =>
-          line
-            .replace(
-              /\s+/g,
-              " "
-            )
-            .trim()
-      )
-      .filter(Boolean);
+  return (
+    `FY${endYear - 1}-` +
+    String(endYear).slice(-2)
+  );
+
+}
 
 
-  for (
-    let index = 0;
-    index < lines.length;
-    index++
-  ) {
+function normalizeYearToken(token) {
 
-    const line =
-      lines[index];
-
-
-    if (
-      !lineMatchesLabel(
-        line,
-        labels
-      )
-    ) {
-
-      continue;
-    }
+  const text =
+    String(
+      token || ""
+    )
+      .trim();
 
 
-    /*
-     * Current line.
-     */
+  /*
+   * 2025-26
+   */
 
-    let numbers =
-      extractAccountingNumbers(
-        line
-      );
-
-
-    /*
-     * Some PDFs separate label and values.
-     *
-     * Inspect up to the next two lines, but only
-     * if the matched line contains no useful amount.
-     */
-
-    if (
-      !numbers.length
-    ) {
-
-      for (
-        let offset = 1;
-        offset <= 2;
-        offset++
-      ) {
-
-        if (
-          index + offset >=
-          lines.length
-        ) {
-
-          break;
-        }
+  let match =
+    text.match(
+      /\b(20\d{2})-(\d{2})\b/
+    );
 
 
-        const next =
-          lines[
-            index + offset
-          ];
+  if (match) {
+
+    return Number(
+      `${String(match[1]).slice(0, 2)}${match[2]}`
+    );
+
+  }
 
 
-        const nextNumbers =
-          extractAccountingNumbers(
-            next
-          );
+  /*
+   * FY2025-26
+   */
+
+  match =
+    text.match(
+      /\bFY\s*(20\d{2})-(\d{2})\b/i
+    );
 
 
-        if (
-          nextNumbers.length
-        ) {
+  if (match) {
 
-          numbers =
-            nextNumbers;
+    return Number(
+      `${String(match[1]).slice(0, 2)}${match[2]}`
+    );
 
-          break;
-        }
-
-      }
-
-    }
+  }
 
 
-    if (
-      numbers.length
-    ) {
+  /*
+   * 31st March, 2026
+   */
 
-      return {
+  match =
+    text.match(
+      /\b31(?:st)?\s+March[,]?\s+(20\d{2})\b/i
+    );
 
-        line,
 
-        numbers:
-          numbers.map(
-            item =>
-              item.value
-          ),
+  if (match) {
 
-        rawNumbers:
-          numbers.map(
-            item =>
-              item.raw
-          ),
+    return Number(
+      match[1]
+    );
 
-        lineIndex:
-          index
+  }
 
-      };
-    }
+
+  /*
+   * Generic year.
+   */
+
+  match =
+    text.match(
+      /\b(20\d{2})\b/
+    );
+
+
+  if (match) {
+
+    return Number(
+      match[1]
+    );
 
   }
 
 
   return null;
+
 }
 
 
 /* ============================================================
-   13N. REMOVE LIKELY NOTE NUMBER
+   13I. DETECT COMPARATIVE YEAR PAIR
    ============================================================ */
 
-function removeLikelyNoteNumber(
-  values
-) {
+function detectYearPair(text) {
 
-  if (
-    !Array.isArray(values)
-  ) {
-
-    return [];
-  }
-
-
-  const clean =
-    values.filter(
-      Number.isFinite
+  const source =
+    String(
+      text || ""
     );
-
-
-  if (
-    clean.length >= 3
-  ) {
-
-    const first =
-      clean[0];
-
-
-    /*
-     * Statement format commonly:
-     *
-     * Revenue    25    12345    10987
-     *
-     * 25 = note reference.
-     */
-
-    if (
-      Number.isInteger(first) &&
-      first >= 1 &&
-      first <= 500
-    ) {
-
-      return clean.slice(1);
-    }
-
-  }
-
-
-  return clean;
-}
-
-
-/* ============================================================
-   13O. CURRENT + COMPARATIVE VALUES
-   ============================================================ */
-
-function extractCurrentAndPrevious(
-  section,
-  labels
-) {
-
-  const row =
-    findStatementRow(
-      section,
-      labels
-    );
-
-
-  if (!row) {
-
-    return {
-
-      current:
-        null,
-
-      previous:
-        null,
-
-      evidence:
-        null
-
-    };
-  }
-
-
-  const values =
-    removeLikelyNoteNumber(
-      row.numbers
-    );
-
-
-  if (
-    !values.length
-  ) {
-
-    return {
-
-      current:
-        null,
-
-      previous:
-        null,
-
-      evidence:
-        row.line
-
-    };
-  }
-
-
-  return {
-
-    current:
-      values[0] ??
-      null,
-
-    previous:
-      values[1] ??
-      null,
-
-    evidence:
-      row.line
-
-  };
-}
-
-
-/* ============================================================
-   13P. DETECT STATEMENT YEARS
-   ============================================================ */
-
-function detectStatementYears(
-  ...sections
-) {
-
-  const text =
-    sections
-      .map(
-        section =>
-          typeof section === "string"
-            ? section
-            : section?.text || ""
-      )
-      .join("\n")
-      .slice(
-        0,
-        60000
-      );
-
-
-  const years =
-    [];
 
 
   /*
-   * Plain statement column years:
+   * Strongest format:
    *
-   * 2025 2024
+   * 2025-26 2024-25
    */
 
-  for (
-    const match
-    of text.matchAll(
-      /\b(20\d{2})\b/g
-    )
-  ) {
-
-    const year =
-      Number(
-        match[1]
-      );
-
-
-    if (
-      year >= 2000 &&
-      year <= 2200 &&
-      !years.includes(year)
-    ) {
-
-      years.push(
-        year
-      );
-    }
-
-  }
-
-
-  /*
-   * Do NOT simply use Math.max over the whole report.
-   *
-   * Statement sections can contain note references
-   * mentioning future years.
-   */
-
-  return years.slice(
-    0,
-    10
-  );
-}
-
-
-/* ============================================================
-   13Q. BEST CURRENT/PREVIOUS YEAR PAIR
-   ============================================================ */
-
-function chooseStatementYearPair(
-  profitLoss,
-  balanceSheet,
-  cashFlow
-) {
-
-  const sections = [
-    profitLoss,
-    balanceSheet,
-    cashFlow
-  ];
-
-
-  const yearCounts =
-    new Map();
-
-
-  for (
-    const section
-    of sections
-  ) {
-
-    const text =
-      typeof section === "string"
-        ? section
-        : section?.text || "";
-
-
-    /*
-     * Focus strongly on the beginning of each
-     * statement where column headers occur.
-     */
-
-    const header =
-      text.slice(
-        0,
-        10000
-      );
-
-
-    for (
-      const match
-      of header.matchAll(
-        /\b(20\d{2})\b/g
-      )
-    ) {
-
-      const year =
-        Number(
-          match[1]
-        );
-
-
-      if (
-        year < 2000 ||
-        year > 2200
-      ) {
-
-        continue;
-      }
-
-
-      yearCounts.set(
-        year,
-        (
-          yearCounts.get(year) ||
-          0
-        ) +
-        1
-      );
-
-    }
-
-  }
-
-
-  const ranked =
+  const fyPairs =
     [
-      ...yearCounts.entries()
-    ]
-      .sort(
-        (
-          [yearA, countA],
-          [yearB, countB]
-        ) => {
-
-          if (
-            countA !== countB
-          ) {
-
-            return countB -
-              countA;
-          }
-
-
-          return yearB -
-            yearA;
-
-        }
+      ...source.matchAll(
+        /\b(20\d{2})-(\d{2})\s+(20\d{2})-(\d{2})\b/g
       )
-      .map(
-        ([year]) =>
-          year
-      );
+    ];
+
+
+  if (
+    fyPairs.length
+  ) {
+
+    const match =
+      fyPairs[
+        fyPairs.length - 1
+      ];
+
+
+    return [
+
+      Number(
+        `${String(match[1]).slice(0, 2)}${match[2]}`
+      ),
+
+      Number(
+        `${String(match[3]).slice(0, 2)}${match[4]}`
+      )
+
+    ];
+
+  }
 
 
   /*
-   * Prefer consecutive years.
+   * Balance-sheet format:
+   *
+   * As at
+   * 31st March, 2026
+   * As at
+   * 31st March, 2025
    */
 
-  for (
-    const year
-    of ranked
-  ) {
-
-    if (
-      ranked.includes(
-        year - 1
+  const marchYears =
+    [
+      ...source.matchAll(
+        /31(?:st)?\s+March[,]?\s+(20\d{2})/gi
       )
-    ) {
-
-      return {
-
-        currentYear:
-          year,
-
-        previousYear:
-          year - 1
-
-      };
-    }
-
-  }
-
-
-  if (
-    ranked.length >= 2
-  ) {
-
-    const sorted =
-      [
-        ...ranked
-      ].sort(
-        (a, b) =>
-          b - a
+    ]
+      .map(
+        match =>
+          Number(
+            match[1]
+          )
       );
 
 
-    return {
-
-      currentYear:
-        sorted[0],
-
-      previousYear:
-        sorted[1]
-
-    };
-  }
-
-
   if (
-    ranked.length === 1
+    marchYears.length >= 2
   ) {
 
-    return {
+    return marchYears.slice(
+      -2
+    );
 
-      currentYear:
-        ranked[0],
-
-      previousYear:
-        null
-
-    };
   }
 
 
-  return {
+  return [];
 
-    currentYear:
-      null,
-
-    previousYear:
-      null
-
-  };
 }
 
 
 /* ============================================================
-   13R. COMPANY NAME
+   13J. COMPANY NAME
    ============================================================ */
 
 function detectCompanyName(
@@ -3731,46 +2782,25 @@ function detectCompanyName(
   info = {}
 ) {
 
-  const metadataCandidates = [
-
-    info?.Title,
-
-    info?.title,
-
-    info?.Subject,
-
-    info?.subject
-
-  ];
+  const metadata =
+    String(
+      info?.Title ||
+      info?.title ||
+      ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
 
 
-  for (
-    const candidate
-    of metadataCandidates
+  if (
+    metadata &&
+    metadata.length <= 180 &&
+    !/^(annual report|report|document|untitled)$/i.test(
+      metadata
+    )
   ) {
 
-    const value =
-      String(
-        candidate || ""
-      )
-        .replace(
-          /\s+/g,
-          " "
-        )
-        .trim();
-
-
-    if (
-      value &&
-      value.length >= 3 &&
-      value.length <= 180 &&
-      !/^(annual report|annual-report|report|document|untitled)$/i.test(
-        value
-      )
-    ) {
-
-      return value;
-    }
+    return metadata;
 
   }
 
@@ -3783,79 +2813,139 @@ function detectCompanyName(
       .map(
         line =>
           line
-            .replace(
-              /\s+/g,
-              " "
-            )
+            .replace(/\s+/g, " ")
             .trim()
       )
       .filter(Boolean)
       .slice(
         0,
-        250
+        200
       );
 
 
   /*
-   * Strong legal-name candidates.
+   * Prefer formal corporate names.
    */
 
-  const companyPatterns = [
-
-    /\b[A-Z][A-Za-z0-9&.,'() -]{2,120}\s+Limited\b/,
-
-    /\b[A-Z][A-Za-z0-9&.,'() -]{2,120}\s+Ltd\.?\b/,
-
-    /\b[A-Z][A-Za-z0-9&.,'() -]{2,120}\s+Private Limited\b/,
-
-    /\b[A-Z][A-Za-z0-9&.,'() -]{2,120}\s+Corporation\b/
-
-  ];
-
-
-  for (
-    const line
-    of lines
-  ) {
-
-    for (
-      const pattern
-      of companyPatterns
-    ) {
-
-      const match =
-        line.match(
-          pattern
-        );
+  const company =
+    lines.find(
+      line =>
+        /\b(?:Limited|Ltd\.?|Corporation|Industries|Technologies|Bank)\b/i.test(
+          line
+        ) &&
+        line.length >= 4 &&
+        line.length <= 160 &&
+        !/\bannual report\b/i.test(
+          line
+        )
+    );
 
 
-      if (
-        match?.[0]
-      ) {
+  return company ||
+    "Unknown company";
 
-        return match[0]
-          .replace(
-            /\s+/g,
-            " "
-          )
-          .trim();
-      }
-
-    }
-
-  }
-
-
-  return "Unknown company";
 }
 
 
 /* ============================================================
-   13S. LISTING IDENTITY — ONLY EXPLICIT EVIDENCE
+   13K. CONSOLIDATED CONTEXT SCORE
    ============================================================ */
 
-function detectListingIdentity(
-  text
+function contextScore(
+  text,
+  index
+) {
+
+  const before =
+    String(text)
+      .slice(
+        Math.max(
+          0,
+          index - 6000
+        ),
+        index
+      )
+      .toLowerCase();
+
+
+  let score =
+    0;
+
+
+  /*
+   * Strong consolidated evidence.
+   */
+
+  if (
+    before.lastIndexOf(
+      "consolidated financial statements"
+    ) >
+    before.lastIndexOf(
+      "standalone financial statements"
+    )
+  ) {
+
+    score += 100;
+
+  }
+
+
+  if (
+    before.includes(
+      "notes to the consolidated financial statements"
+    )
+  ) {
+
+    score += 50;
+
+  }
+
+
+  if (
+    before.includes(
+      "consolidated statement"
+    )
+  ) {
+
+    score += 30;
+
+  }
+
+
+  /*
+   * Penalize standalone evidence.
+   */
+
+  if (
+    before.lastIndexOf(
+      "standalone financial statements"
+    ) >
+    before.lastIndexOf(
+      "consolidated financial statements"
+    )
+  ) {
+
+    score -= 100;
+
+  }
+
+
+  return score;
+
+}
+
+
+/* ============================================================
+   13L. FIND TABLE ROW CANDIDATES
+   ============================================================ */
+
+function findMetricCandidates(
+  text,
+  labels,
+  {
+    absolute = false,
+    minimumScore = 0
+  } = {}
 ) {
 
   const source =
@@ -3864,568 +2954,1422 @@ function detectListingIdentity(
     );
 
 
-  let listingStatus =
-    "unknown";
-
-
-  /*
-   * Explicit stock-exchange / listed-equity language only.
-   */
-
-  if (
-    /\bshares?\s+(?:are\s+)?listed\s+on\b/i.test(
-      source
-    )
-
-    ||
-
-    /\blisted\s+(?:on|at)\s+(?:the\s+)?(?:national stock exchange|nse|bse|bombay stock exchange)\b/i.test(
-      source
-    )
-  ) {
-
-    listingStatus =
-      "listed";
-  }
-
-
-  else if (
-    /\bproposed\s+(?:initial public offering|ipo|listing)\b/i.test(
-      source
-    )
-  ) {
-
-    listingStatus =
-      "proposed listing";
-  }
-
-
-  /*
-   * ISIN can be safely extracted when explicitly printed.
-   */
-
-  const isinMatch =
-    source.match(
-      /\bISIN\s*[:\-]?\s*([A-Z]{2}[A-Z0-9]{9}[0-9])\b/i
-    );
-
-
-  const isin =
-    isinMatch?.[1]
-      ? isinMatch[1].toUpperCase()
-      : null;
-
-
-  let nseCode =
-    null;
-
-
-  let bseCode =
-    null;
-
-
-  /*
-   * Only explicit labelled codes.
-   */
-
-  const nseMatch =
-    source.match(
-      /\b(?:NSE\s*(?:symbol|code)|NSE)\s*[:\-]\s*([A-Z0-9._-]{1,30})\b/i
-    );
-
-
-  if (
-    nseMatch?.[1]
-  ) {
-
-    nseCode =
-      nseMatch[1]
-        .toUpperCase();
-  }
-
-
-  const bseMatch =
-    source.match(
-      /\b(?:BSE\s*(?:scrip|security)?\s*(?:code)?|BSE\s+code)\s*[:\-]\s*(\d{4,10})\b/i
-    );
-
-
-  if (
-    bseMatch?.[1]
-  ) {
-
-    bseCode =
-      bseMatch[1];
-  }
-
-
-  /*
-   * Do not infer ticker/exchange from ISIN alone.
-   */
-
-  let ticker =
-    null;
-
-
-  let exchange =
-    null;
-
-
-  if (
-    listingStatus ===
-      "listed"
-  ) {
-
-    if (
-      nseCode
-    ) {
-
-      ticker =
-        nseCode;
-
-      exchange =
-        "NSE";
-    }
-
-    else if (
-      bseCode
-    ) {
-
-      ticker =
-        bseCode;
-
-      exchange =
-        "BSE";
-    }
-
-  }
-
-
-  return {
-
-    listing_status:
-      listingStatus,
-
-    ticker,
-
-    exchange,
-
-    isin,
-
-    nse_code:
-      nseCode,
-
-    bse_code:
-      bseCode
-
-  };
-}
-
-
-/* ============================================================
-   13T. SHARES OUTSTANDING
-   ============================================================ */
-
-function extractSharesOutstanding(
-  text
-) {
-
-  const source =
-    normalizeReportText(
-      text
-    );
-
-
-  const shareSection =
-    findStatementSection(
-      source,
-      [
-        "share capital",
-        "equity share capital",
-        "issued subscribed and paid",
-        "issued, subscribed and paid",
-        "issued and paid up",
-        "issued and paid-up"
-      ],
-      {
-        type:
-          "generic",
-
-        maxLength:
-          70000
-      }
-    );
-
-
-  const section =
-    shareSection.found
-      ? shareSection.text
-      : source;
-
-
   const lines =
-    section
-      .split("\n")
-      .map(
-        line =>
-          line
-            .replace(
-              /\s+/g,
-              " "
-            )
-            .trim()
-      )
-      .filter(Boolean);
+    source.split("\n");
+
+
+  const candidates =
+    [];
+
+
+  let offset =
+    0;
 
 
   for (
-    const line
-    of lines
+    let lineIndex = 0;
+    lineIndex < lines.length;
+    lineIndex++
   ) {
 
+    const line =
+      lines[lineIndex];
+
+
+    const trimmed =
+      line.trim();
+
+
+    if (!trimmed) {
+
+      offset +=
+        line.length + 1;
+
+      continue;
+
+    }
+
+
     const lower =
-      line.toLowerCase();
+      trimmed.toLowerCase();
 
 
-    /*
-     * Reject obvious authorized-capital lines.
-     */
+    const labelMatched =
+      labels.some(
+        label => {
 
-    if (
-      /\bauthori[sz]ed\b/.test(
-        lower
-      )
-    ) {
+          if (
+            label instanceof RegExp
+          ) {
+
+            return label.test(
+              trimmed
+            );
+
+          }
+
+
+          return lower.includes(
+            String(label)
+              .toLowerCase()
+          );
+
+        }
+      );
+
+
+    if (!labelMatched) {
+
+      offset +=
+        line.length + 1;
 
       continue;
+
     }
 
 
     /*
-     * Prefer issued/subscribed/paid-up/outstanding.
+     * Ignore obvious narrative sentences.
      */
 
     if (
-      !(
-        /\bissued\b/.test(lower) ||
-        /\bsubscribed\b/.test(lower) ||
-        /\bpaid[- ]?up\b/.test(lower) ||
-        /\boutstanding\b/.test(lower)
-      )
+      trimmed.length > 400
     ) {
+
+      offset +=
+        line.length + 1;
 
       continue;
-    }
-
-
-    /*
-     * Crore shares.
-     */
-
-    let match =
-      line.match(
-        /(\d[\d,]*(?:\.\d+)?)\s+crores?\s+(?:equity\s+)?shares?\b/i
-      );
-
-
-    if (
-      match
-    ) {
-
-      const value =
-        finiteFinancialNumber(
-          match[1]
-        );
-
-
-      if (
-        value !== null &&
-        value > 0
-      ) {
-
-        return {
-
-          value,
-
-          unit:
-            "crore shares",
-
-          evidence:
-            line
-
-        };
-      }
 
     }
 
 
     /*
-     * Lakh shares.
+     * Build a small local row window because pdf-parse may
+     * move amounts onto the next line.
      */
 
-    match =
-      line.match(
-        /(\d[\d,]*(?:\.\d+)?)\s+lakhs?\s+(?:equity\s+)?shares?\b/i
-      );
-
-
-    if (
-      match
-    ) {
-
-      const value =
-        finiteFinancialNumber(
-          match[1]
-        );
-
-
-      if (
-        value !== null &&
-        value > 0
-      ) {
-
-        return {
-
-          value:
-            value /
-            100,
-
-          unit:
-            "crore shares",
-
-          evidence:
-            line
-
-        };
-      }
-
-    }
-
-
-    /*
-     * Million shares.
-     */
-
-    match =
-      line.match(
-        /(\d[\d,]*(?:\.\d+)?)\s+millions?\s+(?:equity\s+)?shares?\b/i
-      );
-
-
-    if (
-      match
-    ) {
-
-      const value =
-        finiteFinancialNumber(
-          match[1]
-        );
-
-
-      if (
-        value !== null &&
-        value > 0
-      ) {
-
-        return {
-
-          value:
-            value /
-            10,
-
-          unit:
-            "crore shares",
-
-          evidence:
-            line
-
-        };
-      }
-
-    }
-
-
-    /*
-     * Billion shares.
-     */
-
-    match =
-      line.match(
-        /(\d[\d,]*(?:\.\d+)?)\s+billions?\s+(?:equity\s+)?shares?\b/i
-      );
-
-
-    if (
-      match
-    ) {
-
-      const value =
-        finiteFinancialNumber(
-          match[1]
-        );
-
-
-      if (
-        value !== null &&
-        value > 0
-      ) {
-
-        return {
-
-          value:
-            value *
-            100,
-
-          unit:
-            "crore shares",
-
-          evidence:
-            line
-
-        };
-      }
-
-    }
-
-
-    /*
-     * Absolute share count.
-     *
-     * Require at least 6 digits after comma removal
-     * to avoid confusing face value or note numbers
-     * with shares outstanding.
-     */
-
-    const absoluteMatches =
+    const rowWindow =
       [
-        ...line.matchAll(
-          /(\d[\d,]{5,})\s+(?:equity\s+)?shares?\b/gi
+        trimmed,
+        lines[lineIndex + 1] || "",
+        lines[lineIndex + 2] || ""
+      ].join(" ");
+
+
+    let numberObjects =
+      extractAccountingNumbers(
+        trimmed
+      );
+
+
+    if (
+      numberObjects.length < 2
+    ) {
+
+      numberObjects =
+        extractAccountingNumbers(
+          rowWindow
+        );
+
+    }
+
+
+    let values =
+      numberObjects.map(
+        item =>
+          item.value
+      );
+
+
+    values =
+      removeLikelyNoteNumber(
+        values,
+        trimmed
+      );
+
+
+    /*
+     * A comparative statement row normally needs two
+     * financial values.
+     */
+
+    if (
+      values.length < 1
+    ) {
+
+      offset +=
+        line.length + 1;
+
+      continue;
+
+    }
+
+
+    /*
+     * Determine unit and years from the text preceding row.
+     */
+
+    const before =
+      source.slice(
+        Math.max(
+          0,
+          offset - 10000
+        ),
+        offset
+      );
+
+
+    const unit =
+      detectFinancialUnit(
+        before.slice(
+          -5000
         )
-      ];
+      );
+
+
+    const years =
+      detectYearPair(
+        before.slice(
+          -8000
+        )
+      );
+
+
+    let score =
+      contextScore(
+        source,
+        offset
+      );
+
+
+    if (unit) {
+
+      score += 10;
+
+    }
+
+
+    if (
+      years.length >= 2
+    ) {
+
+      score += 20;
+
+    }
+
+
+    /*
+     * Statement/notes lines are preferable to narrative
+     * references elsewhere in the report.
+     */
+
+    const context =
+      before
+        .slice(-3000)
+        .toLowerCase();
+
+
+    if (
+      /\b(?:statement|notes?)\b/.test(
+        context
+      )
+    ) {
+
+      score += 10;
+
+    }
+
+
+    if (
+      /\bannual report\b/.test(
+        context
+      )
+    ) {
+
+      score += 2;
+
+    }
+
+
+    if (
+      score >= minimumScore
+    ) {
+
+      candidates.push({
+
+        line:
+          trimmed,
+
+        values:
+          values.slice(0, 4),
+
+        years,
+
+        unit,
+
+        score,
+
+        index:
+          offset,
+
+        absolute
+
+      });
+
+    }
+
+
+    offset +=
+      line.length + 1;
+
+  }
+
+
+  return candidates.sort(
+    (a, b) =>
+      b.score -
+      a.score
+  );
+
+}
+
+
+/* ============================================================
+   13M. ADD CANDIDATE TO YEAR RECORDS
+   ============================================================ */
+
+function applyMetricCandidates(
+  records,
+  metric,
+  candidates,
+  {
+    absolute = false,
+    overwrite = false
+  } = {}
+) {
+
+  for (
+    const candidate
+    of candidates
+  ) {
+
+    if (
+      !candidate.unit ||
+      candidate.years.length < 1
+    ) {
+
+      continue;
+
+    }
+
+
+    const usableValues =
+      candidate.values;
+
+
+    const count =
+      Math.min(
+        candidate.years.length,
+        usableValues.length,
+        2
+      );
 
 
     for (
-      const absoluteMatch
-      of absoluteMatches
+      let i = 0;
+      i < count;
+      i++
     ) {
 
-      const value =
-        finiteFinancialNumber(
-          absoluteMatch[1]
+      const year =
+        Number(
+          candidate.years[i]
         );
 
 
       if (
-        value !== null &&
-        value >= 100000
+        !Number.isFinite(year) ||
+        year < 2000 ||
+        year > 2200
       ) {
 
-        return {
+        continue;
 
-          value:
-            value /
-            10000000,
+      }
 
-          unit:
-            "crore shares",
 
-          evidence:
-            line
+      let value =
+        convertToCrore(
+          usableValues[i],
+          candidate.unit
+        );
 
-        };
+
+      if (
+        value === null
+      ) {
+
+        continue;
+
+      }
+
+
+      if (absolute) {
+
+        value =
+          Math.abs(
+            value
+          );
+
+      }
+
+
+      if (
+        !records.has(
+          year
+        )
+      ) {
+
+        records.set(
+          year,
+          createFinancialRecord(
+            year
+          )
+        );
+
+      }
+
+
+      const record =
+        records.get(
+          year
+        );
+
+
+      const existingScore =
+        record._scores[metric] ??
+        -Infinity;
+
+
+      if (
+        overwrite ||
+        record[metric] === null ||
+        candidate.score >
+          existingScore
+      ) {
+
+        record[metric] =
+          value;
+
+
+        record._scores[metric] =
+          candidate.score;
+
+
+        record._evidence[metric] =
+          candidate.line;
+
+
+        record._units.add(
+          candidate.unit
+        );
+
       }
 
     }
 
   }
 
+}
+
+
+/* ============================================================
+   13N. FINANCIAL RECORD
+   ============================================================ */
+
+function createFinancialRecord(
+  year
+) {
 
   return {
 
-    value:
+    company:
       null,
 
-    unit:
+    financial_year:
+      financialYearFromEndYear(
+        year
+      ),
+
+    year,
+
+    statement_basis:
+      "Consolidated",
+
+    source_unit:
+      "INR crore",
+
+    original_source_unit:
       null,
 
-    evidence:
-      null
+    revenue:
+      null,
+
+    ebitda:
+      null,
+
+    cogs:
+      null,
+
+    operating_income:
+      null,
+
+    net_income:
+      null,
+
+    total_assets:
+      null,
+
+    current_assets:
+      null,
+
+    current_liabilities:
+      null,
+
+    total_debt:
+      null,
+
+    cash:
+      null,
+
+    total_equity:
+      null,
+
+    operating_cash_flow:
+      null,
+
+    capex:
+      null,
+
+    inventory:
+      null,
+
+    accounts_receivable:
+      null,
+
+    accounts_payable:
+      null,
+
+    finance_cost:
+      null,
+
+    shares_outstanding:
+      null,
+
+    shares_outstanding_unit:
+      null,
+
+    source_pages:
+      [],
+
+    extraction_notes:
+      "",
+
+    _scores:
+      {},
+
+    _evidence:
+      {},
+
+    _units:
+      new Set()
 
   };
+
 }
 
 
 /* ============================================================
-   13U. MONEY VALUE HELPER
+   13O. SHARES OUTSTANDING
    ============================================================ */
 
-function normalizeMoneyValue(
-  raw,
-  factor
+function extractSharesByYear(
+  text,
+  records
 ) {
 
-  if (
-    raw === null ||
-    factor === null
-  ) {
-
-    return null;
-  }
-
-
-  const result =
-    raw *
-    factor;
-
-
-  return Number.isFinite(
-    result
-  )
-    ? result
-    : null;
-}
-
-
-/* ============================================================
-   13V. EXTRACT METRIC PAIR
-   ============================================================ */
-
-function extractMetricPair(
-  section,
-  labels,
-  factor
-) {
-
-  const values =
-    extractCurrentAndPrevious(
-      section,
-      labels
+  const candidates =
+    findMetricCandidates(
+      text,
+      [
+        /equity shares.*issued/i,
+        /issued.*equity shares/i,
+        /subscribed.*equity shares/i,
+        /paid[- ]?up.*equity shares/i
+      ],
+      {
+        minimumScore:
+          50
+      }
     );
 
 
-  return {
+  for (
+    const candidate
+    of candidates
+  ) {
 
-    current:
-      normalizeMoneyValue(
-        values.current,
-        factor
-      ),
+    const line =
+      candidate.line;
 
-    previous:
-      normalizeMoneyValue(
-        values.previous,
-        factor
-      ),
 
-    evidence:
-      values.evidence
+    /*
+     * Explicit absolute share count only.
+     *
+     * We intentionally do not use share-capital monetary
+     * amounts as number of shares.
+     */
 
-  };
+    const match =
+      line.match(
+        /(\d[\d,]{5,})\s+(?:equity\s+)?shares?/i
+      );
+
+
+    if (!match) {
+
+      continue;
+
+    }
+
+
+    const shares =
+      finiteFinancialNumber(
+        match[1]
+      );
+
+
+    if (
+      shares === null ||
+      shares <= 0
+    ) {
+
+      continue;
+
+    }
+
+
+    const croreShares =
+      shares /
+      10000000;
+
+
+    const year =
+      candidate.years[0];
+
+
+    if (
+      !Number.isFinite(year)
+    ) {
+
+      continue;
+
+    }
+
+
+    if (
+      !records.has(
+        year
+      )
+    ) {
+
+      records.set(
+        year,
+        createFinancialRecord(
+          year
+        )
+      );
+
+    }
+
+
+    const record =
+      records.get(
+        year
+      );
+
+
+    record.shares_outstanding =
+      croreShares;
+
+
+    record.shares_outstanding_unit =
+      "crore shares";
+
+
+    record._evidence.shares_outstanding =
+      line;
+
+  }
+
 }
 
 
 /* ============================================================
-   13W. MAIN LOCAL FINANCIAL EXTRACTOR
+   13P. DERIVED EBITDA — CONSERVATIVE
+   ============================================================ */
+
+function deriveEbitda(
+  records,
+  text
+) {
+
+  /*
+   * First look for explicitly reported EBITDA.
+   */
+
+  applyMetricCandidates(
+
+    records,
+
+    "ebitda",
+
+    findMetricCandidates(
+      text,
+      [
+        /\bebitda\b/i,
+        /earnings before interest.*depreciation/i
+      ],
+      {
+        minimumScore:
+          20
+      }
+    )
+
+  );
+
+
+  /*
+   * DO NOT manufacture EBITDA from incomplete information.
+   *
+   * If explicit EBITDA is not present, it stays null.
+   */
+
+}
+
+
+/* ============================================================
+   13Q. EXTRACT DASHBOARD METRICS
+   ============================================================ */
+
+function extractDashboardMetrics(
+  text,
+  records
+) {
+
+  /* ----------------------------------------------------------
+     REVENUE
+     ---------------------------------------------------------- */
+
+  applyMetricCandidates(
+
+    records,
+
+    "revenue",
+
+    findMetricCandidates(
+      text,
+      [
+        /^revenue from operations\b/i,
+        /^revenue from operation\b/i
+      ],
+      {
+        minimumScore:
+          50
+      }
+    )
+
+  );
+
+
+  /*
+   * Only use Total Revenue when Revenue From Operations
+   * wasn't found.
+   */
+
+  applyMetricCandidates(
+
+    records,
+
+    "revenue",
+
+    findMetricCandidates(
+      text,
+      [
+        /^total revenue\b/i
+      ],
+      {
+        minimumScore:
+          50
+      }
+    )
+
+  );
+
+
+  /* ----------------------------------------------------------
+     OPERATING PROFIT / EBIT
+     ---------------------------------------------------------- */
+
+  applyMetricCandidates(
+
+    records,
+
+    "operating_income",
+
+    findMetricCandidates(
+      text,
+      [
+        /^operating profit\b/i,
+        /^profit from operations\b/i,
+        /^earnings before interest and tax\b/i,
+        /^ebit\b/i
+      ],
+      {
+        minimumScore:
+          30
+      }
+    )
+
+  );
+
+
+  /* ----------------------------------------------------------
+     NET PROFIT
+     ---------------------------------------------------------- */
+
+  applyMetricCandidates(
+
+    records,
+
+    "net_income",
+
+    findMetricCandidates(
+      text,
+      [
+        /^profit for the year\b/i,
+        /^profit for the period\b/i,
+        /^net profit\b/i,
+        /^profit after tax\b/i
+      ],
+      {
+        minimumScore:
+          50
+      }
+    )
+
+  );
+
+
+  /* ----------------------------------------------------------
+     FINANCE COST
+     ---------------------------------------------------------- */
+
+  applyMetricCandidates(
+
+    records,
+
+    "finance_cost",
+
+    findMetricCandidates(
+      text,
+      [
+        /^finance costs?\b/i,
+        /^finance expenses?\b/i
+      ],
+      {
+        minimumScore:
+          40
+      }
+    )
+
+  );
+
+
+  /* ----------------------------------------------------------
+     TOTAL ASSETS
+     ---------------------------------------------------------- */
+
+  applyMetricCandidates(
+
+    records,
+
+    "total_assets",
+
+    findMetricCandidates(
+      text,
+      [
+        /^total assets\b/i
+      ],
+      {
+        minimumScore:
+          70
+      }
+    )
+
+  );
+
+
+  /* ----------------------------------------------------------
+     CURRENT ASSETS
+     ---------------------------------------------------------- */
+
+  applyMetricCandidates(
+
+    records,
+
+    "current_assets",
+
+    findMetricCandidates(
+      text,
+      [
+        /^total current assets\b/i
+      ],
+      {
+        minimumScore:
+          70
+      }
+    )
+
+  );
+
+
+  /* ----------------------------------------------------------
+     CURRENT LIABILITIES
+     ---------------------------------------------------------- */
+
+  applyMetricCandidates(
+
+    records,
+
+    "current_liabilities",
+
+    findMetricCandidates(
+      text,
+      [
+        /^total current liabilities\b/i
+      ],
+      {
+        minimumScore:
+          70
+      }
+    )
+
+  );
+
+
+  /* ----------------------------------------------------------
+     EQUITY
+     ---------------------------------------------------------- */
+
+  applyMetricCandidates(
+
+    records,
+
+    "total_equity",
+
+    findMetricCandidates(
+      text,
+      [
+        /^total equity\b/i,
+        /^total shareholders['’] equity\b/i,
+        /^total equity attributable\b/i
+      ],
+      {
+        minimumScore:
+          60
+      }
+    )
+
+  );
+
+
+  /* ----------------------------------------------------------
+     CASH
+     ---------------------------------------------------------- */
+
+  applyMetricCandidates(
+
+    records,
+
+    "cash",
+
+    findMetricCandidates(
+      text,
+      [
+        /^cash and cash equivalents as per balance sheet\b/i,
+        /^cash and cash equivalents\b/i
+      ],
+      {
+        minimumScore:
+          50
+      }
+    )
+
+  );
+
+
+  /* ----------------------------------------------------------
+     INVENTORY
+     ---------------------------------------------------------- */
+
+  applyMetricCandidates(
+
+    records,
+
+    "inventory",
+
+    findMetricCandidates(
+      text,
+      [
+        /^inventories\b/i,
+        /^total inventories\b/i
+      ],
+      {
+        minimumScore:
+          50
+      }
+    )
+
+  );
+
+
+  /* ----------------------------------------------------------
+     RECEIVABLES
+     ---------------------------------------------------------- */
+
+  applyMetricCandidates(
+
+    records,
+
+    "accounts_receivable",
+
+    findMetricCandidates(
+      text,
+      [
+        /^trade receivables\b/i
+      ],
+      {
+        minimumScore:
+          50
+      }
+    )
+
+  );
+
+
+  /* ----------------------------------------------------------
+     PAYABLES
+     ---------------------------------------------------------- */
+
+  applyMetricCandidates(
+
+    records,
+
+    "accounts_payable",
+
+    findMetricCandidates(
+      text,
+      [
+        /^trade payables\b/i
+      ],
+      {
+        minimumScore:
+          50
+      }
+    )
+
+  );
+
+
+  /* ----------------------------------------------------------
+     OPERATING CASH FLOW
+     ---------------------------------------------------------- */
+
+  applyMetricCandidates(
+
+    records,
+
+    "operating_cash_flow",
+
+    findMetricCandidates(
+      text,
+      [
+        /^net cash flow from operating activities\b/i,
+        /^net cash flows from operating activities\b/i,
+        /^net cash generated from operating activities\b/i,
+        /^net cash generated by operating activities\b/i
+      ],
+      {
+        minimumScore:
+          60
+      }
+    )
+
+  );
+
+
+  /* ----------------------------------------------------------
+     CAPEX
+     ---------------------------------------------------------- */
+
+  applyMetricCandidates(
+
+    records,
+
+    "capex",
+
+    findMetricCandidates(
+      text,
+      [
+        /^expenditure for property, plant and equipment, spectrum and other intangible assets\b/i,
+        /^purchase of property, plant and equipment\b/i,
+        /^payments? for property, plant and equipment\b/i,
+        /^capital expenditure\b/i
+      ],
+      {
+        minimumScore:
+          50
+      }
+    ),
+
+    {
+      absolute:
+        true
+    }
+
+  );
+
+
+  /* ----------------------------------------------------------
+     DEBT
+     ---------------------------------------------------------- */
+
+  /*
+   * Prefer explicitly disclosed Gross Debt because simply
+   * extracting a "Borrowings" line can accidentally capture
+   * only current or only non-current borrowings.
+   */
+
+  applyMetricCandidates(
+
+    records,
+
+    "total_debt",
+
+    findMetricCandidates(
+      text,
+      [
+        /^gross debt\b/i,
+        /^total debt\b/i,
+        /^total borrowings\b/i
+      ],
+      {
+        minimumScore:
+          40
+      }
+    )
+
+  );
+
+
+  deriveEbitda(
+    records,
+    text
+  );
+
+
+  extractSharesByYear(
+    text,
+    records
+  );
+
+}
+
+
+/* ============================================================
+   13R. FILL DEBT FROM BORROWING COMPONENTS
+   ============================================================ */
+
+function deriveDebtFromBorrowings(
+  text,
+  records
+) {
+
+  const nonCurrent =
+    findMetricCandidates(
+      text,
+      [
+        /^borrowings - non-current\b/i,
+        /^borrowings non-current\b/i
+      ],
+      {
+        minimumScore:
+          50
+      }
+    );
+
+
+  const current =
+    findMetricCandidates(
+      text,
+      [
+        /^borrowings - current\b/i,
+        /^borrowings current\b/i
+      ],
+      {
+        minimumScore:
+          50
+      }
+    );
+
+
+  const temporary =
+    new Map();
+
+
+  applyMetricCandidates(
+    temporary,
+    "non_current_debt",
+    nonCurrent
+  );
+
+
+  applyMetricCandidates(
+    temporary,
+    "current_debt",
+    current
+  );
+
+
+  for (
+    const [
+      year,
+      components
+    ]
+    of temporary.entries()
+  ) {
+
+    if (
+      !records.has(
+        year
+      )
+    ) {
+
+      records.set(
+        year,
+        createFinancialRecord(
+          year
+        )
+      );
+
+    }
+
+
+    const record =
+      records.get(
+        year
+      );
+
+
+    /*
+     * Only derive debt when BOTH components are present.
+     * Otherwise we could materially understate leverage.
+     */
+
+    if (
+      record.total_debt === null &&
+      components.non_current_debt !== null &&
+      components.current_debt !== null
+    ) {
+
+      record.total_debt =
+        components.non_current_debt +
+        components.current_debt;
+
+
+      record._evidence.total_debt =
+        "Calculated from reported current and non-current borrowings.";
+
+    }
+
+  }
+
+}
+
+
+/* ============================================================
+   13S. CLEAN RECORDS
+   ============================================================ */
+
+function finalizeFinancialRecords(
+  records,
+  companyName
+) {
+
+  const dashboardFields = [
+
+    "revenue",
+    "ebitda",
+    "operating_income",
+    "net_income",
+
+    "total_assets",
+    "current_assets",
+    "current_liabilities",
+
+    "total_debt",
+    "cash",
+    "total_equity",
+
+    "operating_cash_flow",
+    "capex",
+
+    "inventory",
+    "accounts_receivable",
+    "accounts_payable",
+
+    "finance_cost",
+    "shares_outstanding"
+
+  ];
+
+
+  const rows =
+    [];
+
+
+  for (
+    const record
+    of records.values()
+  ) {
+
+    record.company =
+      companyName;
+
+
+    /*
+     * If multiple recognized source units fed this row,
+     * values are nevertheless normalized to INR crore.
+     */
+
+    record.original_source_unit =
+      record._units.size === 1
+
+        ? [...record._units][0]
+
+        : record._units.size > 1
+
+          ? "multiple reported INR units"
+
+          : null;
+
+
+    const available =
+      dashboardFields.filter(
+        field =>
+          record[field] !== null &&
+          Number.isFinite(
+            record[field]
+          )
+      );
+
+
+    /*
+     * Do not manufacture a year row merely because
+     * a date appeared in the report.
+     */
+
+    if (
+      !available.length
+    ) {
+
+      continue;
+
+    }
+
+
+    const missing =
+      dashboardFields.filter(
+        field =>
+          record[field] === null
+      );
+
+
+    const notes =
+      [];
+
+
+    notes.push(
+      "Values were extracted locally from annual-report text; no AI was used for financial extraction."
+    );
+
+
+    notes.push(
+      "Consolidated financial-statement evidence was preferred."
+    );
+
+
+    if (
+      missing.length
+    ) {
+
+      notes.push(
+        `Unsupported fields remain null: ${missing.join(", ")}.`
+      );
+
+    }
+
+
+    record.extraction_notes =
+      notes.join(" ");
+
+
+    /*
+     * Remove internal parser metadata before returning JSON.
+     */
+
+    delete record._scores;
+    delete record._evidence;
+    delete record._units;
+
+
+    rows.push(
+      record
+    );
+
+  }
+
+
+  /*
+   * Latest first.
+   */
+
+  rows.sort(
+    (a, b) =>
+      b.year -
+      a.year
+  );
+
+
+  return rows;
+
+}
+
+
+/* ============================================================
+   13T. MAIN LOCAL FINANCIAL EXTRACTOR
    ============================================================ */
 
 function extractFinancialsLocally(
@@ -4438,824 +4382,109 @@ function extractFinancialsLocally(
     );
 
 
-  if (!text) {
+  if (
+    !text
+  ) {
 
     const error =
       new Error(
-        "No searchable annual-report text is available."
+        "No readable annual-report text was available."
       );
 
     error.status = 422;
 
     throw error;
+
   }
 
-
-  /* ----------------------------------------------------------
-     FIND PROFIT AND LOSS
-     ---------------------------------------------------------- */
-
-  const profitLoss =
-    findStatementSection(
-      text,
-      [
-        "consolidated statement of profit and loss",
-        "consolidated statement of profit & loss",
-        "consolidated profit and loss account",
-        "consolidated statement of income",
-        "consolidated income statement",
-        "statement of consolidated income",
-        "statement of profit and loss",
-        "statement of profit & loss"
-      ],
-      {
-        type:
-          "profit",
-
-        maxLength:
-          90000
-      }
-    );
-
-
-  /* ----------------------------------------------------------
-     FIND BALANCE SHEET
-     ---------------------------------------------------------- */
-
-  const balanceSheet =
-    findStatementSection(
-      text,
-      [
-        "consolidated balance sheet",
-        "consolidated statement of financial position",
-        "statement of consolidated financial position",
-        "balance sheet",
-        "statement of financial position"
-      ],
-      {
-        type:
-          "balance",
-
-        maxLength:
-          90000
-      }
-    );
-
-
-  /* ----------------------------------------------------------
-     FIND CASH FLOW
-     ---------------------------------------------------------- */
-
-  const cashFlow =
-    findStatementSection(
-      text,
-      [
-        "consolidated statement of cash flows",
-        "consolidated statement of cash flow",
-        "consolidated cash flow statement",
-        "statement of cash flows",
-        "statement of cash flow",
-        "cash flow statement"
-      ],
-      {
-        type:
-          "cashflow",
-
-        maxLength:
-          100000
-      }
-    );
-
-
-  console.log(
-    "Local statement detection:",
-    {
-      profitLoss:
-        profitLoss.found,
-
-      balanceSheet:
-        balanceSheet.found,
-
-      cashFlow:
-        cashFlow.found,
-
-      profitHeading:
-        profitLoss.heading,
-
-      balanceHeading:
-        balanceSheet.heading,
-
-      cashHeading:
-        cashFlow.heading
-    }
-  );
-
-
-  /* ----------------------------------------------------------
-     STATEMENT BASIS
-     ---------------------------------------------------------- */
-
-  const statementBasis =
-    detectStatementBasis(
-      profitLoss,
-      balanceSheet,
-      cashFlow
-    );
-
-
-  /* ----------------------------------------------------------
-     UNIT
-     ---------------------------------------------------------- */
-
-  const unitCandidates = [
-
-    detectFinancialUnit(
-      profitLoss
-    ),
-
-    detectFinancialUnit(
-      balanceSheet
-    ),
-
-    detectFinancialUnit(
-      cashFlow
-    )
-
-  ].filter(Boolean);
-
-
-  /*
-   * Require a consistent unit when several
-   * statements explicitly disclose units.
-   */
-
-  const uniqueUnits =
-    [
-      ...new Set(
-        unitCandidates
-      )
-    ];
-
-
-  let sourceUnit =
-    null;
-
-
-  if (
-    uniqueUnits.length === 1
-  ) {
-
-    sourceUnit =
-      uniqueUnits[0];
-  }
-
-
-  else if (
-    uniqueUnits.length === 0
-  ) {
-
-    /*
-     * Last-resort global unit detection.
-     *
-     * This is accepted only when the document provides
-     * an explicit recognizable INR scale.
-     */
-
-    sourceUnit =
-      detectFinancialUnit(
-        text
-      );
-  }
-
-
-  const factor =
-    monetaryCroreFactor(
-      sourceUnit
-    );
-
-
-  console.log(
-    "Local financial unit:",
-    {
-      unitCandidates,
-      sourceUnit,
-      factor
-    }
-  );
-
-
-  /* ----------------------------------------------------------
-     YEARS
-     ---------------------------------------------------------- */
-
-  const yearPair =
-    chooseStatementYearPair(
-      profitLoss,
-      balanceSheet,
-      cashFlow
-    );
-
-
-  const currentYear =
-    yearPair.currentYear;
-
-
-  const previousYear =
-    yearPair.previousYear;
-
-
-  /* ----------------------------------------------------------
-     PROFIT & LOSS METRICS
-     ---------------------------------------------------------- */
-
-  const revenue =
-    extractMetricPair(
-      profitLoss,
-      [
-        "revenue from operations",
-        "revenue from operation",
-        "revenue from contracts with customers",
-        "total revenue",
-        "revenue"
-      ],
-      factor
-    );
-
-
-  const operatingIncome =
-    extractMetricPair(
-      profitLoss,
-      [
-        "operating profit",
-        "profit from operations",
-        "profit before finance costs and tax",
-        "profit before finance cost and tax",
-        "earnings before interest and tax",
-        "ebit"
-      ],
-      factor
-    );
-
-
-  const netIncome =
-    extractMetricPair(
-      profitLoss,
-      [
-        "profit for the year",
-        "profit for the period",
-        "profit after tax",
-        "profit after taxation",
-        "net profit"
-      ],
-      factor
-    );
-
-
-  const financeCost =
-    extractMetricPair(
-      profitLoss,
-      [
-        "finance costs",
-        "finance cost",
-        "finance expenses",
-        "interest expense"
-      ],
-      factor
-    );
-
-
-  const ebitda =
-    extractMetricPair(
-      profitLoss,
-      [
-        "earnings before interest tax depreciation and amortisation",
-        "earnings before interest taxes depreciation and amortization",
-        "ebitda"
-      ],
-      factor
-    );
-
-
-  /* ----------------------------------------------------------
-     BALANCE SHEET METRICS
-     ---------------------------------------------------------- */
-
-  const totalAssets =
-    extractMetricPair(
-      balanceSheet,
-      [
-        "total assets"
-      ],
-      factor
-    );
-
-
-  const currentAssets =
-    extractMetricPair(
-      balanceSheet,
-      [
-        "total current assets",
-        "current assets"
-      ],
-      factor
-    );
-
-
-  const currentLiabilities =
-    extractMetricPair(
-      balanceSheet,
-      [
-        "total current liabilities",
-        "current liabilities"
-      ],
-      factor
-    );
-
-
-  const totalEquity =
-    extractMetricPair(
-      balanceSheet,
-      [
-        "total equity",
-        "total shareholders equity",
-        "shareholders equity",
-        "equity attributable to owners",
-        "equity attributable to shareholders"
-      ],
-      factor
-    );
-
-
-  const cash =
-    extractMetricPair(
-      balanceSheet,
-      [
-        "cash and cash equivalents",
-        "cash and cash equivalent",
-        "cash & cash equivalents"
-      ],
-      factor
-    );
-
-
-  const inventory =
-    extractMetricPair(
-      balanceSheet,
-      [
-        "inventories",
-        "inventory"
-      ],
-      factor
-    );
-
-
-  const receivables =
-    extractMetricPair(
-      balanceSheet,
-      [
-        "trade receivables",
-        "trade and other receivables",
-        "accounts receivable"
-      ],
-      factor
-    );
-
-
-  const payables =
-    extractMetricPair(
-      balanceSheet,
-      [
-        "trade payables",
-        "trade and other payables",
-        "accounts payable"
-      ],
-      factor
-    );
-
-
-  /*
-   * Borrowings are difficult because current and
-   * non-current borrowings can appear separately.
-   *
-   * Do NOT fabricate total debt by blindly selecting
-   * one "borrowings" row.
-   *
-   * Only accept an explicitly labelled total.
-   */
-
-  const totalDebt =
-    extractMetricPair(
-      balanceSheet,
-      [
-        "total borrowings",
-        "total debt",
-        "total interest bearing borrowings",
-        "total interest-bearing borrowings"
-      ],
-      factor
-    );
-
-
-  /* ----------------------------------------------------------
-     CASH FLOW METRICS
-     ---------------------------------------------------------- */
-
-  const operatingCashFlow =
-    extractMetricPair(
-      cashFlow,
-      [
-        "net cash generated from operating activities",
-        "net cash generated by operating activities",
-        "net cash from operating activities",
-        "net cash flows from operating activities",
-        "net cash flow from operating activities"
-      ],
-      factor
-    );
-
-
-  const capexRaw =
-    extractMetricPair(
-      cashFlow,
-      [
-        "purchase of property plant and equipment",
-        "purchase of property, plant and equipment",
-        "payments for property plant and equipment",
-        "payments for property, plant and equipment",
-        "purchase of fixed assets",
-        "capital expenditure"
-      ],
-      factor
-    );
-
-
-  const capex = {
-
-    current:
-      capexRaw.current === null
-        ? null
-        : Math.abs(
-            capexRaw.current
-          ),
-
-    previous:
-      capexRaw.previous === null
-        ? null
-        : Math.abs(
-            capexRaw.previous
-          ),
-
-    evidence:
-      capexRaw.evidence
-
-  };
-
-
-  /* ----------------------------------------------------------
-     SHARES
-     ---------------------------------------------------------- */
-
-  const shares =
-    extractSharesOutstanding(
-      text
-    );
-
-
-  /* ----------------------------------------------------------
-     COMPANY IDENTITY
-     ---------------------------------------------------------- */
 
   const companyName =
     detectCompanyName(
       text,
-      pdfData?.info ||
-      {}
+      pdfData?.info || {}
     );
 
 
-  const listing =
-    detectListingIdentity(
+  console.log(
+    "Local financial extraction company:",
+    companyName
+  );
+
+
+  /*
+   * Ensure consolidated financial statements actually
+   * exist before treating data as group-level evidence.
+   */
+
+  const consolidatedPresent =
+    /\bconsolidated financial statements\b/i.test(
+      text
+    ) ||
+    /\bconsolidated statement of profit and loss\b/i.test(
+      text
+    ) ||
+    /\bconsolidated balance sheet\b/i.test(
       text
     );
 
 
-  /* ----------------------------------------------------------
-     BUILD ROW
-     ---------------------------------------------------------- */
-
-  function buildRow(
-    which,
-    year
-  ) {
-
-    if (!year) {
-
-      return null;
-    }
+  console.log(
+    "Consolidated financial statements detected:",
+    consolidatedPresent
+  );
 
 
-    const financialYear =
-      `FY${year - 1}-${String(year).slice(-2)}`;
+  const records =
+    new Map();
 
 
-    return {
+  /*
+   * Extract all dashboard inputs.
+   */
 
-      company:
-        companyName,
-
-      financial_year:
-        financialYear,
-
-      year,
-
-      statement_basis:
-        statementBasis,
-
-      /*
-       * Dashboard values are normalized.
-       */
-
-      source_unit:
-        factor === null
-          ? null
-          : "INR crore",
-
-      original_source_unit:
-        sourceUnit,
-
-      revenue:
-        revenue[which],
-
-      ebitda:
-        ebitda[which],
-
-      cogs:
-        null,
-
-      operating_income:
-        operatingIncome[which],
-
-      net_income:
-        netIncome[which],
-
-      total_assets:
-        totalAssets[which],
-
-      current_assets:
-        currentAssets[which],
-
-      current_liabilities:
-        currentLiabilities[which],
-
-      total_debt:
-        totalDebt[which],
-
-      cash:
-        cash[which],
-
-      total_equity:
-        totalEquity[which],
-
-      operating_cash_flow:
-        operatingCashFlow[which],
-
-      capex:
-        capex[which],
-
-      inventory:
-        inventory[which],
-
-      accounts_receivable:
-        receivables[which],
-
-      accounts_payable:
-        payables[which],
-
-      finance_cost:
-        financeCost[which],
-
-      /*
-       * Share extraction currently represents
-       * period-end/current report evidence.
-       *
-       * Do not copy it into the comparative year.
-       */
-
-      shares_outstanding:
-        which === "current"
-          ? shares.value
-          : null,
-
-      shares_outstanding_unit:
-        which === "current"
-          ? shares.unit
-          : null,
-
-      source_pages:
-        [],
-
-      extraction_notes:
-        ""
-
-    };
-  }
+  extractDashboardMetrics(
+    text,
+    records
+  );
 
 
-  const rows =
-    [];
+  /*
+   * Fill debt only when safe.
+   */
+
+  deriveDebtFromBorrowings(
+    text,
+    records
+  );
 
 
-  const currentRow =
-    buildRow(
-      "current",
-      currentYear
+  const financials =
+    finalizeFinancialRecords(
+      records,
+      companyName
     );
 
 
   if (
-    currentRow
-  ) {
-
-    rows.push(
-      currentRow
-    );
-  }
-
-
-  const previousRow =
-    buildRow(
-      "previous",
-      previousYear
-    );
-
-
-  if (
-    previousRow
-  ) {
-
-    rows.push(
-      previousRow
-    );
-  }
-
-
-  /* ----------------------------------------------------------
-     REMOVE EMPTY ROWS
-     ---------------------------------------------------------- */
-
-  const meaningfulFields = [
-
-    "revenue",
-    "ebitda",
-    "operating_income",
-    "net_income",
-    "total_assets",
-    "current_assets",
-    "current_liabilities",
-    "total_equity",
-    "operating_cash_flow",
-    "cash"
-
-  ];
-
-
-  const usableRows =
-    rows.filter(
-      row =>
-        meaningfulFields.some(
-          field =>
-            Number.isFinite(
-              row[field]
-            )
-        )
-    );
-
-
-  /* ----------------------------------------------------------
-     EXTRACTION NOTES / WARNINGS
-     ---------------------------------------------------------- */
-
-  const warnings =
-    [];
-
-
-  if (
-    !profitLoss.found
-  ) {
-
-    warnings.push(
-      "Consolidated profit-and-loss statement could not be located reliably."
-    );
-  }
-
-
-  if (
-    !balanceSheet.found
-  ) {
-
-    warnings.push(
-      "Consolidated balance sheet could not be located reliably."
-    );
-  }
-
-
-  if (
-    !cashFlow.found
-  ) {
-
-    warnings.push(
-      "Consolidated cash-flow statement could not be located reliably."
-    );
-  }
-
-
-  if (
-    factor === null
-  ) {
-
-    warnings.push(
-      "The audited monetary unit could not be established consistently. Monetary values were not guessed."
-    );
-  }
-
-
-  if (
-    ebitda.current === null
-  ) {
-
-    warnings.push(
-      "EBITDA was not explicitly identified and was left null."
-    );
-  }
-
-
-  if (
-    totalDebt.current === null
-  ) {
-
-    warnings.push(
-      "Total debt was not explicitly identified. FinSight did not treat a single current/non-current borrowing line as total debt."
-    );
-  }
-
-
-  if (
-    shares.value === null
-  ) {
-
-    warnings.push(
-      "Period-end shares outstanding could not be established reliably and were left null."
-    );
-  }
-
-
-  if (
-    statementBasis !==
-      "Consolidated"
-  ) {
-
-    warnings.push(
-      "Consolidated statement basis could not be confirmed automatically."
-    );
-  }
-
-
-  for (
-    const row
-    of usableRows
-  ) {
-
-    row.extraction_notes =
-      warnings.join(" ");
-  }
-
-
-  /* ----------------------------------------------------------
-     REQUIRE RELIABLE DATA
-     ---------------------------------------------------------- */
-
-  if (
-    !usableRows.length
+    !financials.length
   ) {
 
     const error =
       new Error(
-        "The PDF text was extracted successfully, but FinSight could not reliably identify financial-statement values without guessing."
+        "The PDF text was extracted successfully, but FinSight could not reliably identify audited financial-statement values."
       );
 
     error.status = 422;
 
     throw error;
+
   }
 
 
-  /* ----------------------------------------------------------
-     MISSING CRITICAL FIELDS
-     ---------------------------------------------------------- */
-
-  const latest =
-    usableRows[0];
-
+  /*
+   * Require more than one isolated metric before calling
+   * extraction reliable.
+   */
 
   const criticalFields = [
 
@@ -5268,45 +4497,151 @@ function extractFinancialsLocally(
   ];
 
 
-  const missingCriticalFields =
-    criticalFields.filter(
-      field =>
-        latest[field] === null ||
-        latest[field] === undefined
+  const reliableRows =
+    financials.filter(
+      row => {
+
+        const count =
+          criticalFields.filter(
+            field =>
+              row[field] !== null
+          ).length;
+
+
+        return count >= 2;
+
+      }
     );
 
 
-  /* ----------------------------------------------------------
-     CONFIDENCE
-     ---------------------------------------------------------- */
+  /*
+   * Do not throw away partial rows from older comparative
+   * periods, but require at least one materially useful row.
+   */
 
-  let confidence =
-    "Low";
+  if (
+    !reliableRows.length
+  ) {
+
+    const error =
+      new Error(
+        "Financial-statement rows were detected, but there was not enough reliable audited data to populate the dashboard safely."
+      );
+
+    error.status = 422;
+
+    throw error;
+
+  }
+
+
+  /*
+   * Determine all missing critical fields.
+   */
+
+  const missingCriticalFields =
+    [];
+
+
+  for (
+    const field
+    of criticalFields
+  ) {
+
+    const availableAnywhere =
+      financials.some(
+        row =>
+          row[field] !== null
+      );
+
+
+    if (
+      !availableAnywhere
+    ) {
+
+      missingCriticalFields.push(
+        field
+      );
+
+    }
+
+  }
+
+
+  const warnings =
+    [];
 
 
   if (
-    statementBasis === "Consolidated" &&
-    factor !== null &&
-    profitLoss.found &&
-    balanceSheet.found &&
-    usableRows.length
+    !consolidatedPresent
   ) {
 
-    confidence =
-      cashFlow.found
-        ? "High"
-        : "Medium";
+    warnings.push(
+      "Consolidated financial statements were not positively identified. Statement basis should be reviewed."
+    );
+
   }
 
 
-  else if (
-    usableRows.length &&
-    factor !== null
+  if (
+    missingCriticalFields.length
   ) {
 
-    confidence =
-      "Medium";
+    warnings.push(
+      `Some dashboard fields could not be established reliably and remain null: ${missingCriticalFields.join(", ")}.`
+    );
+
   }
+
+
+  /*
+   * Diagnostic output is intentionally useful on Render.
+   */
+
+  console.log(
+    "Local financial extraction result:",
+    financials.map(
+      row => ({
+
+        financial_year:
+          row.financial_year,
+
+        revenue:
+          row.revenue,
+
+        ebitda:
+          row.ebitda,
+
+        operating_income:
+          row.operating_income,
+
+        net_income:
+          row.net_income,
+
+        total_assets:
+          row.total_assets,
+
+        total_equity:
+          row.total_equity,
+
+        total_debt:
+          row.total_debt,
+
+        cash:
+          row.cash,
+
+        operating_cash_flow:
+          row.operating_cash_flow,
+
+        capex:
+          row.capex,
+
+        finance_cost:
+          row.finance_cost
+
+      })
+    )
+  );
 
 
   return {
@@ -5319,19 +4654,40 @@ function extractFinancialsLocally(
       legal_name:
         companyName,
 
-      ...listing,
+      listing_status:
+        "unknown",
+
+      ticker:
+        null,
+
+      exchange:
+        null,
+
+      isin:
+        null,
 
       currency:
         "₹",
 
+      nse_code:
+        null,
+
+      bse_code:
+        null,
+
       extraction_confidence:
-        confidence
+
+        consolidatedPresent &&
+        !missingCriticalFields.length
+
+          ? "High"
+
+          : "Medium"
 
     },
 
 
-    financials:
-      usableRows,
+    financials,
 
 
     validation: {
@@ -5339,19 +4695,11 @@ function extractFinancialsLocally(
       consolidated_preferred:
         true,
 
-      statement_basis:
-        statementBasis,
-
-      original_source_unit:
-        sourceUnit,
-
-      normalized_unit:
-        factor === null
-          ? null
-          : "INR crore",
+      consolidated_detected:
+        consolidatedPresent,
 
       years_found:
-        usableRows.map(
+        financials.map(
           row =>
             row.financial_year
         ),
@@ -5359,25 +4707,18 @@ function extractFinancialsLocally(
       missing_critical_fields:
         missingCriticalFields,
 
-      warnings,
-
-      statements_found: {
-
-        profit_and_loss:
-          profitLoss.found,
-
-        balance_sheet:
-          balanceSheet.found,
-
-        cash_flow:
-          cashFlow.found
-
-      }
+      warnings
 
     }
 
   };
+
 }
+
+
+/* ============================================================
+   END SECTION 13
+   ============================================================ */
 
 
 /* ============================================================
