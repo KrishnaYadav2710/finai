@@ -2214,7 +2214,7 @@ function finiteFinancialNumber(
 
 
   if (
-    /^$begin:math:text$\.\+$end:math:text$$/.test(
+     /^\(.*\)$/.test(
       text
     )
   ) {
