@@ -1,0 +1,11 @@
+-- FinSight persistent research schema. server.js initializes the same schema automatically.
+-- Use this file if you prefer applying migrations manually in Supabase/Neon/Postgres.
+CREATE TABLE IF NOT EXISTS companies (id BIGSERIAL PRIMARY KEY,name TEXT NOT NULL,ticker TEXT,exchange TEXT DEFAULT 'NSE',sector TEXT,listing_status TEXT,isin TEXT,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),UNIQUE(ticker,exchange));
+CREATE TABLE IF NOT EXISTS reports (id BIGSERIAL PRIMARY KEY,company_id BIGINT REFERENCES companies(id) ON DELETE CASCADE,filename TEXT NOT NULL,report_year INTEGER,metrics JSONB NOT NULL DEFAULT '{}'::jsonb,analysis JSONB NOT NULL DEFAULT '{}'::jsonb,source_hash TEXT,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS research_theses (id BIGSERIAL PRIMARY KEY,company_id BIGINT REFERENCES companies(id) ON DELETE CASCADE,thesis TEXT NOT NULL,bull_case TEXT,bear_case TEXT,thesis_breakers JSONB NOT NULL DEFAULT '[]'::jsonb,status TEXT NOT NULL DEFAULT 'active',created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS valuation_snapshots (id BIGSERIAL PRIMARY KEY,company_id BIGINT REFERENCES companies(id) ON DELETE CASCADE,market JSONB NOT NULL DEFAULT '{}'::jsonb,fundamentals JSONB NOT NULL DEFAULT '{}'::jsonb,valuation JSONB NOT NULL DEFAULT '{}'::jsonb,ai_assessment TEXT,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS management_promises (id BIGSERIAL PRIMARY KEY,company_id BIGINT REFERENCES companies(id) ON DELETE CASCADE,report_id BIGINT REFERENCES reports(id) ON DELETE SET NULL,promise TEXT NOT NULL,target_date DATE,status TEXT NOT NULL DEFAULT 'open',evidence JSONB NOT NULL DEFAULT '[]'::jsonb,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+CREATE TABLE IF NOT EXISTS monitoring_events (id BIGSERIAL PRIMARY KEY,company_id BIGINT REFERENCES companies(id) ON DELETE CASCADE,event_type TEXT NOT NULL,title TEXT NOT NULL,severity TEXT NOT NULL DEFAULT 'info',payload JSONB NOT NULL DEFAULT '{}'::jsonb,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS listing_status TEXT;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS isin TEXT;
