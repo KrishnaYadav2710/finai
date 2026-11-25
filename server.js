@@ -3027,48 +3027,65 @@ function roundFinancial(
    13D. ACCOUNTING NUMBER TOKENIZER
    ============================================================ */
 
-function extractAccountingNumberTokens(
-  line
-) {
+function extractAccountingNumbers(text) {
 
   const source =
     String(
-      line ||
+      text ||
       ""
     );
 
 
-  const regex =
-    /$begin:math:text$\?\-\?\\d\{1\,3\}\(\?\:\,\\d\{2\,3\}\)\*\(\?\:\\\.\\d\+\)\?$end:math:text$?|$begin:math:text$\?\-\?\\d\+\(\?\:\\\.\\d\+\)\?$end:math:text$?/g;
+  /*
+   * Supported examples:
+   *
+   * 123
+   * 1,234
+   * 12,345.67
+   * -123
+   * -1,234.50
+   * (123)
+   * (1,234.50)
+   *
+   * IMPORTANT:
+   * Keep this regex exactly as written.
+   */
+
+  const numberPattern =
+    /\(?-?\d{1,3}(?:,\d{2,3})*(?:\.\d+)?\)?|\(?-?\d+(?:\.\d+)?\)?/g;
 
 
   const matches =
     source.match(
-      regex
-    ) ||
-    [];
+      numberPattern
+    );
+
+
+  if (!matches) {
+
+    return [];
+
+  }
 
 
   return matches
+
     .map(
-      raw => ({
-
-        raw,
-
-        value:
-          finiteFinancialNumber(
-            raw
-          )
-
-      })
+      value =>
+        finiteFinancialNumber(
+          value
+        )
     )
-    .filter(
-      item =>
-        item.value !==
-        null
-    );
-}
 
+    .filter(
+      value =>
+        value !== null &&
+        Number.isFinite(
+          value
+        )
+    );
+
+}
 
 function extractAccountingNumbers(
   line
