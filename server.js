@@ -3022,12 +3022,13 @@ function roundFinancial(
   100;
 }
 
-
 /* ============================================================
    13D. ACCOUNTING NUMBER TOKENIZER
    ============================================================ */
 
-function extractAccountingNumbers(text) {
+function extractAccountingNumbers(
+  text
+) {
 
   const source =
     String(
@@ -3037,7 +3038,7 @@ function extractAccountingNumbers(text) {
 
 
   /*
-   * Supported examples:
+   * Supported:
    *
    * 123
    * 1,234
@@ -3047,8 +3048,7 @@ function extractAccountingNumbers(text) {
    * (123)
    * (1,234.50)
    *
-   * IMPORTANT:
-   * Keep this regex exactly as written.
+   * This returns numeric values only.
    */
 
   const numberPattern =
@@ -3087,15 +3087,6 @@ function extractAccountingNumbers(text) {
 
 }
 
-  return extractAccountingNumberTokens(
-    line
-  )
-    .map(
-      item =>
-        item.value
-    );
-}
-
 
 /* ============================================================
    13E. YEAR HELPERS
@@ -3120,10 +3111,12 @@ function normalizeYear(
   ) {
 
     return null;
+
   }
 
 
   return year;
+
 }
 
 
@@ -3140,6 +3133,7 @@ function financialYearLabel(
   if (!normalized) {
 
     return null;
+
   }
 
 
@@ -3151,8 +3145,8 @@ function financialYearLabel(
       -2
     )
   );
-}
 
+}
 
 /* ============================================================
    DETECT STATEMENT YEARS
