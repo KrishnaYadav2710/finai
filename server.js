@@ -3,14 +3,33 @@
    Report-first investor research backend
 
    ARCHITECTURE
-   - PDF financial extraction: LOCAL ONLY
-   - PDF text extraction: pdf-parse
-   - Financial extraction: deterministic local functions
-   - Gemini: qualitative analysis / Ask FinSight / comparison
+   - Financial extraction:
+       1. Database cache
+       2. Gemini PDF extraction — ONE attempt only
+       3. Local deterministic parser fallback
+   - Local PDF text extraction: pdf-parse
+   - Gemini: financial extraction + qualitative AI
    - OpenAI: REMOVED
    - Alpha Vantage: market data
    - DCF / Reverse DCF
    - PostgreSQL / Supabase research memory
+
+   EXTRACTION PRIORITY
+
+   PDF
+    ↓
+   SHA-256 CACHE
+    ↓ miss
+   GEMINI ONCE
+    ↓ failure / timeout / rate limit / invalid data
+   LOCAL PDF PARSER
+    ↓
+   DASHBOARD
+
+   IMPORTANT
+   - FinSight accepts PDFs up to 45 MB.
+   - Large PDFs can bypass Gemini to save quota.
+   - OpenAI is not used.
    ============================================================ */
 
 
@@ -63,20 +82,38 @@ const PORT =
   );
 
 
+/* ============================================================
+   GEMINI
+   ============================================================ */
+
 const GEMINI_MODEL =
-  process.env.GEMINI_MODEL ||
-  "gemini-3.8-flash";
+  String(
+    process.env.GEMINI_MODEL ||
+    "gemini-3.8-flash"
+  ).trim();
 
 
 const GEMINI_API_KEY =
-  process.env.GEMINI_API_KEY ||
-  "";
+  String(
+    process.env.GEMINI_API_KEY ||
+    ""
+  ).trim();
 
 
 /*
- * Optional second Gemini model.
+ * Optional fallback model.
  *
- * Leave blank if you want only one Gemini model.
+ * IMPORTANT:
+ *
+ * This fallback is used ONLY for normal text AI functions.
+ *
+ * Financial PDF extraction NEVER retries another model.
+ *
+ * That keeps extraction quota usage predictable:
+ *
+ * one report
+ * =
+ * maximum one Gemini extraction generation request.
  */
 
 const GEMINI_FALLBACK_MODEL =
@@ -86,49 +123,155 @@ const GEMINI_FALLBACK_MODEL =
   ).trim();
 
 
+function environmentInteger(
+  name,
+  fallback,
+  minimum,
+  maximum
+) {
+
+  const value =
+    Number(
+      process.env[name]
+    );
+
+
+  if (
+    Number.isInteger(value) &&
+    value >= minimum &&
+    value <= maximum
+  ) {
+
+    return value;
+  }
+
+
+  return fallback;
+}
+
+
 const GEMINI_TEXT_TIMEOUT_MS =
+  environmentInteger(
+    "GEMINI_TEXT_TIMEOUT_MS",
+    60000,
+    15000,
+    300000
+  );
+
+
+/*
+ * Financial extraction gets a separate timeout.
+ *
+ * We do not want a failed Gemini request holding the
+ * dashboard indefinitely before local fallback begins.
+ */
+
+const GEMINI_EXTRACTION_TIMEOUT_MS =
+  environmentInteger(
+    "GEMINI_EXTRACTION_TIMEOUT_MS",
+    75000,
+    15000,
+    180000
+  );
+
+
+/* ============================================================
+   FINANCIAL EXTRACTION CACHE VERSION
+   ============================================================ */
+
+/*
+ * Increment this whenever the extraction architecture changes
+ * materially.
+ *
+ * Old cached extractions are deliberately ignored.
+ *
+ * This prevents earlier incorrect local-parser results from
+ * being reused forever just because the PDF hash matches.
+ */
+
+const FINANCIAL_EXTRACTION_CACHE_VERSION =
+  "hybrid-v1";
+
+
+/* ============================================================
+   GEMINI PDF SIZE THRESHOLD
+   ============================================================ */
+
+/*
+ * FinSight itself accepts PDFs up to 45 MiB.
+ *
+ * But to conserve Gemini quota and avoid unnecessarily large
+ * multimodal requests, only PDFs below this threshold are
+ * attempted through Gemini.
+ *
+ * Larger PDFs go directly to the local parser.
+ *
+ * Render optional:
+ *
+ * GEMINI_EXTRACTION_MAX_PDF_MB=12
+ */
+
+const GEMINI_EXTRACTION_MAX_PDF_MB =
   (() => {
 
     const value =
       Number(
-        process.env.GEMINI_TEXT_TIMEOUT_MS
+        process.env
+          .GEMINI_EXTRACTION_MAX_PDF_MB
       );
 
 
     if (
       Number.isFinite(value) &&
-      value >= 15000 &&
-      value <= 300000
+      value >= 1 &&
+      value <= 45
     ) {
 
       return value;
-
     }
 
 
-    return 60000;
+    return 12;
 
   })();
 
 
+const GEMINI_EXTRACTION_MAX_PDF_SIZE =
+  GEMINI_EXTRACTION_MAX_PDF_MB *
+  1024 *
+  1024;
+
+
+/* ============================================================
+   OTHER PROVIDERS
+   ============================================================ */
+
 const ALPHA_VANTAGE_API_KEY =
-  process.env.ALPHA_VANTAGE_API_KEY ||
-  "";
+  String(
+    process.env.ALPHA_VANTAGE_API_KEY ||
+    ""
+  ).trim();
 
 
 const FINSIGHT_USERNAME =
-  process.env.FINSIGHT_USERNAME ||
-  "";
+  String(
+    process.env.FINSIGHT_USERNAME ||
+    ""
+  );
 
 
 const FINSIGHT_PASSWORD =
-  process.env.FINSIGHT_PASSWORD ||
-  "";
+  String(
+    process.env.FINSIGHT_PASSWORD ||
+    ""
+  );
 
+
+/* ============================================================
+   MAXIMUM PDF SIZE
+   ============================================================ */
 
 /*
- * Maximum PDF accepted by FinSight.
- *
  * 45 MiB.
  */
 
@@ -171,7 +314,8 @@ const pool =
 
         max:
           Number(
-            process.env.DATABASE_POOL_MAX ||
+            process.env
+              .DATABASE_POOL_MAX ||
             5
           )
 
@@ -196,6 +340,10 @@ if (pool) {
 
 }
 
+
+/* ============================================================
+   DATABASE QUERY
+   ============================================================ */
 
 async function dbQuery(
   text,
@@ -451,6 +599,13 @@ async function initDatabase() {
   }
 
 
+  /*
+   * Existing FinSight installations may contain older
+   * versions of these tables.
+   *
+   * Add missing columns without destroying existing data.
+   */
+
   const optionalColumns = [
 
     `
@@ -560,12 +715,44 @@ async function initDatabase() {
   }
 
 
+  /*
+   * Helpful cache lookup index.
+   *
+   * Failure to create it is non-fatal.
+   */
+
+  try {
+
+    await pool.query(
+      `
+      CREATE INDEX IF NOT EXISTS
+      reports_source_hash_idx
+      ON reports(source_hash)
+      `
+    );
+
+  }
+
+  catch (error) {
+
+    console.warn(
+      "Could not create report hash index:",
+      error.message
+    );
+
+  }
+
+
   console.log(
     "FinSight database ready."
   );
 
 }
 
+
+/* ============================================================
+   RESEARCH TABLE SAFETY
+   ============================================================ */
 
 async function ensureResearchTables() {
 
@@ -640,6 +827,19 @@ async function upsertCompany({
   }
 
 
+  const safeName =
+    String(
+      name ||
+      ticker ||
+      "Unknown company"
+    )
+      .trim()
+      .slice(
+        0,
+        500
+      );
+
+
   const normalizedTicker =
 
     ticker
@@ -647,6 +847,10 @@ async function upsertCompany({
       ? String(ticker)
           .trim()
           .toUpperCase()
+          .slice(
+            0,
+            100
+          )
 
       : null;
 
@@ -658,6 +862,10 @@ async function upsertCompany({
       ? String(exchange)
           .trim()
           .toUpperCase()
+          .slice(
+            0,
+            100
+          )
 
       : null;
 
@@ -725,8 +933,8 @@ async function upsertCompany({
         RETURNING *
         `,
         [
-          name ||
-          normalizedTicker,
+
+          safeName,
 
           normalizedTicker,
 
@@ -737,12 +945,12 @@ async function upsertCompany({
           listingStatus,
 
           isin
+
         ]
       );
 
 
     return result.rows[0];
-
   }
 
 
@@ -755,11 +963,12 @@ async function upsertCompany({
       WHERE LOWER(name) =
             LOWER($1)
 
+      ORDER BY updated_at DESC
+
       LIMIT 1
       `,
       [
-        name ||
-        "Unknown company"
+        safeName
       ]
     );
 
@@ -774,15 +983,21 @@ async function upsertCompany({
         UPDATE companies
 
         SET
-          listing_status =
+          sector =
             COALESCE(
               $2,
+              sector
+            ),
+
+          listing_status =
+            COALESCE(
+              $3,
               listing_status
             ),
 
           isin =
             COALESCE(
-              $3,
+              $4,
               isin
             ),
 
@@ -794,15 +1009,20 @@ async function upsertCompany({
         RETURNING *
         `,
         [
+
           existing.rows[0].id,
+
+          sector,
+
           listingStatus,
+
           isin
+
         ]
       );
 
 
     return updated.rows[0];
-
   }
 
 
@@ -832,8 +1052,8 @@ async function upsertCompany({
       RETURNING *
       `,
       [
-        name ||
-        "Unknown company",
+
+        safeName,
 
         normalizedTicker,
 
@@ -844,12 +1064,12 @@ async function upsertCompany({
         listingStatus,
 
         isin
+
       ]
     );
 
 
   return result.rows[0];
-
 }
 
 
@@ -878,15 +1098,25 @@ const upload =
 
       const mime =
         String(
-          file?.mimetype || ""
+          file?.mimetype ||
+          ""
         )
-          .toLowerCase()
-          .trim();
+          .trim()
+          .toLowerCase();
 
+
+      /*
+       * Browsers normally send application/pdf.
+       *
+       * Some clients may omit the MIME type entirely,
+       * therefore an empty value is allowed and the PDF
+       * signature is checked later.
+       */
 
       if (
         mime &&
-        mime !== "application/pdf"
+        mime !==
+          "application/pdf"
       ) {
 
         const error =
@@ -895,14 +1125,12 @@ const upload =
           );
 
 
-        error.status =
-          400;
+        error.status = 400;
 
 
         return callback(
           error
         );
-
       }
 
 
@@ -917,13 +1145,101 @@ const upload =
 
 
 /* ============================================================
+   PDF SIGNATURE
+   ============================================================ */
+
+function validatePdfFile(
+  file
+) {
+
+  if (
+    !file ||
+    !Buffer.isBuffer(
+      file.buffer
+    ) ||
+    !file.buffer.length
+  ) {
+
+    const error =
+      new Error(
+        "Annual-report PDF is empty or unavailable."
+      );
+
+
+    error.status = 400;
+
+
+    throw error;
+  }
+
+
+  if (
+    file.buffer.length >
+    FINSIGHT_MAX_PDF_SIZE
+  ) {
+
+    const error =
+      new Error(
+        "The annual-report PDF exceeds FinSight's 45 MB upload limit."
+      );
+
+
+    error.status = 413;
+
+
+    throw error;
+  }
+
+
+  /*
+   * A valid PDF normally begins with:
+   *
+   * %PDF-
+   */
+
+  const signature =
+    file.buffer
+      .subarray(
+        0,
+        5
+      )
+      .toString(
+        "ascii"
+      );
+
+
+  if (
+    signature !==
+    "%PDF-"
+  ) {
+
+    const error =
+      new Error(
+        "The uploaded file does not appear to be a valid PDF."
+      );
+
+
+    error.status = 400;
+
+
+    throw error;
+  }
+
+
+  return true;
+}
+
+
+/* ============================================================
    6. EXPRESS
    ============================================================ */
 
 app.use(
   express.json({
+
     limit:
       "15mb"
+
   })
 );
 
@@ -957,7 +1273,6 @@ function basicAuth(
   ) {
 
     return next();
-
   }
 
 
@@ -967,7 +1282,6 @@ function basicAuth(
   ) {
 
     return next();
-
   }
 
 
@@ -1002,7 +1316,9 @@ function basicAuth(
 
 
       const separator =
-        decoded.indexOf(":");
+        decoded.indexOf(
+          ":"
+        );
 
 
       const username =
@@ -1028,6 +1344,12 @@ function basicAuth(
           : "";
 
 
+      /*
+       * For this project direct comparison is sufficient.
+       *
+       * Authentication can be upgraded later if required.
+       */
+
       if (
         username ===
           FINSIGHT_USERNAME
@@ -1039,14 +1361,15 @@ function basicAuth(
       ) {
 
         return next();
-
       }
 
     }
 
     catch {
 
-      /* Authentication fails below. */
+      /*
+       * Authentication fails below.
+       */
 
     }
 
@@ -1091,7 +1414,7 @@ app.get(
     res
   ) => {
 
-    res.sendFile(
+    return res.sendFile(
       path.join(
         __dirname,
         "finsight-investor.html"
@@ -1166,11 +1489,6 @@ app.get(
       ok:
         true,
 
-      /*
-       * Financial extraction does NOT depend
-       * on this value.
-       */
-
       aiConfigured:
         Boolean(
           GEMINI_API_KEY
@@ -1186,20 +1504,40 @@ app.get(
         GEMINI_FALLBACK_MODEL ||
         null,
 
-      aiPurpose:
-        "qualitative analysis only",
+      /*
+       * Financial extraction architecture.
+       */
 
       financialExtractionProvider:
-        "local",
+        "hybrid",
 
-      financialExtractionEngine:
-        "pdf-parse + deterministic FinSight extractor",
+      financialExtractionFlow:
+        "cache -> gemini-once -> local-fallback",
 
-      financialExtractionRequiresAI:
+      financialExtractionCacheVersion:
+        FINANCIAL_EXTRACTION_CACHE_VERSION,
+
+      financialExtractionGeminiAttempts:
+        1,
+
+      financialExtractionGeminiMaxPdfMB:
+        GEMINI_EXTRACTION_MAX_PDF_MB,
+
+      financialExtractionGeminiTimeoutMs:
+        GEMINI_EXTRACTION_TIMEOUT_MS,
+
+      financialExtractionLocalFallback:
+        true,
+
+      financialExtractionOpenAI:
         false,
 
       maxPdfSizeMB:
         45,
+
+      /*
+       * Other services.
+       */
 
       marketProvider:
         "alphavantage",
@@ -1236,7 +1574,7 @@ app.get(
         true,
 
       pdfProcessing:
-        "local"
+        "hybrid"
 
     });
 
@@ -1354,12 +1692,10 @@ async function fetchJSON(
 
 
     throw error;
-
   }
 
 
   return body;
-
 }
 
 
@@ -1372,11 +1708,11 @@ function safeJSON(
 ) {
 
   if (
-    value == null
+    value === null ||
+    value === undefined
   ) {
 
     return null;
-
   }
 
 
@@ -1386,14 +1722,30 @@ function safeJSON(
   ) {
 
     return value;
-
   }
 
+
+  const source =
+    String(
+      value
+    ).trim();
+
+
+  if (!source) {
+
+    return null;
+  }
+
+
+  /*
+   * First attempt:
+   * direct JSON.
+   */
 
   try {
 
     return JSON.parse(
-      value
+      source
     );
 
   }
@@ -1401,72 +1753,63 @@ function safeJSON(
   catch {
 
     /*
-     * Gemini occasionally wraps JSON in
-     * ```json ... ```
+     * Continue.
      */
 
-    try {
-
-      const cleaned =
-        String(value)
-          .trim()
-          .replace(
-            /^```json\s*/i,
-            ""
-          )
-          .replace(
-            /^```\s*/,
-            ""
-          )
-          .replace(
-            /\s*```$/,
-            ""
-          )
-          .trim();
+  }
 
 
-      return JSON.parse(
-        cleaned
-      );
+  /*
+   * Gemini occasionally wraps JSON in Markdown.
+   */
 
-    }
+  try {
 
-    catch {
+    const cleaned =
+      source
+        .replace(
+          /^```json\s*/i,
+          ""
+        )
+        .replace(
+          /^```\s*/,
+          ""
+        )
+        .replace(
+          /\s*```$/,
+          ""
+        )
+        .trim();
 
-      return null;
 
-    }
+    return JSON.parse(
+      cleaned
+    );
 
+  }
+
+  catch {
+
+    return null;
   }
 
 }
 
 
 /* ============================================================
-   12. GEMINI — TEXT ONLY
+   12. GEMINI — TEXT AI
    ============================================================ */
 
 /*
- * IMPORTANT
+ * This Gemini function is used for:
  *
- * Gemini does NOT receive the annual-report PDF for
- * financial extraction.
- *
- * Local extraction:
- *
- * PDF
- *  ↓
- * pdf-parse
- *  ↓
- * deterministic extraction
- *
- *
- * Gemini is retained only for:
- *
- * - qualitative annual-report analysis
+ * - annual-report qualitative analysis
  * - Ask FinSight
- * - company comparison interpretation
+ * - competitor interpretation
  * - valuation interpretation
+ *
+ * Financial PDF extraction uses a separate one-shot function
+ * later in this section.
  */
 
 
@@ -1474,14 +1817,11 @@ const analystInstructions = `
 
 You are FinSight AI, an evidence-first equity research system.
 
-The supplied annual-report evidence is the primary source of truth.
+Use supplied annual-report evidence as the primary source of truth.
 
 Never invent missing financial values.
 
-Never substitute example-company data.
-
 Never invent:
-
 - ticker symbols
 - exchanges
 - listing status
@@ -1493,17 +1833,12 @@ Never invent:
 - valuation multiples
 
 Distinguish:
-
 REPORTED FACT
-
 CALCULATED METRIC
-
 MANAGEMENT CLAIM
-
 AI INTERPRETATION
 
-When consolidated financial statements are available,
-prefer consolidated figures for group-level investor analysis.
+Prefer consolidated figures for group-level analysis.
 
 Never mix standalone and consolidated figures without
 explicitly identifying them.
@@ -1633,6 +1968,11 @@ function isGeminiTemporaryError(
     providerStatus ===
       "INTERNAL"
 
+    ||
+
+    providerStatus ===
+      "PROVIDER_TIMEOUT"
+
   );
 
 }
@@ -1649,14 +1989,11 @@ async function geminiGenerate(
   } = {}
 ) {
 
-  if (
-    !GEMINI_API_KEY
-  ) {
+  if (!GEMINI_API_KEY) {
 
     throw new Error(
       "Gemini AI is not configured."
     );
-
   }
 
 
@@ -1668,18 +2005,13 @@ async function geminiGenerate(
     throw new Error(
       "Gemini requires text input."
     );
-
   }
 
 
   /*
-   * SECURITY / ARCHITECTURE:
+   * Text-only safety.
    *
-   * Only text is allowed here.
-   *
-   * No inlineData.
-   * No fileData.
-   * No PDF.
+   * This function must not receive PDFs.
    */
 
   const safeParts =
@@ -1701,10 +2033,12 @@ async function geminiGenerate(
     system_instruction: {
 
       parts: [
+
         {
           text:
             analystInstructions
         }
+
       ]
 
     },
@@ -1806,11 +2140,6 @@ async function geminiGenerate(
 
     catch (error) {
 
-      /*
-       * AbortSignal.timeout() can produce an
-       * exception without HTTP status.
-       */
-
       if (
         error?.name ===
           "TimeoutError"
@@ -1836,29 +2165,10 @@ async function geminiGenerate(
 
 
         throw timeoutError;
-
       }
 
 
-      console.error(
-        `Gemini ${model} failed:`,
-        {
-
-          status:
-            error?.status,
-
-          providerStatus:
-            error?.providerStatus,
-
-          message:
-            error?.message
-
-        }
-      );
-
-
       throw error;
-
     }
 
   }
@@ -1882,11 +2192,9 @@ async function geminiGenerate(
   catch (primaryError) {
 
     /*
-     * Only use another Gemini model when:
+     * Text AI may use one configured fallback model.
      *
-     * - fallback is configured
-     * - fallback differs from primary
-     * - failure is temporary
+     * Financial PDF extraction does NOT use this behavior.
      */
 
     if (
@@ -1905,16 +2213,11 @@ async function geminiGenerate(
     ) {
 
       throw primaryError;
-
     }
 
 
     console.warn(
-
-      `Gemini primary ${GEMINI_MODEL} unavailable. ` +
-
-      `Trying ${GEMINI_FALLBACK_MODEL}.`
-
+      `Gemini text model ${GEMINI_MODEL} unavailable. Trying ${GEMINI_FALLBACK_MODEL}.`
     );
 
 
@@ -1949,14 +2252,12 @@ async function geminiGenerate(
       throw new Error(
         `Gemini returned no usable response: ${blockReason}.`
       );
-
     }
 
 
     throw new Error(
       "Gemini returned no usable response."
     );
-
   }
 
 
@@ -1966,37 +2267,408 @@ async function geminiGenerate(
 
 
   return text;
-
 }
 
+
 /* ============================================================
-   13. LOCAL PDF EXTRACTION — STRICT / DETERMINISTIC
+   12B. GEMINI FINANCIAL PDF EXTRACTION
+   ONE GENERATION ATTEMPT ONLY
    ============================================================ */
 
 /*
- * PURPOSE
- * -------
- * Annual-report financial extraction without Gemini/OpenAI.
+ * IMPORTANT
  *
- * PDF
- *   -> pdf-parse
- *   -> normalized text
- *   -> locate audited financial statements
- *   -> detect statement years
- *   -> extract rows
- *   -> validate values
- *   -> normalize monetary values to INR crore
- *   -> return dashboard-compatible financial history
+ * This is intentionally separate from geminiGenerate().
  *
- * SAFETY RULES
- * ------------
- * 1. Never invent a missing value.
- * 2. Never convert null into zero.
- * 3. Never use a note number as a financial amount.
- * 4. Prefer consolidated statements.
- * 5. Do not mix standalone and consolidated statement blocks.
- * 6. Calculations are performed only when required inputs exist.
- * 7. Implausible/ambiguous extraction is rejected as null.
+ * Extraction policy:
+ *
+ * - one Gemini model
+ * - one generateContent request
+ * - no model fallback
+ * - no retry loop
+ * - no OpenAI
+ *
+ * Any failure immediately allows Section 14 to run
+ * the local deterministic parser.
+ */
+
+
+/* ============================================================
+   PDF PART
+   ============================================================ */
+
+function geminiPdfPart(
+  file
+) {
+
+  validatePdfFile(
+    file
+  );
+
+
+  return {
+
+    inlineData: {
+
+      mimeType:
+        "application/pdf",
+
+      data:
+        file.buffer
+          .toString(
+            "base64"
+          )
+
+    }
+
+  };
+}
+
+
+/* ============================================================
+   COMPACT FINANCIAL EXTRACTION PROMPT
+   ============================================================ */
+
+function buildFinancialExtractionPrompt() {
+
+  /*
+   * Keep this intentionally compact.
+   *
+   * Gemini identifies values.
+   *
+   * Server handles:
+   *
+   * - unit normalization
+   * - validation
+   * - ratios
+   * - cache
+   * - fallback
+   */
+
+  return `Extract audited financial data from this annual report.
+
+RULES
+- Prefer consolidated statements; use standalone only if consolidated is unavailable.
+- Never mix consolidated and standalone values in one year.
+- Extract every reliably supported reporting year.
+- Use audited Balance Sheet, Profit & Loss, Cash Flow and relevant notes.
+- Return monetary numbers exactly as printed. Do not convert units.
+- Missing or uncertain = null. Never guess. Never use zero for missing data.
+- Do not infer ticker, exchange or listing status.
+- Period-end equity shares only; not weighted-average EPS shares.
+- EBITDA: use explicit reported EBITDA; otherwise null.
+- Return JSON only.
+
+FIELDS PER YEAR
+financial_year, year, statement_basis, source_unit,
+revenue, ebitda, operating_income, net_income,
+total_assets, current_assets, current_liabilities,
+total_debt, cash, total_equity,
+operating_cash_flow, capex,
+inventory, accounts_receivable, accounts_payable,
+finance_cost, shares_outstanding, shares_outstanding_unit.
+
+JSON
+{
+  "company": {
+    "name": "",
+    "legal_name": "",
+    "listing_status": "listed|unlisted|pre-IPO|proposed listing|unknown",
+    "ticker": null,
+    "exchange": null,
+    "isin": null,
+    "currency": "₹"
+  },
+  "financials": [
+    {
+      "financial_year": "",
+      "year": null,
+      "statement_basis": "Consolidated|Standalone",
+      "source_unit": "",
+      "revenue": null,
+      "ebitda": null,
+      "operating_income": null,
+      "net_income": null,
+      "total_assets": null,
+      "current_assets": null,
+      "current_liabilities": null,
+      "total_debt": null,
+      "cash": null,
+      "total_equity": null,
+      "operating_cash_flow": null,
+      "capex": null,
+      "inventory": null,
+      "accounts_receivable": null,
+      "accounts_payable": null,
+      "finance_cost": null,
+      "shares_outstanding": null,
+      "shares_outstanding_unit": null
+    }
+  ],
+  "warnings": []
+}`;
+}
+
+
+/* ============================================================
+   ONE-SHOT GEMINI PDF EXTRACTION
+   ============================================================ */
+
+async function extractFinancialsWithGemini(
+  file
+) {
+
+  if (!GEMINI_API_KEY) {
+
+    const error =
+      new Error(
+        "Gemini AI is not configured."
+      );
+
+
+    error.status = 503;
+
+
+    throw error;
+  }
+
+
+  validatePdfFile(
+    file
+  );
+
+
+  /*
+   * Quota-saving bypass.
+   */
+
+  if (
+    file.buffer.length >
+    GEMINI_EXTRACTION_MAX_PDF_SIZE
+  ) {
+
+    const error =
+      new Error(
+        `PDF is larger than the configured ${GEMINI_EXTRACTION_MAX_PDF_MB} MB Gemini extraction threshold.`
+      );
+
+
+    error.status = 413;
+
+
+    error.code =
+      "GEMINI_EXTRACTION_SIZE_BYPASS";
+
+
+    throw error;
+  }
+
+
+  const body = {
+
+    system_instruction: {
+
+      parts: [
+
+        {
+          text:
+            "Extract audited financial-statement data. Never invent missing values. Return JSON only."
+        }
+
+      ]
+
+    },
+
+
+    contents: [
+
+      {
+
+        role:
+          "user",
+
+        parts: [
+
+          {
+            text:
+              buildFinancialExtractionPrompt()
+          },
+
+          geminiPdfPart(
+            file
+          )
+
+        ]
+
+      }
+
+    ],
+
+
+    generationConfig: {
+
+      /*
+       * Financial extraction should be deterministic.
+       */
+
+      temperature:
+        0,
+
+      responseMimeType:
+        "application/json"
+
+    }
+
+  };
+
+
+  console.log(
+    `Gemini financial extraction: one attempt using ${GEMINI_MODEL}.`
+  );
+
+
+  let payload;
+
+
+  try {
+
+    payload =
+      await fetchJSON(
+
+        geminiModelUrl(
+          GEMINI_MODEL
+        ),
+
+        {
+
+          method:
+            "POST",
+
+          headers: {
+
+            "Content-Type":
+              "application/json",
+
+            "x-goog-api-key":
+              GEMINI_API_KEY
+
+          },
+
+          body:
+            JSON.stringify(
+              body
+            ),
+
+          signal:
+            AbortSignal.timeout(
+              GEMINI_EXTRACTION_TIMEOUT_MS
+            )
+
+        }
+
+      );
+
+  }
+
+  catch (error) {
+
+    if (
+      error?.name ===
+        "TimeoutError"
+
+      ||
+
+      error?.name ===
+        "AbortError"
+    ) {
+
+      const timeoutError =
+        new Error(
+          `Gemini financial extraction timed out after ${GEMINI_EXTRACTION_TIMEOUT_MS} ms.`
+        );
+
+
+      timeoutError.status =
+        504;
+
+
+      timeoutError.providerStatus =
+        "PROVIDER_TIMEOUT";
+
+
+      throw timeoutError;
+    }
+
+
+    throw error;
+  }
+
+
+  const text =
+    extractGeminiText(
+      payload
+    );
+
+
+  if (!text) {
+
+    const error =
+      new Error(
+        "Gemini returned no financial extraction."
+      );
+
+
+    error.status = 502;
+
+
+    throw error;
+  }
+
+
+  const result =
+    safeJSON(
+      text
+    );
+
+
+  if (
+    !result ||
+    typeof result !== "object" ||
+    Array.isArray(result)
+  ) {
+
+    const error =
+      new Error(
+        "Gemini returned invalid financial JSON."
+      );
+
+
+    error.status = 502;
+
+
+    throw error;
+  }
+
+
+  console.log(
+    "Gemini financial extraction response received."
+  );
+
+
+  return result;
+}
+
+
+/* ============================================================
+   13. LOCAL PDF EXTRACTION
+   ============================================================ */
+
+/*
+ * This is the fallback extraction engine.
+ *
+ * It does NOT call Gemini.
+ *
+ * Section 14 decides whether this engine is required.
  */
 
 
@@ -2004,39 +2676,13 @@ async function geminiGenerate(
    13A. LOCAL PDF TEXT EXTRACTION
    ============================================================ */
 
-async function extractPdfTextLocally(file) {
+async function extractPdfTextLocally(
+  file
+) {
 
-  if (
-    !file ||
-    !Buffer.isBuffer(file.buffer) ||
-    file.buffer.length === 0
-  ) {
-
-    const error =
-      new Error(
-        "Annual-report PDF is empty or unavailable."
-      );
-
-    error.status = 400;
-
-    throw error;
-  }
-
-
-  if (
-    file.buffer.length >
-    FINSIGHT_MAX_PDF_SIZE
-  ) {
-
-    const error =
-      new Error(
-        "The annual-report PDF exceeds FinSight's 45 MB upload limit."
-      );
-
-    error.status = 413;
-
-    throw error;
-  }
+  validatePdfFile(
+    file
+  );
 
 
   console.log(
@@ -2073,26 +2719,43 @@ async function extractPdfTextLocally(file) {
         "FinSight could not read this PDF locally. The report may be scanned, encrypted, damaged or image-only."
       );
 
-    error.status = 400;
+
+    error.status = 422;
+
 
     throw error;
   }
 
 
-  let text =
+  const text =
     String(
-      parsed?.text || ""
-    );
-
-
-  text =
-    text
-      .replace(/\u0000/g, "")
-      .replace(/\u00a0/g, " ")
-      .replace(/\r\n?/g, "\n")
-      .replace(/[ \t]+/g, " ")
-      .replace(/[‐-‒–—]/g, "-")
-      .replace(/\n{4,}/g, "\n\n\n")
+      parsed?.text ||
+      ""
+    )
+      .replace(
+        /\u0000/g,
+        ""
+      )
+      .replace(
+        /\u00a0/g,
+        " "
+      )
+      .replace(
+        /\r\n?/g,
+        "\n"
+      )
+      .replace(
+        /[ \t]+/g,
+        " "
+      )
+      .replace(
+        /[‐-‒–—]/g,
+        "-"
+      )
+      .replace(
+        /\n{4,}/g,
+        "\n\n\n"
+      )
       .trim();
 
 
@@ -2103,10 +2766,12 @@ async function extractPdfTextLocally(file) {
 
     const error =
       new Error(
-        "Very little text could be extracted from the PDF. It may be scanned or image-based."
+        "Very little text could be extracted from the PDF. The report may be scanned or image-based."
       );
 
+
     error.status = 422;
+
 
     throw error;
   }
@@ -2124,35 +2789,64 @@ async function extractPdfTextLocally(file) {
     pages:
       Number(
         parsed?.numpages
-      ) || null,
+      ) ||
+      null,
 
     info:
-      parsed?.info || {}
+      parsed?.info ||
+      {}
 
   };
 }
 
 
 /* ============================================================
-   13B. GENERAL HELPERS
+   13B. REPORT TEXT NORMALIZATION
    ============================================================ */
 
-function normalizeReportText(value) {
+function normalizeReportText(
+  value
+) {
 
   return String(
-    value || ""
+    value ||
+    ""
   )
-    .replace(/\u0000/g, "")
-    .replace(/\u00a0/g, " ")
-    .replace(/\r\n?/g, "\n")
-    .replace(/[‐-‒–—]/g, "-")
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
+    .replace(
+      /\u0000/g,
+      ""
+    )
+    .replace(
+      /\u00a0/g,
+      " "
+    )
+    .replace(
+      /\r\n?/g,
+      "\n"
+    )
+    .replace(
+      /[‐-‒–—]/g,
+      "-"
+    )
+    .replace(
+      /[ \t]+/g,
+      " "
+    )
+    .replace(
+      /\n{3,}/g,
+      "\n\n"
+    )
     .trim();
 }
 
 
-function finiteFinancialNumber(value) {
+/* ============================================================
+   13C. FINANCIAL NUMBER
+   ============================================================ */
+
+function finiteFinancialNumber(
+  value
+) {
 
   if (
     value === null ||
@@ -2164,18 +2858,24 @@ function finiteFinancialNumber(value) {
 
 
   if (
-    typeof value === "number"
+    typeof value ===
+    "number"
   ) {
 
-    return Number.isFinite(value)
+    return Number.isFinite(
+      value
+    )
+
       ? value
+
       : null;
   }
 
 
   let text =
-    String(value)
-      .trim();
+    String(
+      value
+    ).trim();
 
 
   if (!text) {
@@ -2185,27 +2885,30 @@ function finiteFinancialNumber(value) {
 
 
   /*
-   * Accounting dash.
+   * Accounting dash means reported zero only when the
+   * dash itself is the complete value.
    */
 
   if (
-    text === "-" ||
-    text === "–" ||
-    text === "—"
+    /^(?:-|–|—)$/.test(
+      text
+    )
   ) {
 
     return 0;
   }
 
 
-  /*
-   * Remove footnote markers around a number.
-   */
-
   text =
     text
-      .replace(/^[*#]+/, "")
-      .replace(/[*#]+$/, "")
+      .replace(
+        /^[*#]+/,
+        ""
+      )
+      .replace(
+        /[*#]+$/,
+        ""
+      )
       .trim();
 
 
@@ -2214,31 +2917,46 @@ function finiteFinancialNumber(value) {
 
 
   /*
-   * Accounting negative:
-   *
-   * (1,234)
+   * Accounting negative.
    */
 
   if (
-    /^\([^()]+\)$/.test(text)
+    /^$begin:math:text$\[\^\(\)\]\+$end:math:text$$/.test(
+      text
+    )
   ) {
 
     negative = true;
 
+
     text =
-      text.slice(
-        1,
-        -1
-      ).trim();
+      text
+        .slice(
+          1,
+          -1
+        )
+        .trim();
   }
 
 
   text =
     text
-      .replace(/₹/g, "")
-      .replace(/\bINR\b/gi, "")
-      .replace(/\bRs\.?\b/gi, "")
-      .replace(/,/g, "")
+      .replace(
+        /₹/g,
+        ""
+      )
+      .replace(
+        /\bINR\b/gi,
+        ""
+      )
+      .replace(
+        /\bRs\.?\b/gi,
+        ""
+      )
+      .replace(
+        /,/g,
+        ""
+      )
       .trim();
 
 
@@ -2253,34 +2971,44 @@ function finiteFinancialNumber(value) {
 
 
   const number =
-    Number(text);
+    Number(
+      text
+    );
 
 
   if (
-    !Number.isFinite(number)
+    !Number.isFinite(
+      number
+    )
   ) {
 
     return null;
   }
 
 
-  if (
-    negative
-  ) {
+  return negative
 
-    return -Math.abs(number);
-  }
+    ? -Math.abs(
+        number
+      )
 
-
-  return number;
+    : number;
 }
 
 
-function roundFinancial(value) {
+/* ============================================================
+   ROUND FINANCIAL NUMBER
+   ============================================================ */
+
+function roundFinancial(
+  value
+) {
 
   if (
     value === null ||
-    !Number.isFinite(value)
+    !Number.isFinite(
+      value
+    )
   ) {
 
     return null;
@@ -2288,83 +3016,92 @@ function roundFinancial(value) {
 
 
   return Math.round(
-    value * 100
-  ) / 100;
+    value *
+    100
+  ) /
+  100;
 }
 
 
 /* ============================================================
-   13C. ACCOUNTING NUMBER TOKENIZER
+   13D. ACCOUNTING NUMBER TOKENIZER
    ============================================================ */
 
-/*
- * Handles:
- *
- * 123
- * 1,234
- * 1,234.50
- * (1,234)
- * -1,234
- *
- * It deliberately does NOT treat arbitrary punctuation
- * as a financial number.
- */
-
-function extractAccountingNumberTokens(line) {
+function extractAccountingNumberTokens(
+  line
+) {
 
   const source =
     String(
-      line || ""
+      line ||
+      ""
     );
 
 
   const regex =
-    /\(?-?\d{1,3}(?:,\d{2,3})*(?:\.\d+)?\)?|\(?-?\d+(?:\.\d+)?\)?/g;
+    /$begin:math:text$\?\-\?\\d\{1\,3\}\(\?\:\,\\d\{2\,3\}\)\*\(\?\:\\\.\\d\+\)\?$end:math:text$?|$begin:math:text$\?\-\?\\d\+\(\?\:\\\.\\d\+\)\?$end:math:text$?/g;
 
 
   const matches =
-    source.match(regex) || [];
+    source.match(
+      regex
+    ) ||
+    [];
 
 
   return matches
-    .map(raw => ({
+    .map(
+      raw => ({
 
-      raw,
+        raw,
 
-      value:
-        finiteFinancialNumber(raw)
+        value:
+          finiteFinancialNumber(
+            raw
+          )
 
-    }))
+      })
+    )
     .filter(
       item =>
-        item.value !== null
+        item.value !==
+        null
     );
 }
 
 
-function extractAccountingNumbers(line) {
+function extractAccountingNumbers(
+  line
+) {
 
   return extractAccountingNumberTokens(
     line
-  ).map(
-    item =>
-      item.value
-  );
+  )
+    .map(
+      item =>
+        item.value
+    );
 }
 
 
 /* ============================================================
-   13D. YEAR DETECTION
+   13E. YEAR HELPERS
    ============================================================ */
 
-function normalizeYear(value) {
+function normalizeYear(
+  value
+) {
 
   const year =
-    Number(value);
+    Number(
+      value
+    );
 
 
   if (
-    !Number.isInteger(year) ||
+    !Number.isInteger(
+      year
+    ) ||
     year < 2000 ||
     year > 2200
   ) {
@@ -2377,20 +3114,76 @@ function normalizeYear(value) {
 }
 
 
-function detectYearsFromText(text) {
+function financialYearLabel(
+  year
+) {
 
-  const source =
-    String(
-      text || ""
+  const normalized =
+    normalizeYear(
+      year
     );
 
 
-  const counts =
+  if (!normalized) {
+
+    return null;
+  }
+
+
+  return (
+    `FY${normalized - 1}-` +
+    String(
+      normalized
+    ).slice(
+      -2
+    )
+  );
+}
+
+
+/* ============================================================
+   DETECT STATEMENT YEARS
+   ============================================================ */
+
+function detectStatementYears(
+  section
+) {
+
+  if (!section) {
+
+    return [];
+  }
+
+
+  /*
+   * Only inspect the beginning of the detected statement.
+   *
+   * This prevents unrelated accounting-standard years such
+   * as 2013 or incorporation years such as 2019 from becoming
+   * financial columns.
+   */
+
+  const header =
+    String(
+      section
+    )
+      .slice(
+        0,
+        5000
+      );
+
+
+  const currentYear =
+    new Date()
+      .getFullYear();
+
+
+  const candidates =
     new Map();
 
 
   const matches =
-    source.matchAll(
+    header.matchAll(
       /\b(20\d{2})\b/g
     );
 
@@ -2401,189 +3194,172 @@ function detectYearsFromText(text) {
   ) {
 
     const year =
-      normalizeYear(
+      Number(
         match[1]
       );
 
 
-    if (!year) {
-      continue;
-    }
-
-
-    counts.set(
-      year,
-      (counts.get(year) || 0) + 1
-    );
-  }
-
-
-  return [
-    ...counts.entries()
-  ]
-    .sort(
-      (a, b) => {
-
-        if (
-          b[1] !== a[1]
-        ) {
-
-          return b[1] - a[1];
-        }
-
-
-        return b[0] - a[0];
-      }
-    )
-    .map(
-      entry =>
-        entry[0]
-    );
-}
-
-function detectStatementYears(section) {
-
-  if (!section) {
-    return [];
-  }
-
-  /*
-   * Only inspect the beginning of the actual statement.
-   * Statement column years should occur very close to
-   * the statement heading.
-   *
-   * Do NOT scan 15,000 characters because that reaches
-   * notes, accounting standards and unrelated historical
-   * dates such as 2013 / 2019.
-   */
-
-  const header =
-    String(section)
-      .slice(0, 5000);
-
-  const currentYear =
-    new Date().getFullYear();
-
-  const candidates =
-    new Map();
-
-  const matches =
-    header.matchAll(
-      /\b(20\d{2})\b/g
-    );
-
-  for (const match of matches) {
-
-    const year =
-      Number(match[1]);
-
     if (
-      !Number.isInteger(year) ||
+      !Number.isInteger(
+        year
+      ) ||
       year < 2000 ||
-      year > currentYear + 2
+      year >
+        currentYear + 2
     ) {
+
       continue;
     }
 
-    /*
-     * Earlier occurrences are much more likely to be
-     * actual statement-column headers.
-     */
 
     const position =
-      match.index || 0;
+      match.index ||
+      0;
 
-    const positionScore =
-      Math.max(
-        0,
-        5000 - position
-      );
 
     const existing =
-      candidates.get(year) || {
-        count: 0,
-        score: 0
+      candidates.get(
+        year
+      ) ||
+      {
+        count:
+          0,
+
+        positionScore:
+          0
       };
 
-    existing.count += 1;
-    existing.score += positionScore;
+
+    existing.count +=
+      1;
+
+
+    existing.positionScore +=
+      Math.max(
+        0,
+        5000 -
+        position
+      );
+
 
     candidates.set(
       year,
       existing
     );
+
   }
 
 
-  const ranked =
-    [...candidates.entries()]
-      .sort((a, b) => {
+  if (
+    !candidates.size
+  ) {
 
-        /*
-         * Prefer repeated years and years appearing
-         * nearest the statement heading.
-         */
-
-        const scoreA =
-          a[1].count * 10000 +
-          a[1].score;
-
-        const scoreB =
-          b[1].count * 10000 +
-          b[1].score;
-
-        if (scoreB !== scoreA) {
-          return scoreB - scoreA;
-        }
-
-        return b[0] - a[0];
-      })
-      .map(entry => entry[0]);
-
-
-  if (!ranked.length) {
     return [];
   }
 
 
+  const ranked =
+    [
+      ...candidates.entries()
+    ]
+      .sort(
+        (
+          a,
+          b
+        ) => {
+
+          const scoreA =
+            a[1].count *
+            10000
+
+            +
+
+            a[1]
+              .positionScore;
+
+
+          const scoreB =
+            b[1].count *
+            10000
+
+            +
+
+            b[1]
+              .positionScore;
+
+
+          if (
+            scoreB !==
+            scoreA
+          ) {
+
+            return scoreB -
+              scoreA;
+          }
+
+
+          return b[0] -
+            a[0];
+
+        }
+      )
+      .map(
+        entry =>
+          entry[0]
+      );
+
+
   /*
-   * Financial statements normally contain current year
-   * and previous year.
+   * Financial statements almost always present:
    *
-   * Once the latest year is established, ONLY accept
-   * consecutive comparative years.
+   * current year
+   * comparative previous year
    *
-   * This prevents:
-   *
-   * 2026, 2025, 2019, 2013
-   *
-   * becoming four financial columns.
+   * Use the latest credible year and its immediately
+   * preceding comparative year.
    */
 
   const latest =
-    Math.max(...ranked);
+    Math.max(
+      ...ranked
+    );
 
-  const result = [];
+
+  const result =
+    [];
+
 
   if (
-    candidates.has(latest)
+    candidates.has(
+      latest
+    )
   ) {
-    result.push(latest);
+
+    result.push(
+      latest
+    );
   }
+
 
   if (
-    candidates.has(latest - 1)
+    candidates.has(
+      latest - 1
+    )
   ) {
-    result.push(latest - 1);
+
+    result.push(
+      latest - 1
+    );
   }
 
 
-  /*
-   * In unusual cases only one year may be detected.
-   */
+  if (
+    !result.length
+  ) {
 
-  if (!result.length) {
-    result.push(latest);
+    result.push(
+      latest
+    );
   }
 
 
@@ -2591,31 +3367,22 @@ function detectStatementYears(section) {
 }
 
 
-
-function financialYearLabel(year) {
-
-  if (
-    !Number.isInteger(year)
-  ) {
-
-    return null;
-  }
-
-
-  return `FY${year - 1}-${String(year).slice(-2)}`;
-}
-
-
 /* ============================================================
-   13E. COMPANY NAME
+   13F. COMPANY NAME
    ============================================================ */
 
-function cleanCompanyCandidate(value) {
+function cleanCompanyCandidate(
+  value
+) {
 
   return String(
-    value || ""
+    value ||
+    ""
   )
-    .replace(/\s+/g, " ")
+    .replace(
+      /\s+/g,
+      " "
+    )
     .replace(
       /\bannual report\b.*$/i,
       ""
@@ -2631,9 +3398,17 @@ function detectCompanyName(
 
   const metadata =
     cleanCompanyCandidate(
-      info?.Title ||
-      info?.title ||
+
+      info?.Title
+
+      ||
+
+      info?.title
+
+      ||
+
       ""
+
     );
 
 
@@ -2645,10 +3420,6 @@ function detectCompanyName(
       metadata
     )
   ) {
-
-    /*
-     * Only trust metadata if it looks company-like.
-     */
 
     if (
       /\b(limited|ltd|corporation|corp|company|industries|bank|finance|financial|technologies|technology|telecom|platforms|holdings|enterprises)\b/i.test(
@@ -2664,18 +3435,28 @@ function detectCompanyName(
 
   const lines =
     String(
-      text || ""
+      text ||
+      ""
     )
-      .split("\n")
+      .split(
+        "\n"
+      )
       .map(
         line =>
-          cleanCompanyCandidate(line)
+          cleanCompanyCandidate(
+            line
+          )
       )
-      .filter(Boolean)
-      .slice(0, 300);
+      .filter(
+        Boolean
+      )
+      .slice(
+        0,
+        300
+      );
 
 
-  const companyPatterns = [
+  const patterns = [
 
     /\b[A-Za-z][A-Za-z0-9&.,'() -]{2,120}\s+Limited\b/i,
 
@@ -2705,11 +3486,13 @@ function detectCompanyName(
 
     for (
       const pattern
-      of companyPatterns
+      of patterns
     ) {
 
       const match =
-        line.match(pattern);
+        line.match(
+          pattern
+        );
 
 
       if (
@@ -2731,7 +3514,7 @@ function detectCompanyName(
 
 
 /* ============================================================
-   13F. STATEMENT HEADING DEFINITIONS
+   13G. STATEMENT HEADINGS
    ============================================================ */
 
 const PROFIT_STATEMENT_HEADINGS = [
@@ -2792,7 +3575,7 @@ const CASH_FLOW_HEADINGS = [
 
 
 /* ============================================================
-   13G. STATEMENT CANDIDATE SEARCH
+   13H. HEADING POSITIONS
    ============================================================ */
 
 function findAllHeadingPositions(
@@ -2802,7 +3585,8 @@ function findAllHeadingPositions(
 
   const source =
     String(
-      text || ""
+      text ||
+      ""
     );
 
 
@@ -2820,7 +3604,10 @@ function findAllHeadingPositions(
   ) {
 
     const needle =
-      heading.toLowerCase();
+      String(
+        heading
+      )
+        .toLowerCase();
 
 
     let position =
@@ -2840,7 +3627,8 @@ function findAllHeadingPositions(
 
 
       if (
-        index === -1
+        index ===
+        -1
       ) {
 
         break;
@@ -2859,20 +3647,25 @@ function findAllHeadingPositions(
       position =
         index +
         needle.length;
+
     }
 
   }
 
 
   return results.sort(
-    (a, b) =>
-      a.index - b.index
+    (
+      a,
+      b
+    ) =>
+      a.index -
+      b.index
   );
 }
 
 
 /* ============================================================
-   13H. SCORE STATEMENT CANDIDATE
+   13I. SCORE STATEMENT CANDIDATE
    ============================================================ */
 
 function scoreStatementCandidate(
@@ -2884,7 +3677,8 @@ function scoreStatementCandidate(
   const window =
     text.slice(
       candidate.index,
-      candidate.index + 45000
+      candidate.index +
+      45000
     );
 
 
@@ -2896,14 +3690,12 @@ function scoreStatementCandidate(
     0;
 
 
-  /*
-   * Strongly prefer consolidated.
-   */
-
   if (
     candidate.heading
       .toLowerCase()
-      .includes("consolidated")
+      .includes(
+        "consolidated"
+      )
   ) {
 
     score += 15;
@@ -2912,7 +3704,10 @@ function scoreStatementCandidate(
 
   if (
     /\bconsolidated\b/i.test(
-      window.slice(0, 1000)
+      window.slice(
+        0,
+        1200
+      )
     )
   ) {
 
@@ -2921,29 +3716,21 @@ function scoreStatementCandidate(
 
 
   /*
-   * Reject obvious table-of-contents entries.
+   * Penalize contents/index references.
    */
-
-  const first500 =
-    window.slice(
-      0,
-      500
-    );
-
 
   if (
     /table of contents|contents/i.test(
-      first500
+      window.slice(
+        0,
+        500
+      )
     )
   ) {
 
     score -= 20;
   }
 
-
-  /*
-   * Actual statements contain lots of amounts.
-   */
 
   const numberCount =
     extractAccountingNumbers(
@@ -2969,10 +3756,6 @@ function scoreStatementCandidate(
   }
 
 
-  /*
-   * Actual statements normally contain years.
-   */
-
   const years =
     detectStatementYears(
       window
@@ -2994,12 +3777,9 @@ function scoreStatementCandidate(
   }
 
 
-  /*
-   * Statement-specific evidence.
-   */
-
   if (
-    type === "profit"
+    type ===
+    "profit"
   ) {
 
     if (
@@ -3035,7 +3815,8 @@ function scoreStatementCandidate(
 
 
   if (
-    type === "balance"
+    type ===
+    "balance"
   ) {
 
     if (
@@ -3071,7 +3852,8 @@ function scoreStatementCandidate(
 
 
   if (
-    type === "cash"
+    type ===
+    "cash"
   ) {
 
     if (
@@ -3107,10 +3889,10 @@ function scoreStatementCandidate(
 
 
   /*
-   * Early report references are often contents.
+   * Early occurrences are often contents pages.
    */
 
-  const documentFraction =
+  const fraction =
     candidate.index /
     Math.max(
       text.length,
@@ -3119,7 +3901,7 @@ function scoreStatementCandidate(
 
 
   if (
-    documentFraction <
+    fraction <
     0.05
   ) {
 
@@ -3132,7 +3914,7 @@ function scoreStatementCandidate(
 
 
 /* ============================================================
-   13I. FIND BEST STATEMENT
+   13J. FIND BEST STATEMENT
    ============================================================ */
 
 function findBestStatement(
@@ -3196,7 +3978,8 @@ function findBestStatement(
 
     if (
       !best ||
-      score > best.score
+      score >
+        best.score
     ) {
 
       best = {
@@ -3236,7 +4019,8 @@ function findBestStatement(
     text:
       source.slice(
         best.index,
-        best.index + maxLength
+        best.index +
+        maxLength
       ),
 
     heading:
@@ -3253,189 +4037,72 @@ function findBestStatement(
 
 
 /* ============================================================
-   13J. FINANCIAL UNIT DETECTION
+   13K. FINANCIAL UNIT DETECTION
    ============================================================ */
-
-function detectFinancialUnitCandidates(
-  text
-) {
-
-  const source =
-    String(
-      text || ""
-    );
-
-
-  const candidates =
-    [];
-
-
-  const patterns = [
-
-    {
-      unit:
-        "INR crore",
-
-      regexes: [
-
-        /\b(?:₹|rs\.?|inr)\s*(?:in\s*)?crores?\b/gi,
-
-        /\bamounts?\s+(?:are\s+)?(?:in\s+)?(?:₹|rs\.?|inr)?\s*crores?\b/gi,
-
-        /\bfigures?\s+(?:are\s+)?(?:in\s+)?(?:₹|rs\.?|inr)?\s*crores?\b/gi,
-
-        /\b₹\s*crores?\b/gi,
-
-        /\brs\.?\s+crores?\b/gi
-
-      ]
-    },
-
-
-    {
-      unit:
-        "INR million",
-
-      regexes: [
-
-        /\b(?:₹|rs\.?|inr)\s*(?:in\s*)?millions?\b/gi,
-
-        /\bamounts?\s+(?:are\s+)?(?:in\s+)?(?:₹|rs\.?|inr)?\s*millions?\b/gi,
-
-        /\bfigures?\s+(?:are\s+)?(?:in\s+)?(?:₹|rs\.?|inr)?\s*millions?\b/gi,
-
-        /\bindian rupees?\s+in\s+millions?\b/gi
-
-      ]
-    },
-
-
-    {
-      unit:
-        "INR lakh",
-
-      regexes: [
-
-        /\b(?:₹|rs\.?|inr)\s*(?:in\s*)?lakhs?\b/gi,
-
-        /\bamounts?\s+(?:are\s+)?(?:in\s+)?(?:₹|rs\.?|inr)?\s*lakhs?\b/gi,
-
-        /\bfigures?\s+(?:are\s+)?(?:in\s+)?(?:₹|rs\.?|inr)?\s*lakhs?\b/gi
-
-      ]
-    },
-
-
-    {
-      unit:
-        "INR billion",
-
-      regexes: [
-
-        /\b(?:₹|rs\.?|inr)\s*(?:in\s*)?billions?\b/gi,
-
-        /\bamounts?\s+(?:are\s+)?(?:in\s+)?(?:₹|rs\.?|inr)?\s*billions?\b/gi,
-
-        /\bfigures?\s+(?:are\s+)?(?:in\s+)?(?:₹|rs\.?|inr)?\s*billions?\b/gi
-
-      ]
-    }
-
-  ];
-
-
-  for (
-    const definition
-    of patterns
-  ) {
-
-    for (
-      const regex
-      of definition.regexes
-    ) {
-
-      regex.lastIndex = 0;
-
-
-      let match;
-
-
-      while (
-        (
-          match =
-            regex.exec(source)
-        )
-      ) {
-
-        candidates.push({
-
-          unit:
-            definition.unit,
-
-          index:
-            match.index,
-
-          text:
-            match[0]
-
-        });
-
-
-        if (
-          regex.lastIndex ===
-          match.index
-        ) {
-
-          regex.lastIndex++;
-        }
-
-      }
-
-    }
-
-  }
-
-
-  return candidates.sort(
-    (a, b) =>
-      a.index - b.index
-  );
-}
-
 
 function detectFinancialUnit(
   statementText,
   fallbackText = ""
 ) {
 
-  function detect(source) {
+  function detect(
+    source
+  ) {
 
     const text =
-      String(source || "")
-        .slice(0, 50000)
-        .replace(/\u00a0/g, " ")
-        .replace(/\s+/g, " ")
+      String(
+        source ||
+        ""
+      )
+        .slice(
+          0,
+          50000
+        )
+        .replace(
+          /\u00a0/g,
+          " "
+        )
+        .replace(
+          /\s+/g,
+          " "
+        )
         .toLowerCase();
 
 
     /*
-     * CRORE
+     * IMPORTANT:
      *
-     * Handles examples such as:
+     * pdf-parse may corrupt the rupee symbol.
      *
-     * ₹ in crore
-     * ₹ in crores
-     * Rs. in crore
-     * INR crore
-     * amounts in crore
-     * figures in crore
-     * rupees in crore
+     * Example from the supplied Jio report:
+     *
+     * "The Consolidated Financial Statements are presented
+     * in Indian Rupees (C) and all values are rounded
+     * to the nearest crore (C 00,00,000)"
+     *
+     * Therefore explicit wording about Indian Rupees and
+     * nearest crore is sufficient evidence of INR crore.
      */
 
     if (
+      /indian rupees?[^.]{0,250}(?:nearest\s+)?crore/i.test(
+        text
+      )
+
+      ||
+
+      /all values are rounded[^.]{0,150}(?:nearest\s+)?crore/i.test(
+        text
+      )
+
+      ||
+
       /(?:₹|rs\.?|inr|rupees?|amounts?|figures?)[^.!?\n]{0,120}\bcrores?\b/i.test(
         text
-      ) ||
+      )
+
+      ||
+
       /\bcrores?\b[^.!?\n]{0,80}(?:₹|rs\.?|inr|rupees?)/i.test(
         text
       )
@@ -3445,14 +4112,19 @@ function detectFinancialUnit(
     }
 
 
-    /*
-     * MILLION
-     */
-
     if (
+      /indian rupees?[^.]{0,250}(?:nearest\s+)?million/i.test(
+        text
+      )
+
+      ||
+
       /(?:₹|rs\.?|inr|rupees?|amounts?|figures?)[^.!?\n]{0,120}\bmillions?\b/i.test(
         text
-      ) ||
+      )
+
+      ||
+
       /\bmillions?\b[^.!?\n]{0,80}(?:₹|rs\.?|inr|rupees?)/i.test(
         text
       )
@@ -3462,14 +4134,19 @@ function detectFinancialUnit(
     }
 
 
-    /*
-     * LAKH
-     */
-
     if (
+      /indian rupees?[^.]{0,250}(?:nearest\s+)?lakh/i.test(
+        text
+      )
+
+      ||
+
       /(?:₹|rs\.?|inr|rupees?|amounts?|figures?)[^.!?\n]{0,120}\blakhs?\b/i.test(
         text
-      ) ||
+      )
+
+      ||
+
       /\blakhs?\b[^.!?\n]{0,80}(?:₹|rs\.?|inr|rupees?)/i.test(
         text
       )
@@ -3479,14 +4156,19 @@ function detectFinancialUnit(
     }
 
 
-    /*
-     * BILLION
-     */
-
     if (
+      /indian rupees?[^.]{0,250}(?:nearest\s+)?billion/i.test(
+        text
+      )
+
+      ||
+
       /(?:₹|rs\.?|inr|rupees?|amounts?|figures?)[^.!?\n]{0,120}\bbillions?\b/i.test(
         text
-      ) ||
+      )
+
+      ||
+
       /\bbillions?\b[^.!?\n]{0,80}(?:₹|rs\.?|inr|rupees?)/i.test(
         text
       )
@@ -3500,44 +4182,29 @@ function detectFinancialUnit(
   }
 
 
-  /*
-   * 1. Statement itself.
-   */
-
   const statementUnit =
     detect(
       statementText
     );
 
 
-  if (statementUnit) {
+  if (
+    statementUnit
+  ) {
 
     return statementUnit;
   }
 
 
-  /*
-   * 2. Wider report fallback.
-   *
-   * IMPORTANT:
-   * We do not blindly assume crore merely because the
-   * report is Indian.
-   */
-
-  const reportUnit =
-    detect(
-      fallbackText
-    );
-
-
-  if (reportUnit) {
-
-    return reportUnit;
-  }
-
-
-  return null;
+  return detect(
+    fallbackText
+  );
 }
+
+
+/* ============================================================
+   13L. UNIT FACTOR
+   ============================================================ */
 
 function monetaryCroreFactor(
   sourceUnit
@@ -3545,7 +4212,8 @@ function monetaryCroreFactor(
 
   const unit =
     String(
-      sourceUnit || ""
+      sourceUnit ||
+      ""
     )
       .toLowerCase()
       .trim();
@@ -3596,7 +4264,7 @@ function monetaryCroreFactor(
 
 
 /* ============================================================
-   13K. STATEMENT LINE NORMALIZATION
+   13M. STATEMENT LINES
    ============================================================ */
 
 function statementLines(
@@ -3604,21 +4272,29 @@ function statementLines(
 ) {
 
   return String(
-    section || ""
+    section ||
+    ""
   )
-    .split("\n")
+    .split(
+      "\n"
+    )
     .map(
       line =>
         line
-          .replace(/\s+/g, " ")
+          .replace(
+            /\s+/g,
+            " "
+          )
           .trim()
     )
-    .filter(Boolean);
+    .filter(
+      Boolean
+    );
 }
 
 
 /* ============================================================
-   13L. LABEL MATCHING
+   13N. LABEL NORMALIZATION
    ============================================================ */
 
 function normalizedLabelText(
@@ -3626,13 +4302,26 @@ function normalizedLabelText(
 ) {
 
   return String(
-    value || ""
+    value ||
+    ""
   )
     .toLowerCase()
-    .replace(/&/g, " and ")
-    .replace(/[’']/g, "")
-    .replace(/[^a-z0-9 ]+/g, " ")
-    .replace(/\s+/g, " ")
+    .replace(
+      /&/g,
+      " and "
+    )
+    .replace(
+      /[’']/g,
+      ""
+    )
+    .replace(
+      /[^a-z0-9 ]+/g,
+      " "
+    )
+    .replace(
+      /\s+/g,
+      " "
+    )
     .trim();
 }
 
@@ -3658,25 +4347,34 @@ function lineMatchesLabel(
 
 
       if (!target) {
+
         return false;
       }
 
 
-      /*
-       * Exact beginning or complete phrase is preferred.
-       */
-
       return (
-        normalized === target ||
+
+        normalized ===
+          target
+
+        ||
+
         normalized.startsWith(
           `${target} `
-        ) ||
+        )
+
+        ||
+
         normalized.includes(
           ` ${target} `
-        ) ||
+        )
+
+        ||
+
         normalized.endsWith(
           ` ${target}`
         )
+
       );
 
     }
@@ -3685,40 +4383,104 @@ function lineMatchesLabel(
 
 
 /* ============================================================
-   13M. FIND METRIC ROW
+   END BLOCK 1A
+
+   BLOCK 1B CONTINUES DIRECTLY FROM HERE.
+
+   DO NOT ADD:
+   }
+   );
+   boot();
+   OR ANY OTHER CODE BETWEEN 1A AND 1B.
    ============================================================ */
+/* ============================================================
+   13O. EXCLUDE UNWANTED ROWS
+   ============================================================ */
+
+function lineContainsExcludedText(
+  line,
+  exclude = []
+) {
+
+  if (
+    !Array.isArray(exclude) ||
+    !exclude.length
+  ) {
+
+    return false;
+  }
+
+
+  const normalized =
+    normalizedLabelText(
+      line
+    );
+
+
+  return exclude.some(
+    item =>
+      normalized.includes(
+        normalizedLabelText(
+          item
+        )
+      )
+  );
+}
+
+
+/* ============================================================
+   13P. FIND METRIC ROW
+   ============================================================ */
+
+/*
+ * pdf-parse does not always preserve tables perfectly.
+ *
+ * A statement row may appear as:
+ *
+ * Revenue from operations 23 128218 117819
+ *
+ * OR:
+ *
+ * Revenue from operations
+ * 23
+ * 128218
+ * 117819
+ *
+ * Therefore inspect the matched line and a small number of
+ * immediately following lines.
+ *
+ * Do NOT search a huge notes section after matching a label.
+ */
 
 function findMetricRow(
   section,
   labels,
   {
     exclude = [],
-    searchLimit = 5000
+    lookAheadLines = 4
   } = {}
 ) {
+
+  if (!section) {
+
+    return null;
+  }
+
 
   const lines =
     statementLines(
       section
-    )
-      .slice(
-        0,
-        searchLimit
-      );
-
-
-  let best =
-    null;
+    );
 
 
   for (
-    let i = 0;
-    i < lines.length;
-    i++
+    let index = 0;
+    index < lines.length;
+    index++
   ) {
 
     const line =
-      lines[i];
+      lines[index];
 
 
     if (
@@ -3732,125 +4494,131 @@ function findMetricRow(
     }
 
 
-    const normalized =
-      normalizedLabelText(
-        line
-      );
-
-
-    const excluded =
-      exclude.some(
-        phrase =>
-          normalized.includes(
-            normalizedLabelText(
-              phrase
-            )
-          )
-      );
-
-
-    if (excluded) {
+    if (
+      lineContainsExcludedText(
+        line,
+        exclude
+      )
+    ) {
 
       continue;
     }
 
 
     /*
-     * Some PDFs put amounts on following lines.
+     * Build only a small local row window.
      *
-     * Combine at most 3 lines. Going farther increases
-     * the chance of stealing values from another metric.
+     * This is deliberately narrow so values from unrelated
+     * note disclosures are not accidentally attached to the
+     * matched financial-statement label.
      */
 
-    const combined =
+    const rowLines =
       [
-        line,
-        lines[i + 1] || "",
-        lines[i + 2] || ""
-      ].join(" ");
+        line
+      ];
 
 
-    const numbers =
+    for (
+      let offset = 1;
+      offset <= lookAheadLines;
+      offset++
+    ) {
+
+      const next =
+        lines[
+          index +
+          offset
+        ];
+
+
+      if (!next) {
+        break;
+      }
+
+
+      /*
+       * Stop if the next line clearly looks like another
+       * statement label rather than continuation numbers.
+       */
+
+      const nextNormalized =
+        normalizedLabelText(
+          next
+        );
+
+
+      const nextNumbers =
+        extractAccountingNumbers(
+          next
+        );
+
+
+      const mostlyText =
+        nextNormalized.length > 12 &&
+        nextNumbers.length === 0;
+
+
+      if (
+        offset > 1 &&
+        mostlyText
+      ) {
+
+        break;
+      }
+
+
+      rowLines.push(
+        next
+      );
+
+
+      /*
+       * Two or more amounts are normally enough for current
+       * and comparative columns.
+       */
+
+      const currentNumbers =
+        extractAccountingNumbers(
+          rowLines.join(" ")
+        );
+
+
+      if (
+        currentNumbers.length >= 3
+      ) {
+
+        break;
+      }
+
+    }
+
+
+    const combined =
+      rowLines.join(
+        " "
+      );
+
+
+    const values =
       extractAccountingNumbers(
         combined
       );
 
 
     if (
-      !numbers.length
+      values.length
     ) {
 
-      continue;
-    }
+      return {
 
-
-    /*
-     * Prefer rows containing multiple financial values.
-     */
-
-    let score =
-      1;
-
-
-    if (
-      numbers.length >= 2
-    ) {
-
-      score += 3;
-    }
-
-
-    if (
-      numbers.length >= 3
-    ) {
-
-      score += 1;
-    }
-
-
-    /*
-     * Prefer amount on same line.
-     */
-
-    if (
-      extractAccountingNumbers(
-        line
-      ).length
-    ) {
-
-      score += 2;
-    }
-
-
-    /*
-     * Prefer earlier statement rows over notes far below.
-     */
-
-    score -=
-      i /
-      Math.max(
-        lines.length,
-        1
-      );
-
-
-    if (
-      !best ||
-      score > best.score
-    ) {
-
-      best = {
+        index,
 
         line,
 
         combined,
 
-        numbers,
-
-        lineIndex:
-          i,
-
-        score
+        values
 
       };
     }
@@ -3858,98 +4626,154 @@ function findMetricRow(
   }
 
 
-  return best;
+  return null;
 }
 
 
 /* ============================================================
-   13N. REMOVE NOTE NUMBER
+   13Q. REMOVE LIKELY NOTE NUMBER
    ============================================================ */
 
-/*
- * Typical statement:
- *
- * Revenue from operations    27    128,218    117,456
- *
- * 27 = note reference
- *
- * We must never interpret 27 as revenue.
- */
-
-function stripLikelyNoteReference(
+function removeLikelyNoteNumber(
   values,
-  expectedColumns
+  expectedColumns = 2
 ) {
 
-  const result =
-    [
-      ...values
-    ];
+  if (
+    !Array.isArray(values)
+  ) {
+
+    return [];
+  }
+
+
+  const cleaned =
+    values.filter(
+      value =>
+        Number.isFinite(
+          value
+        )
+    );
 
 
   if (
-    result.length <=
+    cleaned.length <=
     expectedColumns
   ) {
 
-    return result;
+    return cleaned;
   }
 
 
   /*
-   * If exactly one extra value exists and the first is
-   * a small integer, it is very likely a note number.
+   * Common Indian statement layout:
+   *
+   * Metric | Note | 2026 | 2025
+   *
+   * A small first integer is often the note reference.
    */
 
   if (
-    result.length ===
+    cleaned.length >=
       expectedColumns + 1
 
     &&
 
     Number.isInteger(
-      result[0]
+      cleaned[0]
     )
 
     &&
 
-    result[0] >= 1
+    cleaned[0] >= 1
 
     &&
 
-    result[0] <= 500
+    cleaned[0] <= 500
   ) {
 
-    result.shift();
+    return cleaned.slice(
+      1
+    );
+  }
+
+
+  return cleaned;
+}
+
+
+/* ============================================================
+   13R. MAP ROW VALUES TO YEARS
+   ============================================================ */
+
+function mapValuesToYears(
+  values,
+  years
+) {
+
+  const result =
+    {};
+
+
+  if (
+    !Array.isArray(years) ||
+    !years.length
+  ) {
 
     return result;
   }
 
 
+  let amounts =
+    removeLikelyNoteNumber(
+      values,
+      years.length
+    );
+
+
   /*
-   * When there are many values, inspect first token.
+   * If there are extra values after removing a note number,
+   * prefer the first N financial columns.
+   *
+   * Do not use trailing percentages or note references.
    */
 
   if (
-    result.length >
-      expectedColumns
-
-    &&
-
-    Number.isInteger(
-      result[0]
-    )
-
-    &&
-
-    result[0] >= 1
-
-    &&
-
-    result[0] <= 300
+    amounts.length >
+    years.length
   ) {
 
-    result.shift();
+    amounts =
+      amounts.slice(
+        0,
+        years.length
+      );
+  }
+
+
+  for (
+    let index = 0;
+    index < years.length;
+    index++
+  ) {
+
+    const year =
+      years[index];
+
+
+    const value =
+      amounts[index];
+
+
+    result[year] =
+
+      Number.isFinite(
+        value
+      )
+
+        ? value
+
+        : null;
   }
 
 
@@ -3958,23 +4782,37 @@ function stripLikelyNoteReference(
 
 
 /* ============================================================
-   13O. MAP ROW TO YEARS
+   13S. EXTRACT MONEY METRIC
    ============================================================ */
 
-function metricValuesByYear(
+function extractMoneyMetric(
   section,
   labels,
   years,
+  factor,
   options = {}
 ) {
 
-  if (
-    !section ||
-    !Array.isArray(years) ||
-    !years.length
+  const result =
+    {};
+
+
+  for (
+    const year
+    of years
   ) {
 
-    return {};
+    result[year] =
+      null;
+  }
+
+
+  if (
+    !section ||
+    factor === null
+  ) {
+
+    return result;
   }
 
 
@@ -3988,80 +4826,38 @@ function metricValuesByYear(
 
   if (!row) {
 
-    return {};
+    return result;
   }
 
 
-  let values =
-    stripLikelyNoteReference(
-      row.numbers,
-      years.length
+  const mapped =
+    mapValuesToYears(
+      row.values,
+      years
     );
 
 
-  /*
-   * A statement may contain more numbers because nearby
-   * text was joined. We use only the number of expected
-   * statement columns.
-   */
-
-  if (
-    values.length >
-    years.length
+  for (
+    const year
+    of years
   ) {
 
-    values =
-      values.slice(
-        0,
-        years.length
+    const raw =
+      finiteFinancialNumber(
+        mapped[year]
       );
-  }
 
 
-  /*
-   * If there are fewer values than years, do NOT guess
-   * which missing year belongs where.
-   *
-   * Exception: one current-year value can safely map to
-   * the first/current year.
-   */
+    result[year] =
 
-  const result =
-    {};
+      raw === null
 
+        ? null
 
-  if (
-    values.length === 1
-  ) {
-
-    result[
-      years[0]
-    ] =
-      values[0];
-
-    return result;
-  }
-
-
-  if (
-    values.length !==
-    years.length
-  ) {
-
-    return {};
-  }
-
-
-  for (
-    let i = 0;
-    i < years.length;
-    i++
-  ) {
-
-    result[
-      years[i]
-    ] =
-      values[i];
+        : roundFinancial(
+            raw *
+            factor
+          );
   }
 
 
@@ -4070,193 +4866,217 @@ function metricValuesByYear(
 
 
 /* ============================================================
-   13P. CONVERT YEAR MAP TO CRORE
+   13T. EXTRACT RAW METRIC
    ============================================================ */
 
-function convertYearMapToCrore(
-  values,
-  factor
-) {
-
-  const result =
-    {};
-
-
-  if (
-    factor === null
-  ) {
-
-    return result;
-  }
-
-
-  for (
-    const [
-      year,
-      value
-    ]
-    of Object.entries(
-      values || {}
-    )
-  ) {
-
-    if (
-      value === null ||
-      !Number.isFinite(value)
-    ) {
-
-      continue;
-    }
-
-
-    result[
-      year
-    ] =
-      roundFinancial(
-        value *
-        factor
-      );
-  }
-
-
-  return result;
-}
-
-
-/* ============================================================
-   13Q. MERGE YEAR MAPS
-   ============================================================ */
-
-function mergeYearMaps(
-  ...maps
-) {
-
-  const result =
-    {};
-
-
-  for (
-    const map
-    of maps
-  ) {
-
-    if (
-      !map ||
-      typeof map !== "object"
-    ) {
-
-      continue;
-    }
-
-
-    for (
-      const [
-        year,
-        value
-      ]
-      of Object.entries(
-        map
-      )
-    ) {
-
-      if (
-        result[year] === undefined &&
-        value !== null &&
-        Number.isFinite(value)
-      ) {
-
-        result[year] =
-          value;
-      }
-
-    }
-
-  }
-
-
-  return result;
-}
-
-
-/* ============================================================
-   13R. EXTRACT MONETARY METRIC
-   ============================================================ */
-
-function extractMoneyMetric(
+function extractRawMetric(
   section,
   labels,
   years,
-  factor,
   options = {}
 ) {
 
-  const raw =
-    metricValuesByYear(
+  const result =
+    {};
+
+
+  for (
+    const year
+    of years
+  ) {
+
+    result[year] =
+      null;
+  }
+
+
+  const row =
+    findMetricRow(
       section,
       labels,
-      years,
       options
     );
 
 
-  return convertYearMapToCrore(
-    raw,
-    factor
+  if (!row) {
+
+    return result;
+  }
+
+
+  const mapped =
+    mapValuesToYears(
+      row.values,
+      years
+    );
+
+
+  for (
+    const year
+    of years
+  ) {
+
+    result[year] =
+      finiteFinancialNumber(
+        mapped[year]
+      );
+  }
+
+
+  return result;
+}
+
+
+/* ============================================================
+   13U. MERGE METRIC BY YEAR
+   ============================================================ */
+
+function valueForYear(
+  metric,
+  year
+) {
+
+  if (
+    !metric ||
+    typeof metric !== "object"
+  ) {
+
+    return null;
+  }
+
+
+  return finiteFinancialNumber(
+    metric[year]
   );
 }
 
 
 /* ============================================================
-   13S. SHARES OUTSTANDING
+   13V. SAFE CALCULATIONS
    ============================================================ */
 
-function extractSharesOutstanding(
-  fullText,
-  years
+function safeRatio(
+  numerator,
+  denominator,
+  multiplier = 1
 ) {
 
-  const result =
-    {};
-
-
-  const source =
-    String(
-      fullText || ""
+  const a =
+    finiteFinancialNumber(
+      numerator
     );
 
 
-  /*
-   * Search areas around share-capital terminology.
-   */
-
-  const lower =
-    source.toLowerCase();
+  const b =
+    finiteFinancialNumber(
+      denominator
+    );
 
 
-  const needles = [
+  if (
+    a === null ||
+    b === null ||
+    Math.abs(b) <
+      0.0000001
+  ) {
+
+    return null;
+  }
+
+
+  return roundFinancial(
+    (
+      a /
+      b
+    ) *
+    multiplier
+  );
+}
+
+
+function safeDifference(
+  first,
+  second
+) {
+
+  const a =
+    finiteFinancialNumber(
+      first
+    );
+
+
+  const b =
+    finiteFinancialNumber(
+      second
+    );
+
+
+  if (
+    a === null ||
+    b === null
+  ) {
+
+    return null;
+  }
+
+
+  return roundFinancial(
+    a -
+    b
+  );
+}
+
+
+/* ============================================================
+   13W. EXTRACT SHARES OUTSTANDING
+   ============================================================ */
+
+/*
+ * This is deliberately conservative.
+ *
+ * It does not use weighted-average EPS shares.
+ */
+
+function extractSharesOutstanding(
+  text
+) {
+
+  const source =
+    normalizeReportText(
+      text
+    );
+
+
+  const searchTerms = [
 
     "issued, subscribed and paid-up",
 
     "issued subscribed and paid-up",
 
+    "issued, subscribed and paid up",
+
+    "issued subscribed and paid up",
+
     "issued and paid-up",
 
     "issued and paid up",
 
-    "equity share capital",
-
-    "share capital"
+    "equity share capital"
 
   ];
 
 
-  const windows =
+  const lower =
+    source.toLowerCase();
+
+
+  const candidateWindows =
     [];
 
 
   for (
-    const needle
-    of needles
+    const term
+    of searchTerms
   ) {
 
     let position =
@@ -4270,280 +5090,250 @@ function extractSharesOutstanding(
 
       const index =
         lower.indexOf(
-          needle,
+          term,
           position
         );
 
 
       if (
-        index === -1
+        index < 0
       ) {
 
         break;
       }
 
 
-      windows.push(
+      candidateWindows.push(
         source.slice(
           Math.max(
             0,
-            index - 3000
+            index -
+            1500
           ),
-          index + 12000
+          index +
+          7000
         )
       );
 
 
       position =
         index +
-        needle.length;
+        term.length;
     }
 
   }
 
-
-  /*
-   * Avoid scanning arbitrary report numbers.
-   */
 
   for (
     const window
-    of windows
+    of candidateWindows
   ) {
 
-    const lines =
-      statementLines(
-        window
+    /*
+     * Explicit crore shares.
+     */
+
+    const crore =
+      window.match(
+        /(\d[\d,]*(?:\.\d+)?)\s+crores?\s+(?:equity\s+)?shares?/i
       );
 
 
-    for (
-      const line
-      of lines
+    if (
+      crore?.[1]
     ) {
 
+      const value =
+        finiteFinancialNumber(
+          crore[1]
+        );
+
+
       if (
-        !/\bequity shares?\b/i.test(
-          line
-        )
+        value !== null &&
+        value > 0
       ) {
 
-        continue;
+        return {
+
+          value:
+            value,
+
+          unit:
+            "crore shares"
+
+        };
       }
 
+    }
 
-      /*
-       * Reject authorized-share lines.
-       */
+
+    /*
+     * Explicit lakh shares.
+     */
+
+    const lakh =
+      window.match(
+        /(\d[\d,]*(?:\.\d+)?)\s+lakhs?\s+(?:equity\s+)?shares?/i
+      );
+
+
+    if (
+      lakh?.[1]
+    ) {
+
+      const value =
+        finiteFinancialNumber(
+          lakh[1]
+        );
+
 
       if (
-        /\bauthori[sz]ed\b/i.test(
-          line
-        )
+        value !== null &&
+        value > 0
       ) {
 
-        continue;
+        return {
+
+          value:
+            roundFinancial(
+              value /
+              100
+            ),
+
+          unit:
+            "crore shares"
+
+        };
       }
 
+    }
 
-      /*
-       * Absolute share count:
-       *
-       * 6,767,958,812 equity shares
-       */
 
-      const absoluteMatches =
-        [
-          ...line.matchAll(
-            /(\d[\d,]{6,})\s+(?:fully\s+paid[- ]?up\s+)?equity shares?/gi
-          )
-        ];
+    /*
+     * Explicit million shares.
+     */
+
+    const million =
+      window.match(
+        /(\d[\d,]*(?:\.\d+)?)\s+millions?\s+(?:equity\s+)?shares?/i
+      );
+
+
+    if (
+      million?.[1]
+    ) {
+
+      const value =
+        finiteFinancialNumber(
+          million[1]
+        );
 
 
       if (
-        absoluteMatches.length
+        value !== null &&
+        value > 0
       ) {
 
-        const values =
-          absoluteMatches
-            .map(
-              match =>
-                finiteFinancialNumber(
-                  match[1]
-                )
-            )
-            .filter(
-              value =>
-                value !== null &&
-                value > 0
-            );
+        return {
 
+          value:
+            roundFinancial(
+              value /
+              10
+            ),
 
-        if (
-          values.length
-        ) {
+          unit:
+            "crore shares"
 
-          /*
-           * Convert absolute shares -> crore shares.
-           */
-
-          const converted =
-            values.map(
-              value =>
-                roundFinancial(
-                  value /
-                  10000000
-                )
-            );
-
-
-          for (
-            let i = 0;
-            i <
-              Math.min(
-                years.length,
-                converted.length
-              );
-            i++
-          ) {
-
-            if (
-              result[
-                years[i]
-              ] === undefined
-            ) {
-
-              result[
-                years[i]
-              ] =
-                converted[i];
-            }
-
-          }
-
-        }
-
+        };
       }
 
+    }
 
-      /*
-       * Explicit crore shares.
-       */
 
-      const croreMatches =
-        [
-          ...line.matchAll(
-            /(\d[\d,]*(?:\.\d+)?)\s+crores?\s+(?:equity\s+)?shares?/gi
-          )
-        ];
+    /*
+     * Explicit billion shares.
+     */
+
+    const billion =
+      window.match(
+        /(\d[\d,]*(?:\.\d+)?)\s+billions?\s+(?:equity\s+)?shares?/i
+      );
+
+
+    if (
+      billion?.[1]
+    ) {
+
+      const value =
+        finiteFinancialNumber(
+          billion[1]
+        );
 
 
       if (
-        croreMatches.length
+        value !== null &&
+        value > 0
       ) {
 
-        const values =
-          croreMatches
-            .map(
-              match =>
-                finiteFinancialNumber(
-                  match[1]
-                )
-            )
-            .filter(
-              value =>
-                value !== null &&
-                value > 0
-            );
+        return {
 
+          value:
+            roundFinancial(
+              value *
+              100
+            ),
 
-        for (
-          let i = 0;
-          i <
-            Math.min(
-              years.length,
-              values.length
-            );
-          i++
-        ) {
+          unit:
+            "crore shares"
 
-          if (
-            result[
-              years[i]
-            ] === undefined
-          ) {
-
-            result[
-              years[i]
-            ] =
-              roundFinancial(
-                values[i]
-              );
-          }
-
-        }
-
+        };
       }
 
+    }
 
-      /*
-       * Explicit million shares.
-       */
 
-      const millionMatches =
-        [
-          ...line.matchAll(
-            /(\d[\d,]*(?:\.\d+)?)\s+millions?\s+(?:equity\s+)?shares?/gi
-          )
-        ];
+    /*
+     * Absolute number of shares.
+     *
+     * Require at least six digits to avoid accidentally
+     * interpreting face value or note numbers as shares.
+     */
+
+    const absolute =
+      window.match(
+        /(\d[\d,]{5,})\s+(?:fully\s+paid[- ]?up\s+)?(?:equity\s+)?shares?\b/i
+      );
+
+
+    if (
+      absolute?.[1]
+    ) {
+
+      const value =
+        finiteFinancialNumber(
+          absolute[1]
+        );
 
 
       if (
-        millionMatches.length
+        value !== null &&
+        value > 0
       ) {
 
-        const values =
-          millionMatches
-            .map(
-              match =>
-                finiteFinancialNumber(
-                  match[1]
-                )
-            )
-            .filter(
-              value =>
-                value !== null &&
-                value > 0
-            );
+        return {
 
+          value:
+            roundFinancial(
+              value /
+              10000000
+            ),
 
-        for (
-          let i = 0;
-          i <
-            Math.min(
-              years.length,
-              values.length
-            );
-          i++
-        ) {
+          unit:
+            "crore shares"
 
-          if (
-            result[
-              years[i]
-            ] === undefined
-          ) {
-
-            result[
-              years[i]
-            ] =
-              roundFinancial(
-                values[i] /
-                10
-              );
-          }
-
-        }
-
+        };
       }
 
     }
@@ -4551,231 +5341,21 @@ function extractSharesOutstanding(
   }
 
 
-  return result;
+  return {
+
+    value:
+      null,
+
+    unit:
+      null
+
+  };
 }
 
 
 /* ============================================================
-   13T. VALIDATION HELPERS
+   13X. LOCAL FINANCIAL EXTRACTION ENGINE
    ============================================================ */
-
-function safePositiveOrZero(
-  value
-) {
-
-  if (
-    value === null ||
-    !Number.isFinite(value)
-  ) {
-
-    return null;
-  }
-
-
-  if (
-    value < 0
-  ) {
-
-    return null;
-  }
-
-
-  return value;
-}
-
-
-function safeRatio(
-  numerator,
-  denominator,
-  multiplier = 1
-) {
-
-  if (
-    numerator === null ||
-    denominator === null ||
-    !Number.isFinite(numerator) ||
-    !Number.isFinite(denominator) ||
-    denominator === 0
-  ) {
-
-    return null;
-  }
-
-
-  const result =
-    numerator /
-    denominator *
-    multiplier;
-
-
-  if (
-    !Number.isFinite(result)
-  ) {
-
-    return null;
-  }
-
-
-  return roundFinancial(
-    result
-  );
-}
-
-
-function safeDifference(
-  a,
-  b
-) {
-
-  if (
-    a === null ||
-    b === null ||
-    !Number.isFinite(a) ||
-    !Number.isFinite(b)
-  ) {
-
-    return null;
-  }
-
-
-  return roundFinancial(
-    a - b
-  );
-}
-
-
-/* ============================================================
-   13U. TOTAL DEBT
-   ============================================================ */
-
-/*
- * Debt is particularly dangerous because a row called
- * "borrowings" can occur separately under current and
- * non-current liabilities.
- *
- * We extract:
- *
- * non-current borrowings
- * +
- * current borrowings
- *
- * only when both can be located.
- *
- * Otherwise an explicit "total borrowings" / "total debt"
- * row is preferred.
- */
-
-function extractDebtByYear(
-  balanceSheet,
-  years,
-  factor
-) {
-
-  const explicit =
-    extractMoneyMetric(
-      balanceSheet,
-      [
-        "total borrowings",
-        "total debt"
-      ],
-      years,
-      factor
-    );
-
-
-  if (
-    Object.keys(
-      explicit
-    ).length
-  ) {
-
-    return explicit;
-  }
-
-
-  /*
-   * Do NOT use a generic single "borrowings" row as total debt.
-   * That caused incorrect debt values in previous versions.
-   */
-
-  return {};
-}
-
-
-/* ============================================================
-   13V. EBITDA
-   ============================================================ */
-
-function extractEbitdaByYear(
-  profitLoss,
-  fullText,
-  years,
-  factor
-) {
-
-  /*
-   * First: audited statement if explicitly reported.
-   */
-
-  const direct =
-    extractMoneyMetric(
-      profitLoss,
-      [
-        "ebitda",
-        "earnings before interest tax depreciation and amortisation",
-        "earnings before interest taxes depreciation and amortisation",
-        "earnings before interest tax depreciation and amortization",
-        "earnings before interest taxes depreciation and amortization"
-      ],
-      years,
-      factor
-    );
-
-
-  if (
-    Object.keys(
-      direct
-    ).length
-  ) {
-
-    return direct;
-  }
-
-
-  /*
-   * Search broader report for explicit EBITDA disclosure.
-   *
-   * We still require a row containing EBITDA.
-   */
-
-  const broader =
-    extractMoneyMetric(
-      fullText,
-      [
-        "ebitda"
-      ],
-      years,
-      factor,
-      {
-        exclude: [
-          "margin",
-          "growth",
-          "adjusted ebitda margin"
-        ],
-        searchLimit:
-          25000
-      }
-    );
-
-
-  return broader;
-}
-
-
-/* ============================================================
-   13W. LOCAL FINANCIAL EXTRACTION ENGINE
-   ============================================================ */
-
 
 function extractFinancialsLocally(
   pdfData
@@ -4794,7 +5374,10 @@ function extractFinancialsLocally(
         "No locally extracted annual-report text is available."
       );
 
-    error.status = 422;
+
+    error.status =
+      422;
+
 
     throw error;
   }
@@ -4803,7 +5386,8 @@ function extractFinancialsLocally(
   const companyName =
     detectCompanyName(
       text,
-      pdfData?.info || {}
+      pdfData?.info ||
+      {}
     );
 
 
@@ -4882,14 +5466,38 @@ function extractFinancialsLocally(
   );
 
 
+  if (
+    !profitStatement.text &&
+    !balanceStatement.text &&
+    !cashStatement.text
+  ) {
+
+    const error =
+      new Error(
+        "FinSight could not locate audited financial statements in the locally extracted PDF text."
+      );
+
+
+    error.status =
+      422;
+
+
+    throw error;
+  }
+
+
   const statementCombined =
     [
       profitStatement.text,
       balanceStatement.text,
       cashStatement.text
     ]
-      .filter(Boolean)
-      .join("\n");
+      .filter(
+        Boolean
+      )
+      .join(
+        "\n"
+      );
 
 
   const consolidatedDetected =
@@ -4899,8 +5507,12 @@ function extractFinancialsLocally(
         balanceStatement.heading,
         cashStatement.heading
       ]
-        .filter(Boolean)
-        .join(" ")
+        .filter(
+          Boolean
+        )
+        .join(
+          " "
+        )
     );
 
 
@@ -4932,10 +5544,6 @@ function extractFinancialsLocally(
     );
 
 
-  /*
-   * Build candidate year set.
-   */
-
   const allYears =
     [
       ...new Set(
@@ -4948,15 +5556,21 @@ function extractFinancialsLocally(
     ]
       .filter(
         year =>
-          Number.isInteger(year)
+          Number.isInteger(
+            year
+          )
       )
       .sort(
-        (a, b) =>
-          b - a
+        (
+          a,
+          b
+        ) =>
+          b -
+          a
       )
       .slice(
         0,
-        5
+        3
       );
 
 
@@ -4969,7 +5583,10 @@ function extractFinancialsLocally(
         "FinSight located financial statements but could not reliably identify their reporting years."
       );
 
-    error.status = 422;
+
+    error.status =
+      422;
+
 
     throw error;
   }
@@ -4987,7 +5604,7 @@ function extractFinancialsLocally(
 
 
   /* ----------------------------------------------------------
-     DETECT UNITS PER STATEMENT
+     DETECT UNITS
      ---------------------------------------------------------- */
 
   const profitUnit =
@@ -5041,33 +5658,30 @@ function extractFinancialsLocally(
     }
   );
 
-   /* ----------------------------------------------------------
-   TEMPORARY STATEMENT DEBUG
-   ---------------------------------------------------------- */
 
-console.log(
-  "\n========== PROFIT STATEMENT DEBUG ==========\n",
-  profitStatement.text
-    ? profitStatement.text.slice(0, 12000)
-    : "NOT FOUND",
-  "\n========== END PROFIT STATEMENT DEBUG ==========\n"
-);
+  /*
+   * If all statement units are unknown, monetary extraction
+   * would be unsafe.
+   */
 
-console.log(
-  "\n========== BALANCE SHEET DEBUG ==========\n",
-  balanceStatement.text
-    ? balanceStatement.text.slice(0, 12000)
-    : "NOT FOUND",
-  "\n========== END BALANCE SHEET DEBUG ==========\n"
-);
+  if (
+    profitFactor === null &&
+    balanceFactor === null &&
+    cashFactor === null
+  ) {
 
-console.log(
-  "\n========== CASH FLOW DEBUG ==========\n",
-  cashStatement.text
-    ? cashStatement.text.slice(0, 12000)
-    : "NOT FOUND",
-  "\n========== END CASH FLOW DEBUG ==========\n"
-);
+    const error =
+      new Error(
+        "FinSight found the financial statements but could not establish their monetary unit safely."
+      );
+
+
+    error.status =
+      422;
+
+
+    throw error;
+  }
 
 
   /* ----------------------------------------------------------
@@ -5113,6 +5727,25 @@ console.log(
       ],
       profitYears,
       profitFactor
+    );
+
+
+  const ebitda =
+    extractMoneyMetric(
+      profitStatement.text,
+      [
+        "ebitda",
+        "earnings before interest tax depreciation and amortisation",
+        "earnings before interest taxes depreciation and amortization"
+      ],
+      profitYears,
+      profitFactor,
+      {
+        exclude: [
+          "margin",
+          "adjusted"
+        ]
+      }
     );
 
 
@@ -5162,8 +5795,8 @@ console.log(
       profitFactor,
       {
         exclude: [
-          "margin",
-          "attributable"
+          "attributable",
+          "margin"
         ]
       }
     );
@@ -5183,24 +5816,14 @@ console.log(
     );
 
 
-  const depreciation =
+  const cogs =
     extractMoneyMetric(
       profitStatement.text,
       [
-        "depreciation and amortisation expense",
-        "depreciation and amortization expense",
-        "depreciation amortisation and impairment",
-        "depreciation and amortisation"
+        "cost of goods sold",
+        "cost of materials consumed",
+        "cost of revenue"
       ],
-      profitYears,
-      profitFactor
-    );
-
-
-  const ebitda =
-    extractEbitdaByYear(
-      profitStatement.text,
-      text,
       profitYears,
       profitFactor
     );
@@ -5225,10 +5848,16 @@ console.log(
     extractMoneyMetric(
       balanceStatement.text,
       [
-        "total current assets"
+        "total current assets",
+        "current assets"
       ],
       balanceYears,
-      balanceFactor
+      balanceFactor,
+      {
+        exclude: [
+          "non current assets"
+        ]
+      }
     );
 
 
@@ -5236,10 +5865,16 @@ console.log(
     extractMoneyMetric(
       balanceStatement.text,
       [
-        "total current liabilities"
+        "total current liabilities",
+        "current liabilities"
       ],
       balanceYears,
-      balanceFactor
+      balanceFactor,
+      {
+        exclude: [
+          "non current liabilities"
+        ]
+      }
     );
 
 
@@ -5249,15 +5884,15 @@ console.log(
       [
         "total equity",
         "total shareholders equity",
-        "total shareholders' equity",
-        "equity attributable to owners of the company",
-        "equity attributable to owners"
+        "equity attributable to owners",
+        "equity attributable to shareholders"
       ],
       balanceYears,
       balanceFactor,
       {
         exclude: [
-          "equity share capital"
+          "liabilities and equity",
+          "total equity and liabilities"
         ]
       }
     );
@@ -5268,7 +5903,7 @@ console.log(
       balanceStatement.text,
       [
         "cash and cash equivalents",
-        "cash & cash equivalents"
+        "cash cash equivalents"
       ],
       balanceYears,
       balanceFactor
@@ -5287,24 +5922,26 @@ console.log(
     );
 
 
-  const receivables =
+  const accountsReceivable =
     extractMoneyMetric(
       balanceStatement.text,
       [
         "trade receivables",
-        "accounts receivable"
+        "accounts receivable",
+        "trade and other receivables"
       ],
       balanceYears,
       balanceFactor
     );
 
 
-  const payables =
+  const accountsPayable =
     extractMoneyMetric(
       balanceStatement.text,
       [
         "trade payables",
-        "accounts payable"
+        "accounts payable",
+        "trade and other payables"
       ],
       balanceYears,
       balanceFactor
@@ -5312,8 +5949,13 @@ console.log(
 
 
   const totalDebt =
-    extractDebtByYear(
+    extractMoneyMetric(
       balanceStatement.text,
+      [
+        "total borrowings",
+        "total debt",
+        "borrowings"
+      ],
       balanceYears,
       balanceFactor
     );
@@ -5329,54 +5971,26 @@ console.log(
       [
         "net cash generated from operating activities",
         "net cash generated by operating activities",
-        "net cash flow from operating activities",
+        "net cash from operating activities",
         "net cash flows from operating activities",
-        "net cash from operating activities"
+        "cash generated from operating activities"
       ],
       cashYears,
       cashFactor
     );
 
 
-  let capex =
+  const capexRaw =
     extractMoneyMetric(
       cashStatement.text,
       [
         "purchase of property plant and equipment",
-        "purchase of property, plant and equipment",
         "payments for property plant and equipment",
-        "payments for property, plant and equipment",
-        "purchase of fixed assets"
+        "purchase of fixed assets",
+        "capital expenditure"
       ],
       cashYears,
       cashFactor
-    );
-
-
-  /*
-   * Capex is displayed as positive investment amount.
-   */
-
-  capex =
-    Object.fromEntries(
-      Object.entries(
-        capex
-      ).map(
-        (
-          [
-            year,
-            value
-          ]
-        ) => [
-
-          year,
-
-          Number.isFinite(value)
-            ? Math.abs(value)
-            : null
-
-        ]
-      )
     );
 
 
@@ -5386,13 +6000,12 @@ console.log(
 
   const shares =
     extractSharesOutstanding(
-      text,
-      allYears
+      text
     );
 
 
   /* ----------------------------------------------------------
-     BUILD YEAR ROWS
+     BUILD ROWS
      ---------------------------------------------------------- */
 
   const rows =
@@ -5404,232 +6017,169 @@ console.log(
     of allYears
   ) {
 
-    const revenueValue =
-      revenue[year] ??
-      null;
-
-
-    const otherIncomeValue =
-      otherIncome[year] ??
-      null;
-
-
-    const totalIncomeValue =
-      totalIncome[year] ??
-      null;
-
-
-    let operatingIncomeValue =
-      operatingIncome[year] ??
-      null;
-
-
-    const pbtValue =
-      profitBeforeTax[year] ??
-      null;
-
-
-    const financeCostValue =
-      financeCost[year] ??
-      null;
-
-
-    const depreciationValue =
-      depreciation[year] ??
-      null;
-
-
-    let ebitdaValue =
-      ebitda[year] ??
-      null;
-
-
-    const netIncomeValue =
-      netIncome[year] ??
-      null;
-
-
-    const totalAssetsValue =
-      safePositiveOrZero(
-        totalAssets[year] ??
-        null
+    const rowRevenue =
+      valueForYear(
+        revenue,
+        year
       );
 
 
-    const currentAssetsValue =
-      safePositiveOrZero(
-        currentAssets[year] ??
-        null
+    const rowEbitda =
+      valueForYear(
+        ebitda,
+        year
       );
 
 
-    const currentLiabilitiesValue =
-      safePositiveOrZero(
-        currentLiabilities[year] ??
-        null
+    const rowOperatingIncome =
+      valueForYear(
+        operatingIncome,
+        year
       );
 
 
-    const totalEquityValue =
-      totalEquity[year] ??
-      null;
-
-
-    const cashValue =
-      safePositiveOrZero(
-        cash[year] ??
-        null
+    const rowNetIncome =
+      valueForYear(
+        netIncome,
+        year
       );
 
 
-    const inventoryValue =
-      safePositiveOrZero(
-        inventory[year] ??
-        null
+    const rowTotalAssets =
+      valueForYear(
+        totalAssets,
+        year
       );
 
 
-    const receivableValue =
-      safePositiveOrZero(
-        receivables[year] ??
-        null
+    const rowCurrentAssets =
+      valueForYear(
+        currentAssets,
+        year
       );
 
 
-    const payableValue =
-      safePositiveOrZero(
-        payables[year] ??
-        null
+    const rowCurrentLiabilities =
+      valueForYear(
+        currentLiabilities,
+        year
       );
 
 
-    const debtValue =
-      safePositiveOrZero(
-        totalDebt[year] ??
-        null
+    let rowTotalDebt =
+      valueForYear(
+        totalDebt,
+        year
       );
 
 
-    const ocfValue =
-      operatingCashFlow[year] ??
-      null;
+    const rowCash =
+      valueForYear(
+        cash,
+        year
+      );
 
 
-    const capexValue =
-      safePositiveOrZero(
-        capex[year] ??
-        null
+    const rowTotalEquity =
+      valueForYear(
+        totalEquity,
+        year
+      );
+
+
+    const rowOperatingCashFlow =
+      valueForYear(
+        operatingCashFlow,
+        year
+      );
+
+
+    let rowCapex =
+      valueForYear(
+        capexRaw,
+        year
+      );
+
+
+    const rowInventory =
+      valueForYear(
+        inventory,
+        year
+      );
+
+
+    const rowReceivable =
+      valueForYear(
+        accountsReceivable,
+        year
+      );
+
+
+    const rowPayable =
+      valueForYear(
+        accountsPayable,
+        year
+      );
+
+
+    let rowFinanceCost =
+      valueForYear(
+        financeCost,
+        year
+      );
+
+
+    const rowCogs =
+      valueForYear(
+        cogs,
+        year
       );
 
 
     /*
-     * EBIT can be calculated from:
-     *
-     * PBT + finance cost
-     *
-     * only when both are available.
+     * Capex is displayed as an investment amount.
      */
 
     if (
-      operatingIncomeValue === null &&
-      pbtValue !== null &&
-      financeCostValue !== null
+      rowCapex !== null
     ) {
 
-      operatingIncomeValue =
-        roundFinancial(
-          pbtValue +
-          financeCostValue
-        );
-    }
-
-
-    /*
-     * EBITDA may be calculated from:
-     *
-     * EBIT + depreciation/amortisation
-     *
-     * only when both are available.
-     */
-
-    if (
-      ebitdaValue === null &&
-      operatingIncomeValue !== null &&
-      depreciationValue !== null
-    ) {
-
-      ebitdaValue =
-        roundFinancial(
-          operatingIncomeValue +
-          Math.abs(
-            depreciationValue
-          )
-        );
-    }
-
-
-    /*
-     * Defensive sanity checks.
-     *
-     * Equity can legitimately be negative.
-     * Assets cannot.
-     *
-     * Do not allow tiny note-reference values to produce
-     * absurd ROE / debt-equity ratios.
-     */
-
-    let validatedEquity =
-      totalEquityValue;
-
-
-    if (
-      validatedEquity !== null &&
-      totalAssetsValue !== null
-    ) {
-
-      /*
-       * Equity many orders of magnitude below assets is
-       * suspicious in local PDF extraction.
-       *
-       * We do NOT guess a replacement.
-       */
-
-      if (
+      rowCapex =
         Math.abs(
-          validatedEquity
-        ) <
-        Math.abs(
-          totalAssetsValue
-        ) *
-        0.00001
-      ) {
-
-        console.warn(
-          `Rejected suspicious equity extraction for ${year}:`,
-          validatedEquity,
-          "vs assets",
-          totalAssetsValue
+          rowCapex
         );
-
-
-        validatedEquity =
-          null;
-      }
-
     }
 
 
     /*
-     * Likewise debt cannot be negative.
+     * Borrowings should not be negative.
      */
 
-    const validatedDebt =
-      debtValue !== null &&
-      debtValue >= 0
+    if (
+      rowTotalDebt !== null &&
+      rowTotalDebt < 0
+    ) {
 
-        ? debtValue
+      rowTotalDebt =
+        null;
+    }
 
-        : null;
+
+    /*
+     * Finance cost may be represented as a cash/accounting
+     * outflow with parentheses. Dashboard coverage ratios use
+     * its magnitude.
+     */
+
+    if (
+      rowFinanceCost !== null
+    ) {
+
+      rowFinanceCost =
+        Math.abs(
+          rowFinanceCost
+        );
+    }
 
 
     const row = {
@@ -5645,8 +6195,11 @@ console.log(
       year,
 
       statement_basis:
+
         consolidatedDetected
+
           ? "Consolidated"
+
           : "Standalone/Unconfirmed",
 
       source_unit:
@@ -5654,10 +6207,10 @@ console.log(
 
       original_source_unit: {
 
-        profit_and_loss:
+        profit:
           profitUnit,
 
-        balance_sheet:
+        balance:
           balanceUnit,
 
         cash_flow:
@@ -5666,166 +6219,79 @@ console.log(
       },
 
       revenue:
-        revenueValue,
+        rowRevenue,
 
       other_income:
-        otherIncomeValue,
+        valueForYear(
+          otherIncome,
+          year
+        ),
 
       total_income:
-        totalIncomeValue,
+        valueForYear(
+          totalIncome,
+          year
+        ),
 
       ebitda:
-        ebitdaValue,
+        rowEbitda,
 
       cogs:
-        null,
+        rowCogs,
 
       operating_income:
-        operatingIncomeValue,
+        rowOperatingIncome,
 
       profit_before_tax:
-        pbtValue,
+        valueForYear(
+          profitBeforeTax,
+          year
+        ),
 
       net_income:
-        netIncomeValue,
+        rowNetIncome,
 
       total_assets:
-        totalAssetsValue,
+        rowTotalAssets,
 
       current_assets:
-        currentAssetsValue,
+        rowCurrentAssets,
 
       current_liabilities:
-        currentLiabilitiesValue,
+        rowCurrentLiabilities,
 
       total_debt:
-        validatedDebt,
+        rowTotalDebt,
 
       cash:
-        cashValue,
+        rowCash,
 
       total_equity:
-        validatedEquity,
+        rowTotalEquity,
 
       operating_cash_flow:
-        ocfValue,
+        rowOperatingCashFlow,
 
       capex:
-        capexValue,
+        rowCapex,
 
       inventory:
-        inventoryValue,
+        rowInventory,
 
       accounts_receivable:
-        receivableValue,
+        rowReceivable,
 
       accounts_payable:
-        payableValue,
+        rowPayable,
 
       finance_cost:
-        financeCostValue,
-
-      depreciation_amortisation:
-        depreciationValue,
+        rowFinanceCost,
 
       shares_outstanding:
-        shares[year] ??
-        null,
+        shares.value,
 
       shares_outstanding_unit:
-        shares[year] !== undefined
-          ? "crore shares"
-          : null,
-
-      /*
-       * Derived dashboard values.
-       *
-       * These are deterministic calculations,
-       * not extracted facts.
-       */
-
-      ebitda_margin:
-        safeRatio(
-          ebitdaValue,
-          revenueValue,
-          100
-        ),
-
-      operating_margin:
-        safeRatio(
-          operatingIncomeValue,
-          revenueValue,
-          100
-        ),
-
-      net_margin:
-        safeRatio(
-          netIncomeValue,
-          revenueValue,
-          100
-        ),
-
-      current_ratio:
-        safeRatio(
-          currentAssetsValue,
-          currentLiabilitiesValue
-        ),
-
-      debt_equity:
-        safeRatio(
-          validatedDebt,
-          validatedEquity
-        ),
-
-      net_debt:
-        safeDifference(
-          validatedDebt,
-          cashValue
-        ),
-
-      cash_conversion:
-        safeRatio(
-          ocfValue,
-          netIncomeValue
-        ),
-
-      simplified_fcf:
-        safeDifference(
-          ocfValue,
-          capexValue
-        ),
-
-      interest_coverage:
-        safeRatio(
-          operatingIncomeValue,
-          financeCostValue
-        ),
-
-      /*
-       * ROE / ROA / ROCE are intentionally calculated later
-       * using average balance-sheet values where possible.
-       */
-
-      roe:
-        null,
-
-      roa:
-        null,
-
-      roce:
-        null,
-
-      asset_turnover:
-        null,
-
-      receivable_days:
-        null,
-
-      inventory_days:
-        null,
-
-      payable_days:
-        null,
+        shares.unit,
 
       source_pages:
         [],
@@ -5836,6 +6302,103 @@ console.log(
     };
 
 
+    /* --------------------------------------------------------
+       DERIVED DASHBOARD METRICS
+       -------------------------------------------------------- */
+
+    row.ebitda_margin =
+      safeRatio(
+        row.ebitda,
+        row.revenue,
+        100
+      );
+
+
+    row.operating_margin =
+      safeRatio(
+        row.operating_income,
+        row.revenue,
+        100
+      );
+
+
+    row.net_margin =
+      safeRatio(
+        row.net_income,
+        row.revenue,
+        100
+      );
+
+
+    row.current_ratio =
+      safeRatio(
+        row.current_assets,
+        row.current_liabilities
+      );
+
+
+    row.debt_equity =
+      safeRatio(
+        row.total_debt,
+        row.total_equity
+      );
+
+
+    row.net_debt =
+      safeDifference(
+        row.total_debt,
+        row.cash
+      );
+
+
+    row.cash_conversion =
+      safeRatio(
+        row.operating_cash_flow,
+        row.net_income
+      );
+
+
+    row.simplified_fcf =
+      safeDifference(
+        row.operating_cash_flow,
+        row.capex
+      );
+
+
+    row.interest_coverage =
+      safeRatio(
+        row.operating_income,
+        row.finance_cost
+      );
+
+
+    /*
+     * Average-balance metrics are calculated later once
+     * comparative rows exist.
+     */
+
+    row.roe =
+      null;
+
+    row.roa =
+      null;
+
+    row.roce =
+      null;
+
+    row.asset_turnover =
+      null;
+
+    row.receivable_days =
+      null;
+
+    row.inventory_days =
+      null;
+
+    row.payable_days =
+      null;
+
+
     rows.push(
       row
     );
@@ -5843,128 +6406,215 @@ console.log(
   }
 
 
-  /* ==========================================================
-     13X. AVERAGE-BALANCE RETURN CALCULATIONS
-     ========================================================== */
+  /* ----------------------------------------------------------
+     REMOVE COMPLETELY EMPTY YEARS
+     ---------------------------------------------------------- */
 
-  /*
-   * Rows are newest -> oldest.
-   *
-   * For FY2024-25:
-   *
-   * average equity =
-   * (FY2024-25 closing equity + FY2023-24 closing equity) / 2
-   */
+  const meaningfulFields = [
+
+    "revenue",
+    "ebitda",
+    "operating_income",
+    "net_income",
+    "total_assets",
+    "total_equity",
+    "operating_cash_flow"
+
+  ];
+
+
+  const usableRows =
+    rows.filter(
+      row =>
+        meaningfulFields.some(
+          field =>
+            finiteFinancialNumber(
+              row[field]
+            ) !==
+            null
+        )
+    );
+
+
+  if (
+    !usableRows.length
+  ) {
+
+    const error =
+      new Error(
+        "The PDF text was extracted successfully, but FinSight could not reliably locate audited financial-statement values."
+      );
+
+
+    error.status =
+      422;
+
+
+    throw error;
+  }
+
+
+  usableRows.sort(
+    (
+      a,
+      b
+    ) =>
+      b.year -
+      a.year
+  );
+
+
+  /* ----------------------------------------------------------
+     AVERAGE-BALANCE METRICS
+     ---------------------------------------------------------- */
 
   for (
-    let i = 0;
-    i < rows.length;
-    i++
+    let index = 0;
+    index < usableRows.length;
+    index++
   ) {
 
     const current =
-      rows[i];
+      usableRows[index];
 
 
     const previous =
-      rows[i + 1] ||
+      usableRows[
+        index +
+        1
+      ] ||
       null;
 
 
+    /*
+     * Receivable days can be calculated without a prior year.
+     */
+
     if (
-      previous
+      current.accounts_receivable !== null &&
+      current.revenue !== null &&
+      current.revenue > 0
     ) {
 
+      current.receivable_days =
+        safeRatio(
+          current.accounts_receivable,
+          current.revenue,
+          365
+        );
+    }
+
+
+    if (
+      current.inventory !== null &&
+      current.cogs !== null &&
+      Math.abs(
+        current.cogs
+      ) > 0.01
+    ) {
+
+      current.inventory_days =
+        safeRatio(
+          current.inventory,
+          Math.abs(
+            current.cogs
+          ),
+          365
+        );
+    }
+
+
+    if (
+      current.accounts_payable !== null &&
+      current.cogs !== null &&
+      Math.abs(
+        current.cogs
+      ) > 0.01
+    ) {
+
+      current.payable_days =
+        safeRatio(
+          current.accounts_payable,
+          Math.abs(
+            current.cogs
+          ),
+          365
+        );
+    }
+
+
+    if (!previous) {
+
+      continue;
+    }
+
+
+    if (
+      current.total_equity !== null &&
+      previous.total_equity !== null
+    ) {
+
+      const averageEquity =
+        (
+          current.total_equity +
+          previous.total_equity
+        ) /
+        2;
+
+
       if (
-        current.total_equity !== null &&
-        previous.total_equity !== null
+        Math.abs(
+          averageEquity
+        ) > 0.01
       ) {
 
-        const averageEquity =
-          (
-            current.total_equity +
-            previous.total_equity
-          ) /
-          2;
-
-
-        /*
-         * Avoid meaningless ratios when average equity is
-         * effectively zero.
-         */
-
-        if (
-          Math.abs(
-            averageEquity
-          ) >
-          0.01
-        ) {
-
-          current.roe =
-            safeRatio(
-              current.net_income,
-              averageEquity,
-              100
-            );
-        }
-
-      }
-
-
-      if (
-        current.total_assets !== null &&
-        previous.total_assets !== null
-      ) {
-
-        const averageAssets =
-          (
-            current.total_assets +
-            previous.total_assets
-          ) /
-          2;
-
-
-        if (
-          Math.abs(
-            averageAssets
-          ) >
-          0.01
-        ) {
-
-          current.roa =
-            safeRatio(
-              current.net_income,
-              averageAssets,
-              100
-            );
-
-
-          current.asset_turnover =
-            safeRatio(
-              current.revenue,
-              averageAssets
-            );
-        }
-
+        current.roe =
+          safeRatio(
+            current.net_income,
+            averageEquity,
+            100
+          );
       }
 
     }
 
 
-    /*
-     * ROCE:
-     *
-     * EBIT /
-     * average capital employed
-     *
-     * capital employed =
-     * total assets - current liabilities
-     *
-     * Requires balance-sheet evidence.
-     */
+    if (
+      current.total_assets !== null &&
+      previous.total_assets !== null
+    ) {
+
+      const averageAssets =
+        (
+          current.total_assets +
+          previous.total_assets
+        ) /
+        2;
+
+
+      if (
+        averageAssets > 0
+      ) {
+
+        current.roa =
+          safeRatio(
+            current.net_income,
+            averageAssets,
+            100
+          );
+
+
+        current.asset_turnover =
+          safeRatio(
+            current.revenue,
+            averageAssets
+          );
+      }
+
+    }
+
 
     if (
-      previous &&
       current.total_assets !== null &&
       current.current_liabilities !== null &&
       previous.total_assets !== null &&
@@ -5992,8 +6642,7 @@ console.log(
       if (
         Math.abs(
           averageCapital
-        ) >
-        0.01
+        ) > 0.01
       ) {
 
         current.roce =
@@ -6006,201 +6655,37 @@ console.log(
 
     }
 
-
-    /*
-     * Receivable days.
-     */
-
-    if (
-      current.accounts_receivable !== null &&
-      current.revenue !== null &&
-      current.revenue > 0
-    ) {
-
-      current.receivable_days =
-        safeRatio(
-          current.accounts_receivable,
-          current.revenue,
-          365
-        );
-    }
-
   }
 
 
-  /* ==========================================================
-     13Y. REMOVE EMPTY / UNSAFE ROWS
-     ========================================================== */
-
-  const dashboardFields = [
-
-    "revenue",
-    "ebitda",
-    "operating_income",
-    "net_income",
-    "total_assets",
-    "current_assets",
-    "current_liabilities",
-    "total_debt",
-    "cash",
-    "total_equity",
-    "operating_cash_flow",
-    "capex",
-    "inventory",
-    "accounts_receivable",
-    "accounts_payable",
-    "finance_cost"
-
-  ];
-
-
-  const usableRows =
-    rows.filter(
-      row => {
-
-        const count =
-          dashboardFields.filter(
-            field =>
-              row[field] !== null &&
-              Number.isFinite(
-                row[field]
-              )
-          ).length;
-
-
-        /*
-         * At least two independent fields are required.
-         *
-         * This prevents one accidental row match from
-         * creating a fake financial year.
-         */
-
-        return count >= 2;
-
-      }
-    );
-
-
-  if (
-    !usableRows.length
-  ) {
-
-    const error =
-      new Error(
-        "Financial-statement rows were detected, but there was not enough reliable audited data to populate the dashboard safely."
-      );
-
-    error.status = 422;
-
-    throw error;
-  }
-
-
-  /* ==========================================================
-     13Z. EXTRACTION NOTES
-     ========================================================== */
-
-  for (
-    const row
-    of usableRows
-  ) {
-
-    const notes =
-      [];
-
-
-    if (
-      row.revenue === null
-    ) {
-
-      notes.push(
-        "Revenue was not reliably extracted."
-      );
-    }
-
-
-    if (
-      row.ebitda === null
-    ) {
-
-      notes.push(
-        "EBITDA was not reliably established."
-      );
-    }
-
-
-    if (
-      row.total_assets === null
-    ) {
-
-      notes.push(
-        "Total assets were not reliably extracted."
-      );
-    }
-
-
-    if (
-      row.total_equity === null
-    ) {
-
-      notes.push(
-        "Total equity was not reliably extracted."
-      );
-    }
-
-
-    if (
-      row.total_debt === null
-    ) {
-
-      notes.push(
-        "Total debt was not reliably established; FinSight did not substitute a single borrowings line for total debt."
-      );
-    }
-
-
-    if (
-      row.shares_outstanding === null
-    ) {
-
-      notes.push(
-        "Period-end shares outstanding were not reliably established."
-      );
-    }
-
-
-    row.extraction_notes =
-      notes.join(" ");
-
-  }
-
-
-  /* ==========================================================
-     VALIDATION
-     ========================================================== */
-
-  const latest =
-    usableRows[0];
-
-
-  const missingCriticalFields =
-    dashboardFields
-      .filter(
-        field =>
-          latest[field] === null
-      );
-
+  /* ----------------------------------------------------------
+     VALIDATION NOTES
+     ---------------------------------------------------------- */
 
   const warnings =
     [];
 
 
-  if (
-    !consolidatedDetected
-  ) {
+  if (!profitStatement.text) {
 
     warnings.push(
-      "FinSight could not conclusively verify that all selected statement sections were consolidated."
+      "Profit-and-loss statement could not be located reliably."
+    );
+  }
+
+
+  if (!balanceStatement.text) {
+
+    warnings.push(
+      "Balance sheet could not be located reliably."
+    );
+  }
+
+
+  if (!cashStatement.text) {
+
+    warnings.push(
+      "Cash-flow statement could not be located reliably."
     );
   }
 
@@ -6210,7 +6695,7 @@ console.log(
   ) {
 
     warnings.push(
-      "Profit-and-loss monetary unit was not reliably established."
+      "Profit-and-loss monetary unit could not be established reliably."
     );
   }
 
@@ -6220,7 +6705,7 @@ console.log(
   ) {
 
     warnings.push(
-      "Balance-sheet monetary unit was not reliably established."
+      "Balance-sheet monetary unit could not be established reliably."
     );
   }
 
@@ -6230,34 +6715,95 @@ console.log(
   ) {
 
     warnings.push(
-      "Cash-flow monetary unit was not reliably established."
+      "Cash-flow monetary unit could not be established reliably."
     );
   }
 
 
   if (
-    latest.revenue === null
+    shares.value === null
   ) {
 
     warnings.push(
-      "Revenue is unavailable because no sufficiently reliable audited revenue row was matched."
+      "Period-end shares outstanding could not be established reliably."
     );
   }
+
+
+  const latestRow =
+    usableRows[0];
+
+
+  const criticalNames = [
+
+    "revenue",
+    "net_income",
+    "total_assets",
+    "total_equity",
+    "operating_cash_flow"
+
+  ];
+
+
+  const missingCriticalFields =
+    criticalNames.filter(
+      field =>
+        finiteFinancialNumber(
+          latestRow?.[field]
+        ) ===
+        null
+    );
+
+
+  let confidence =
+    "Low";
+
+
+  const statementCount =
+    [
+      profitStatement.text,
+      balanceStatement.text,
+      cashStatement.text
+    ]
+      .filter(
+        Boolean
+      )
+      .length;
+
+
+  const unitCount =
+    [
+      profitFactor,
+      balanceFactor,
+      cashFactor
+    ]
+      .filter(
+        value =>
+          value !==
+          null
+      )
+      .length;
 
 
   if (
-    latest.ebitda === null
+    statementCount === 3 &&
+    unitCount === 3 &&
+    missingCriticalFields.length <= 1
   ) {
 
-    warnings.push(
-      "EBITDA is unavailable because it could not be explicitly identified or safely calculated."
-    );
+    confidence =
+      "High";
   }
 
+  else if (
+    statementCount >= 2 &&
+    unitCount >= 2
+  ) {
 
-  /* ==========================================================
-     DEBUG LOG
-     ========================================================== */
+    confidence =
+      "Medium";
+  }
+
 
   console.log(
     "Local financial extraction result:",
@@ -6345,26 +6891,15 @@ console.log(
             row.financial_year
         ),
 
-      confidence:
-        consolidatedDetected &&
-        profitFactor !== null &&
-        balanceFactor !== null &&
-        cashFactor !== null
-
-          ? "High"
-
-          : "Medium",
+      confidence,
 
       pages:
-        pdfData?.pages || null
+        pdfData?.pages ||
+        null
 
     }
   );
 
-
-  /* ==========================================================
-     RETURN DASHBOARD STRUCTURE
-     ========================================================== */
 
   return {
 
@@ -6375,11 +6910,6 @@ console.log(
 
       legal_name:
         companyName,
-
-      /*
-       * Local financial statements alone are not enough
-       * to safely infer current listing status.
-       */
 
       listing_status:
         "unknown",
@@ -6403,15 +6933,7 @@ console.log(
         null,
 
       extraction_confidence:
-
-        consolidatedDetected &&
-        profitFactor !== null &&
-        balanceFactor !== null &&
-        cashFactor !== null
-
-          ? "High"
-
-          : "Medium"
+        confidence
 
     },
 
@@ -6425,9 +6947,6 @@ console.log(
       consolidated_preferred:
         true,
 
-      consolidated_detected:
-        consolidatedDetected,
-
       years_found:
         usableRows.map(
           row =>
@@ -6437,58 +6956,7 @@ console.log(
       missing_critical_fields:
         missingCriticalFields,
 
-      warnings,
-
-      statement_detection: {
-
-        profit_and_loss: {
-
-          found:
-            Boolean(
-              profitStatement.text
-            ),
-
-          heading:
-            profitStatement.heading,
-
-          unit:
-            profitUnit
-
-        },
-
-
-        balance_sheet: {
-
-          found:
-            Boolean(
-              balanceStatement.text
-            ),
-
-          heading:
-            balanceStatement.heading,
-
-          unit:
-            balanceUnit
-
-        },
-
-
-        cash_flow: {
-
-          found:
-            Boolean(
-              cashStatement.text
-            ),
-
-          heading:
-            cashStatement.heading,
-
-          unit:
-            cashUnit
-
-        }
-
-      }
+      warnings
 
     }
 
@@ -6497,25 +6965,1345 @@ console.log(
 
 
 /* ============================================================
-   END SECTION 13
+   13Y. GEMINI FINANCIAL UNIT NORMALIZATION
    ============================================================ */
+
+function financialUnitFactor(
+  sourceUnit
+) {
+
+  const unit =
+    String(
+      sourceUnit ||
+      ""
+    )
+      .toLowerCase()
+      .replace(
+        /\s+/g,
+        " "
+      )
+      .trim();
+
+
+  if (!unit) {
+
+    return null;
+  }
+
+
+  if (
+    /\bcrores?\b/.test(
+      unit
+    )
+  ) {
+
+    return 1;
+  }
+
+
+  if (
+    /\bmillions?\b/.test(
+      unit
+    )
+  ) {
+
+    return 0.1;
+  }
+
+
+  if (
+    /\blakhs?\b/.test(
+      unit
+    )
+  ) {
+
+    return 0.01;
+  }
+
+
+  if (
+    /\bbillions?\b/.test(
+      unit
+    )
+  ) {
+
+    return 100;
+  }
+
+
+  return null;
+}
 
 
 /* ============================================================
-   14. FINANCIAL EXTRACTION ROUTE — LOCAL ONLY
+   13Z. GEMINI SHARE NORMALIZATION
+   ============================================================ */
+
+function normalizeSharesToCrore(
+  value,
+  unit
+) {
+
+  const number =
+    finiteFinancialNumber(
+      value
+    );
+
+
+  if (
+    number === null ||
+    number < 0
+  ) {
+
+    return null;
+  }
+
+
+  const normalizedUnit =
+    String(
+      unit ||
+      ""
+    )
+      .toLowerCase()
+      .replace(
+        /\s+/g,
+        " "
+      )
+      .trim();
+
+
+  if (
+    /\bcrores?\b/.test(
+      normalizedUnit
+    )
+  ) {
+
+    return roundFinancial(
+      number
+    );
+  }
+
+
+  if (
+    /\blakhs?\b/.test(
+      normalizedUnit
+    )
+  ) {
+
+    return roundFinancial(
+      number /
+      100
+    );
+  }
+
+
+  if (
+    /\bmillions?\b/.test(
+      normalizedUnit
+    )
+  ) {
+
+    return roundFinancial(
+      number /
+      10
+    );
+  }
+
+
+  if (
+    /\bbillions?\b/.test(
+      normalizedUnit
+    )
+  ) {
+
+    return roundFinancial(
+      number *
+      100
+    );
+  }
+
+
+  if (
+    normalizedUnit === "shares" ||
+    normalizedUnit === "share" ||
+    normalizedUnit === "absolute shares" ||
+    normalizedUnit === "number" ||
+    normalizedUnit.includes(
+      "number of shares"
+    )
+  ) {
+
+    return roundFinancial(
+      number /
+      10000000
+    );
+  }
+
+
+  return null;
+}
+
+
+/* ============================================================
+   13AA. NORMALIZE GEMINI FINANCIAL EXTRACTION
+   ============================================================ */
+
+function normalizeGeminiFinancialExtraction(
+  raw
+) {
+
+  if (
+    !raw ||
+    typeof raw !== "object" ||
+    Array.isArray(raw) ||
+    !Array.isArray(
+      raw.financials
+    )
+  ) {
+
+    throw new Error(
+      "Gemini financial extraction has no financial rows."
+    );
+  }
+
+
+  const monetaryFields = [
+
+    "revenue",
+    "ebitda",
+    "operating_income",
+    "net_income",
+
+    "total_assets",
+    "current_assets",
+    "current_liabilities",
+
+    "total_debt",
+    "cash",
+    "total_equity",
+
+    "operating_cash_flow",
+    "capex",
+
+    "inventory",
+    "accounts_receivable",
+    "accounts_payable",
+
+    "finance_cost"
+
+  ];
+
+
+  const rows =
+    [];
+
+
+  for (
+    const rawRow
+    of raw.financials
+  ) {
+
+    if (
+      !rawRow ||
+      typeof rawRow !== "object" ||
+      Array.isArray(
+        rawRow
+      )
+    ) {
+
+      continue;
+    }
+
+
+    const year =
+      normalizeYear(
+        rawRow.year
+      );
+
+
+    if (!year) {
+
+      continue;
+    }
+
+
+    const factor =
+      financialUnitFactor(
+        rawRow.source_unit
+      );
+
+
+    /*
+     * If the unit cannot be established, the row cannot safely
+     * be displayed as INR crore.
+     *
+     * Reject the row instead of silently guessing its scale.
+     */
+
+    if (
+      factor === null
+    ) {
+
+      continue;
+    }
+
+
+    const row = {
+
+      company:
+        rawRow.company ||
+        raw?.company?.name ||
+        raw?.company?.legal_name ||
+        null,
+
+      financial_year:
+        rawRow.financial_year ||
+        financialYearLabel(
+          year
+        ),
+
+      year,
+
+      statement_basis:
+        rawRow.statement_basis ||
+        "Unknown",
+
+      /*
+       * Dashboard values below are normalized to crore.
+       */
+
+      source_unit:
+        "INR crore",
+
+      original_source_unit:
+        rawRow.source_unit ||
+        null,
+
+      source_pages:
+        [],
+
+      extraction_notes:
+        ""
+
+    };
+
+
+    for (
+      const field
+      of monetaryFields
+    ) {
+
+      const value =
+        finiteFinancialNumber(
+          rawRow[field]
+        );
+
+
+      row[field] =
+
+        value === null
+
+          ? null
+
+          : roundFinancial(
+              value *
+              factor
+            );
+    }
+
+
+    /*
+     * Capex is presented as a positive investment amount.
+     */
+
+    if (
+      row.capex !== null
+    ) {
+
+      row.capex =
+        Math.abs(
+          row.capex
+        );
+    }
+
+
+    /*
+     * Debt cannot be negative.
+     */
+
+    if (
+      row.total_debt !== null &&
+      row.total_debt < 0
+    ) {
+
+      row.total_debt =
+        null;
+    }
+
+
+    /*
+     * Balance-sheet asset values cannot normally be negative.
+     * Null is safer than propagating a malformed extraction.
+     */
+
+    for (
+      const field
+      of [
+        "total_assets",
+        "current_assets",
+        "current_liabilities",
+        "cash",
+        "inventory",
+        "accounts_receivable",
+        "accounts_payable"
+      ]
+    ) {
+
+      if (
+        row[field] !== null &&
+        row[field] < 0
+      ) {
+
+        row[field] =
+          null;
+      }
+
+    }
+
+
+    /*
+     * Finance cost can appear in parentheses.
+     * Dashboard coverage calculations use magnitude.
+     */
+
+    if (
+      row.finance_cost !== null
+    ) {
+
+      row.finance_cost =
+        Math.abs(
+          row.finance_cost
+        );
+    }
+
+
+    const shares =
+      normalizeSharesToCrore(
+        rawRow.shares_outstanding,
+        rawRow.shares_outstanding_unit
+      );
+
+
+    row.shares_outstanding =
+      shares;
+
+
+    row.shares_outstanding_unit =
+
+      shares === null
+
+        ? null
+
+        : "crore shares";
+
+
+    /* --------------------------------------------------------
+       DERIVED DASHBOARD METRICS
+       -------------------------------------------------------- */
+
+    row.ebitda_margin =
+      safeRatio(
+        row.ebitda,
+        row.revenue,
+        100
+      );
+
+
+    row.operating_margin =
+      safeRatio(
+        row.operating_income,
+        row.revenue,
+        100
+      );
+
+
+    row.net_margin =
+      safeRatio(
+        row.net_income,
+        row.revenue,
+        100
+      );
+
+
+    row.current_ratio =
+      safeRatio(
+        row.current_assets,
+        row.current_liabilities
+      );
+
+
+    row.debt_equity =
+      safeRatio(
+        row.total_debt,
+        row.total_equity
+      );
+
+
+    row.net_debt =
+      safeDifference(
+        row.total_debt,
+        row.cash
+      );
+
+
+    row.cash_conversion =
+      safeRatio(
+        row.operating_cash_flow,
+        row.net_income
+      );
+
+
+    row.simplified_fcf =
+      safeDifference(
+        row.operating_cash_flow,
+        row.capex
+      );
+
+
+    row.interest_coverage =
+      safeRatio(
+        row.operating_income,
+        row.finance_cost
+      );
+
+
+    row.roe =
+      null;
+
+    row.roa =
+      null;
+
+    row.roce =
+      null;
+
+    row.asset_turnover =
+      null;
+
+    row.receivable_days =
+      null;
+
+    row.inventory_days =
+      null;
+
+    row.payable_days =
+      null;
+
+
+    rows.push(
+      row
+    );
+
+  }
+
+
+  rows.sort(
+    (
+      a,
+      b
+    ) =>
+      b.year -
+      a.year
+  );
+
+
+  if (
+    !rows.length
+  ) {
+
+    throw new Error(
+      "Gemini did not return any safely usable financial rows."
+    );
+  }
+
+
+  /* ----------------------------------------------------------
+     DERIVED MULTI-YEAR RATIOS
+     ---------------------------------------------------------- */
+
+  for (
+    let index = 0;
+    index < rows.length;
+    index++
+  ) {
+
+    const current =
+      rows[index];
+
+
+    const previous =
+      rows[
+        index +
+        1
+      ] ||
+      null;
+
+
+    if (
+      current.accounts_receivable !== null &&
+      current.revenue !== null &&
+      current.revenue > 0
+    ) {
+
+      current.receivable_days =
+        safeRatio(
+          current.accounts_receivable,
+          current.revenue,
+          365
+        );
+    }
+
+
+    if (!previous) {
+
+      continue;
+    }
+
+
+    if (
+      current.total_equity !== null &&
+      previous.total_equity !== null
+    ) {
+
+      const averageEquity =
+        (
+          current.total_equity +
+          previous.total_equity
+        ) /
+        2;
+
+
+      if (
+        Math.abs(
+          averageEquity
+        ) >
+        0.01
+      ) {
+
+        current.roe =
+          safeRatio(
+            current.net_income,
+            averageEquity,
+            100
+          );
+      }
+
+    }
+
+
+    if (
+      current.total_assets !== null &&
+      previous.total_assets !== null
+    ) {
+
+      const averageAssets =
+        (
+          current.total_assets +
+          previous.total_assets
+        ) /
+        2;
+
+
+      if (
+        averageAssets >
+        0
+      ) {
+
+        current.roa =
+          safeRatio(
+            current.net_income,
+            averageAssets,
+            100
+          );
+
+
+        current.asset_turnover =
+          safeRatio(
+            current.revenue,
+            averageAssets
+          );
+      }
+
+    }
+
+
+    if (
+      current.total_assets !== null &&
+      current.current_liabilities !== null &&
+      previous.total_assets !== null &&
+      previous.current_liabilities !== null
+    ) {
+
+      const currentCapital =
+        current.total_assets -
+        current.current_liabilities;
+
+
+      const previousCapital =
+        previous.total_assets -
+        previous.current_liabilities;
+
+
+      const averageCapital =
+        (
+          currentCapital +
+          previousCapital
+        ) /
+        2;
+
+
+      if (
+        Math.abs(
+          averageCapital
+        ) >
+        0.01
+      ) {
+
+        current.roce =
+          safeRatio(
+            current.operating_income,
+            averageCapital,
+            100
+          );
+      }
+
+    }
+
+  }
+
+
+  /* ----------------------------------------------------------
+     COMPANY
+     ---------------------------------------------------------- */
+
+  const company =
+
+    raw.company &&
+    typeof raw.company === "object" &&
+    !Array.isArray(
+      raw.company
+    )
+
+      ? {
+          ...raw.company
+        }
+
+      : {};
+
+
+  company.name =
+    company.name ||
+    company.legal_name ||
+    rows[0]?.company ||
+    "Unknown company";
+
+
+  company.legal_name =
+    company.legal_name ||
+    company.name;
+
+
+  const allowedListingStatuses =
+    new Set(
+      [
+        "listed",
+        "unlisted",
+        "pre-IPO",
+        "proposed listing",
+        "unknown"
+      ]
+    );
+
+
+  if (
+    !allowedListingStatuses.has(
+      company.listing_status
+    )
+  ) {
+
+    company.listing_status =
+      "unknown";
+  }
+
+
+  /*
+   * Do not retain market identifiers unless the report
+   * explicitly established current listed status.
+   */
+
+  if (
+    company.listing_status !==
+    "listed"
+  ) {
+
+    company.ticker =
+      null;
+
+    company.exchange =
+      null;
+  }
+
+
+  company.isin =
+    company.isin ||
+    null;
+
+
+  company.currency =
+    company.currency ||
+    "₹";
+
+
+  company.extraction_confidence =
+    "High";
+
+
+  return {
+
+    company,
+
+    financials:
+      rows,
+
+    validation: {
+
+      consolidated_preferred:
+        true,
+
+      years_found:
+        rows.map(
+          row =>
+            row.financial_year
+        ),
+
+      missing_critical_fields:
+        [],
+
+      warnings:
+        Array.isArray(
+          raw.warnings
+        )
+          ? raw.warnings
+          : []
+
+    }
+
+  };
+}
+
+
+/* ============================================================
+   13AB. FINANCIAL EXTRACTION VALIDATOR
    ============================================================ */
 
 /*
- * This endpoint intentionally keeps the old URL:
+ * AI output is NOT trusted merely because it is valid JSON.
  *
- * POST /api/ai/extract-financials
+ * The server validates the result before allowing it onto
+ * the dashboard.
  *
- * so your frontend does NOT need to change.
- *
- * Despite the historical /api/ai/ path, this endpoint
- * does NOT call AI.
+ * Failed validation activates the local fallback.
  */
 
+function validateFinancialExtractionResult(
+  result
+) {
+
+  if (
+    !result ||
+    typeof result !== "object" ||
+    Array.isArray(result) ||
+    !Array.isArray(
+      result.financials
+    ) ||
+    !result.financials.length
+  ) {
+
+    throw new Error(
+      "Financial extraction returned no usable financial rows."
+    );
+  }
+
+
+  const criticalFields = [
+
+    "revenue",
+    "net_income",
+    "total_assets",
+    "total_equity",
+    "operating_cash_flow"
+
+  ];
+
+
+  let reliableRows =
+    0;
+
+
+  for (
+    const row
+    of result.financials
+  ) {
+
+    if (
+      !row ||
+      typeof row !== "object" ||
+      Array.isArray(row)
+    ) {
+
+      continue;
+    }
+
+
+    const year =
+      normalizeYear(
+        row.year
+      );
+
+
+    if (!year) {
+
+      continue;
+    }
+
+
+    /*
+     * Count supported core fields.
+     */
+
+    const supported =
+      criticalFields.filter(
+        field =>
+          finiteFinancialNumber(
+            row[field]
+          ) !==
+          null
+      ).length;
+
+
+    if (
+      supported >= 2
+    ) {
+
+      reliableRows++;
+    }
+
+
+    /* --------------------------------------------------------
+       SANITY CHECKS
+       -------------------------------------------------------- */
+
+    const revenue =
+      finiteFinancialNumber(
+        row.revenue
+      );
+
+
+    const assets =
+      finiteFinancialNumber(
+        row.total_assets
+      );
+
+
+    const equity =
+      finiteFinancialNumber(
+        row.total_equity
+      );
+
+
+    const debt =
+      finiteFinancialNumber(
+        row.total_debt
+      );
+
+
+    const currentAssets =
+      finiteFinancialNumber(
+        row.current_assets
+      );
+
+
+    const currentLiabilities =
+      finiteFinancialNumber(
+        row.current_liabilities
+      );
+
+
+    const cash =
+      finiteFinancialNumber(
+        row.cash
+      );
+
+
+    /*
+     * Revenue cannot normally be negative.
+     */
+
+    if (
+      revenue !== null &&
+      revenue < 0
+    ) {
+
+      row.revenue =
+        null;
+    }
+
+
+    /*
+     * Total assets must be positive.
+     */
+
+    if (
+      assets !== null &&
+      assets <= 0
+    ) {
+
+      row.total_assets =
+        null;
+
+      row.roa =
+        null;
+
+      row.roce =
+        null;
+
+      row.asset_turnover =
+        null;
+    }
+
+
+    /*
+     * Current assets/liabilities cannot be negative.
+     */
+
+    if (
+      currentAssets !== null &&
+      currentAssets < 0
+    ) {
+
+      row.current_assets =
+        null;
+
+      row.current_ratio =
+        null;
+    }
+
+
+    if (
+      currentLiabilities !== null &&
+      currentLiabilities < 0
+    ) {
+
+      row.current_liabilities =
+        null;
+
+      row.current_ratio =
+        null;
+
+      row.roce =
+        null;
+    }
+
+
+    if (
+      cash !== null &&
+      cash < 0
+    ) {
+
+      row.cash =
+        null;
+
+      row.net_debt =
+        null;
+    }
+
+
+    if (
+      debt !== null &&
+      debt < 0
+    ) {
+
+      row.total_debt =
+        null;
+
+      row.debt_equity =
+        null;
+
+      row.net_debt =
+        null;
+    }
+
+
+    /*
+     * Catch extreme scale corruption.
+     *
+     * Example:
+     *
+     * assets = 600000
+     * equity = 0.15
+     *
+     * This is much more likely to be a bad table-column
+     * extraction than a real consolidated balance sheet.
+     */
+
+    if (
+      assets !== null &&
+      assets > 0 &&
+      equity !== null &&
+      Math.abs(
+        equity
+      ) <
+        Math.abs(
+          assets
+        ) *
+        0.00001
+    ) {
+
+      row.total_equity =
+        null;
+
+      row.debt_equity =
+        null;
+
+      row.roe =
+        null;
+    }
+
+
+    /*
+     * Current assets should not exceed total assets by a
+     * massive amount. Allow a small tolerance for extraction
+     * rounding but reject obviously incompatible values.
+     */
+
+    if (
+      finiteFinancialNumber(
+        row.total_assets
+      ) !== null &&
+      finiteFinancialNumber(
+        row.current_assets
+      ) !== null &&
+      row.current_assets >
+        row.total_assets *
+        1.05
+    ) {
+
+      row.current_assets =
+        null;
+
+      row.current_ratio =
+        null;
+    }
+
+
+    /*
+     * Cash cannot reasonably exceed total assets.
+     */
+
+    if (
+      finiteFinancialNumber(
+        row.total_assets
+      ) !== null &&
+      finiteFinancialNumber(
+        row.cash
+      ) !== null &&
+      row.cash >
+        row.total_assets *
+        1.05
+    ) {
+
+      row.cash =
+        null;
+
+      row.net_debt =
+        null;
+    }
+
+  }
+
+
+  if (
+    reliableRows === 0
+  ) {
+
+    throw new Error(
+      "Financial extraction failed reliability validation."
+    );
+  }
+
+
+  return result;
+}
+
+
+/* ============================================================
+   13AC. CACHE LOOKUP
+   ============================================================ */
+
+/*
+ * Same PDF uploaded again:
+ *
+ * valid hybrid cache
+ *       ↓
+ * zero Gemini calls
+ * zero pdf-parse calls
+ */
+
+async function findCachedFinancialExtraction(
+  sourceHash
+) {
+
+  if (
+    !pool ||
+    !sourceHash
+  ) {
+
+    return null;
+  }
+
+
+  try {
+
+    const cached =
+      await dbQuery(
+        `
+        SELECT
+          id,
+          company_id,
+          filename,
+          report_year,
+          metrics,
+          created_at
+
+        FROM reports
+
+        WHERE source_hash = $1
+
+        ORDER BY created_at DESC
+
+        LIMIT 10
+        `,
+        [
+          sourceHash
+        ]
+      );
+
+
+    for (
+      const row
+      of cached.rows
+    ) {
+
+      const metrics =
+        row.metrics;
+
+
+      /*
+       * Critical:
+       *
+       * Ignore old extraction rows created before this
+       * architecture.
+       */
+
+      if (
+        metrics?.cacheVersion !==
+        FINANCIAL_EXTRACTION_CACHE_VERSION
+      ) {
+
+        continue;
+      }
+
+
+      const result = {
+
+        company:
+          metrics.company ||
+          {},
+
+        financials:
+          metrics.financials ||
+          [],
+
+        validation:
+          metrics.validation ||
+          {}
+
+      };
+
+
+      try {
+
+        validateFinancialExtractionResult(
+          result
+        );
+
+
+        return {
+
+          result,
+
+          reportId:
+            row.id,
+
+          companyId:
+            row.company_id,
+
+          createdAt:
+            row.created_at,
+
+          originalProvider:
+            metrics.extractionProvider ||
+            null
+
+        };
+
+      }
+
+      catch {
+
+        /*
+         * Bad cache entry.
+         *
+         * Ignore it and continue searching.
+         */
+
+      }
+
+    }
+
+  }
+
+  catch (error) {
+
+    /*
+     * Cache failure must not stop extraction.
+     */
+
+    console.warn(
+      "Financial extraction cache lookup failed:",
+      error?.message
+    );
+
+  }
+
+
+  return null;
+}
+
+
+/* ============================================================
+   14. FINANCIAL EXTRACTION ROUTE
+   CACHE -> GEMINI ONCE -> LOCAL FALLBACK
+   ============================================================ */
 
 app.post(
   "/api/ai/extract-financials",
@@ -6532,12 +8320,10 @@ app.post(
     try {
 
       /* ------------------------------------------------------
-         REQUIRE REPORT
+         REQUIRE PDF
          ------------------------------------------------------ */
 
-      if (
-        !req.file
-      ) {
+      if (!req.file) {
 
         return res
           .status(400)
@@ -6550,242 +8336,426 @@ app.post(
               "Upload an annual-report PDF.",
 
             code:
-              "REPORT_REQUIRED",
-
-            provider:
-              "local"
+              "REPORT_REQUIRED"
 
           });
       }
 
 
+      validatePdfFile(
+        req.file
+      );
+
+
       /* ------------------------------------------------------
-         VERIFY PDF SIGNATURE
+         HASH PDF
          ------------------------------------------------------ */
 
-      const signature =
-        req.file.buffer
-          .subarray(
-            0,
-            5
+      const sourceHash =
+        crypto
+          .createHash(
+            "sha256"
           )
-          .toString(
-            "ascii"
+          .update(
+            req.file.buffer
+          )
+          .digest(
+            "hex"
           );
 
 
-      if (
-        signature !== "%PDF-"
-      ) {
+      /* ======================================================
+         STEP 1
+         DATABASE CACHE
+         ====================================================== */
 
-        return res
-          .status(400)
-          .json({
-
-            ok:
-              false,
-
-            error:
-              "The uploaded file is not a valid PDF.",
-
-            code:
-              "INVALID_PDF",
-
-            provider:
-              "local"
-
-          });
-      }
-
-
-      /* ------------------------------------------------------
-         EXTRACT PDF TEXT LOCALLY
-         ------------------------------------------------------ */
-
-      const pdfData =
-        await extractPdfTextLocally(
-          req.file
+      const cached =
+        await findCachedFinancialExtraction(
+          sourceHash
         );
 
 
-      /* ------------------------------------------------------
-         EXTRACT FINANCIALS LOCALLY
-         ------------------------------------------------------ */
+      if (cached) {
 
-      const result =
-        extractFinancialsLocally(
-          pdfData
-        );
+        console.log(
+          "Financial extraction cache hit:",
+          {
+            file:
+              req.file.originalname,
 
-
-      /* ------------------------------------------------------
-         DEFENSIVE VALIDATION
-         ------------------------------------------------------ */
-
-      if (
-        !result ||
-        typeof result !== "object" ||
-        Array.isArray(result)
-      ) {
-
-        const error =
-          new Error(
-            "Local financial extraction returned an invalid result."
-          );
-
-        error.status = 500;
-
-        throw error;
-      }
-
-
-      if (
-        !Array.isArray(
-          result.financials
-        ) ||
-        !result.financials.length
-      ) {
-
-        const error =
-          new Error(
-            "No reliable financial-statement rows were found."
-          );
-
-        error.status = 422;
-
-        throw error;
-      }
-
-
-      /*
-       * Never allow malformed numbers into dashboard.
-       */
-
-      const monetaryFields = [
-
-        "revenue",
-        "ebitda",
-        "cogs",
-        "operating_income",
-        "net_income",
-
-        "total_assets",
-        "current_assets",
-        "current_liabilities",
-
-        "total_debt",
-        "cash",
-        "total_equity",
-
-        "operating_cash_flow",
-        "capex",
-
-        "inventory",
-        "accounts_receivable",
-        "accounts_payable",
-
-        "finance_cost"
-
-      ];
-
-
-      result.financials =
-        result.financials.map(
-          row => {
-
-            const clean = {
-              ...row
-            };
-
-
-            for (
-              const field
-              of monetaryFields
-            ) {
-
-              const value =
-                row[field];
-
-
-              clean[field] =
-
-                value === null ||
-                value === undefined
-
-                  ? null
-
-                  : Number.isFinite(
-                      Number(value)
-                    )
-
-                    ? Number(value)
-
-                    : null;
-            }
-
-
-            clean.year =
-
-              Number.isInteger(
-                Number(row.year)
-              )
-
-                ? Number(
-                    row.year
-                  )
-
-                : null;
-
-
-            clean.shares_outstanding =
-
-              row.shares_outstanding ===
-                null
-
-              ||
-
-              row.shares_outstanding ===
-                undefined
-
-                ? null
-
-                : Number.isFinite(
-                    Number(
-                      row.shares_outstanding
-                    )
-                  )
-
-                  ? Number(
-                      row.shares_outstanding
-                    )
-
-                  : null;
-
-
-            clean.source_pages =
-              Array.isArray(
-                row.source_pages
-              )
-                ? row.source_pages
-                : [];
-
-
-            return clean;
+            originalProvider:
+              cached.originalProvider
           }
         );
 
 
-      /* ------------------------------------------------------
-         DATABASE PERSISTENCE
-         ------------------------------------------------------ */
+        return res.json({
+
+          ok:
+            true,
+
+          ...cached.result,
+
+          persisted: {
+
+            companyId:
+              cached.companyId,
+
+            reportId:
+              cached.reportId,
+
+            createdAt:
+              cached.createdAt
+
+          },
+
+          provider:
+            "cache",
+
+          originalProvider:
+            cached.originalProvider,
+
+          model:
+            null,
+
+          cached:
+            true,
+
+          cacheVersion:
+            FINANCIAL_EXTRACTION_CACHE_VERSION,
+
+          geminiFallbackUsed:
+            false
+
+        });
+      }
+
+
+      /* ======================================================
+         STEP 2
+         GEMINI ONE-SHOT EXTRACTION
+         ====================================================== */
+
+      let result =
+        null;
+
+
+      let extractionProvider =
+        null;
+
+
+      let geminiFailure =
+        null;
+
+
+      const useGemini =
+
+        Boolean(
+          GEMINI_API_KEY
+        )
+
+        &&
+
+        req.file.buffer.length <=
+          GEMINI_EXTRACTION_MAX_PDF_SIZE;
+
+
+      if (
+        useGemini
+      ) {
+
+        try {
+
+          console.log(
+            "Trying Gemini financial extraction:",
+            {
+              file:
+                req.file.originalname,
+
+              sizeMB:
+                roundFinancial(
+                  req.file.buffer.length /
+                  1024 /
+                  1024
+                ),
+
+              model:
+                GEMINI_MODEL,
+
+              attempts:
+                1
+            }
+          );
+
+
+          const rawGemini =
+            await extractFinancialsWithGemini(
+              req.file
+            );
+
+
+          result =
+            normalizeGeminiFinancialExtraction(
+              rawGemini
+            );
+
+
+          result =
+            validateFinancialExtractionResult(
+              result
+            );
+
+
+          extractionProvider =
+            "gemini";
+
+
+          console.log(
+            "Gemini financial extraction passed validation:",
+            {
+              company:
+                result.company?.name,
+
+              years:
+                result.financials.map(
+                  row =>
+                    row.financial_year
+                )
+            }
+          );
+
+        }
+
+        catch (error) {
+
+          geminiFailure =
+            error;
+
+
+          /*
+           * IMPORTANT:
+           *
+           * ANY Gemini extraction failure switches directly
+           * to local parsing.
+           *
+           * No second Gemini extraction attempt.
+           */
+
+          console.warn(
+            "Gemini financial extraction failed. Switching to local parser:",
+            {
+              status:
+                error?.status ||
+                null,
+
+              providerStatus:
+                error?.providerStatus ||
+                null,
+
+              message:
+                error?.message ||
+                "Unknown Gemini extraction error"
+            }
+          );
+
+
+          result =
+            null;
+
+        }
+
+      }
+
+      else {
+
+        if (
+          !GEMINI_API_KEY
+        ) {
+
+          console.log(
+            "Gemini financial extraction skipped: Gemini API key is not configured."
+          );
+
+        }
+
+        else {
+
+          console.log(
+            "Gemini financial extraction skipped to conserve quota:",
+            {
+              pdfSizeMB:
+                roundFinancial(
+                  req.file.buffer.length /
+                  1024 /
+                  1024
+                ),
+
+              thresholdMB:
+                GEMINI_EXTRACTION_MAX_PDF_MB
+            }
+          );
+
+        }
+
+      }
+
+
+      /* ======================================================
+         STEP 3
+         LOCAL FALLBACK
+         ====================================================== */
+
+      let pdfData =
+        null;
+
+
+      if (!result) {
+
+        console.log(
+          "Running deterministic local financial fallback."
+        );
+
+
+        pdfData =
+          await extractPdfTextLocally(
+            req.file
+          );
+
+
+        result =
+          extractFinancialsLocally(
+            pdfData
+          );
+
+
+        result =
+          validateFinancialExtractionResult(
+            result
+          );
+
+
+        extractionProvider =
+          "local-fallback";
+
+
+        result.validation =
+          result.validation &&
+          typeof result.validation ===
+            "object"
+
+            ? result.validation
+
+            : {};
+
+
+        result.validation.warnings =
+          Array.isArray(
+            result.validation.warnings
+          )
+
+            ? result.validation.warnings
+
+            : [];
+
+
+        if (
+          geminiFailure
+        ) {
+
+          result.validation.warnings.push(
+            "Gemini extraction was unavailable or failed reliability validation. FinSight automatically used its local deterministic parser."
+          );
+        }
+
+
+        console.log(
+          "Local financial fallback passed validation:",
+          {
+            company:
+              result.company?.name,
+
+            years:
+              result.financials.map(
+                row =>
+                  row.financial_year
+              )
+          }
+        );
+
+      }
+
+
+      /* ======================================================
+         STEP 4
+         FINAL RESULT VALIDATION
+         ====================================================== */
+
+      result =
+        validateFinancialExtractionResult(
+          result
+        );
+
+
+      result.company =
+        result.company &&
+        typeof result.company === "object"
+
+          ? result.company
+
+          : {};
+
+
+      result.validation =
+        result.validation &&
+        typeof result.validation === "object"
+
+          ? result.validation
+
+          : {};
+
+
+      result.validation.years_found =
+        result.financials
+          .map(
+            row =>
+              row.financial_year ||
+              row.year
+          )
+          .filter(
+            Boolean
+          );
+
+
+      result.validation.warnings =
+        Array.isArray(
+          result.validation.warnings
+        )
+
+          ? result.validation.warnings
+
+          : [];
+
+
+      result.validation.missing_critical_fields =
+        Array.isArray(
+          result.validation.missing_critical_fields
+        )
+
+          ? result.validation.missing_critical_fields
+
+          : [];
+
+
+      /* ======================================================
+         STEP 5
+         SAVE SUCCESSFUL EXTRACTION
+         ====================================================== */
 
       let persisted =
         null;
 
 
-      if (
-        pool
-      ) {
+      if (pool) {
 
         try {
 
@@ -6816,20 +8786,7 @@ app.post(
             });
 
 
-          const hash =
-            crypto
-              .createHash(
-                "sha256"
-              )
-              .update(
-                req.file.buffer
-              )
-              .digest(
-                "hex"
-              );
-
-
-          const validYears =
+          const years =
             result.financials
               .map(
                 row =>
@@ -6838,18 +8795,18 @@ app.post(
                   )
               )
               .filter(
-                year =>
-                  Number.isInteger(year) &&
-                  year >= 1900 &&
-                  year <= 2200
+                Number.isFinite
               );
 
 
           const latestYear =
-            validYears.length
+
+            years.length
+
               ? Math.max(
-                  ...validYears
+                  ...years
                 )
+
               : null;
 
 
@@ -6889,30 +8846,58 @@ app.post(
                 latestYear,
 
                 {
+
+                  cacheVersion:
+                    FINANCIAL_EXTRACTION_CACHE_VERSION,
+
+                  extractionProvider,
+
+                  company:
+                    result.company,
+
                   financials:
                     result.financials,
 
                   validation:
                     result.validation,
 
-                  extraction: {
-                    provider:
-                      "local",
+                  pdf:
 
-                    engine:
-                      "pdf-parse + deterministic FinSight extractor",
+                    pdfData
 
-                    pages:
-                      pdfData.pages,
+                      ? {
 
-                    extractedCharacters:
-                      pdfData.text.length
-                  }
+                          pages:
+                            pdfData.pages,
+
+                          extractedCharacters:
+                            pdfData.text.length
+
+                        }
+
+                      : {
+
+                          /*
+                           * Gemini path intentionally avoids a
+                           * second local PDF parse just to obtain
+                           * page count.
+                           *
+                           * That saves CPU and memory.
+                           */
+
+                          pages:
+                            null,
+
+                          extractedCharacters:
+                            null
+
+                        }
+
                 },
 
                 {},
 
-                hash
+                sourceHash
 
               ]
             );
@@ -6924,8 +8909,7 @@ app.post(
               companyRow.id,
 
             reportId:
-              inserted.rows[0]
-                .id,
+              inserted.rows[0].id,
 
             createdAt:
               inserted.rows[0]
@@ -6933,62 +8917,70 @@ app.post(
 
           };
 
+
+          console.log(
+            "Financial extraction cached:",
+            {
+              reportId:
+                persisted.reportId,
+
+              provider:
+                extractionProvider,
+
+              cacheVersion:
+                FINANCIAL_EXTRACTION_CACHE_VERSION
+            }
+          );
+
         }
 
         catch (
           databaseError
         ) {
 
+          /*
+           * Database failure must NEVER destroy a successful
+           * extraction.
+           */
+
           console.error(
-            "Local extraction persistence warning:",
+            "Could not save financial extraction:",
             databaseError
           );
 
 
-          if (
-            !Array.isArray(
-              result.validation?.warnings
-            )
-          ) {
-
-            result.validation.warnings =
-              [];
-          }
-
-
-          result
-            .validation
-            .warnings
-            .push(
-              "Financial extraction succeeded, but the result could not be saved to research memory."
-            );
+          result.validation.warnings.push(
+            "Financial extraction succeeded, but the result could not be cached in FinSight research memory."
+          );
 
         }
 
       }
 
 
-      /* ------------------------------------------------------
+      /* ======================================================
          SUCCESS
-         ------------------------------------------------------ */
+         ====================================================== */
 
       console.log(
-        "Local financial extraction successful:",
+        "Financial extraction successful:",
         {
           company:
-            result.company?.name,
+            result.company?.name ||
+            result.company?.legal_name ||
+            "Unknown company",
 
-          rows:
-            result.financials.length,
+          provider:
+            extractionProvider,
 
           years:
-            result.validation?.years_found,
+            result.financials.map(
+              row =>
+                row.financial_year
+            ),
 
-          confidence:
-            result.company?.extraction_confidence,
-
-          pages:
-            pdfData.pages
+          cached:
+            false
         }
       );
 
@@ -7003,113 +8995,84 @@ app.post(
         persisted,
 
         provider:
-          "local",
+          extractionProvider,
 
         model:
-          null,
 
-        extractionEngine:
-          "pdf-parse + deterministic FinSight extractor",
+          extractionProvider ===
+          "gemini"
 
-        pdfProcessing:
-          "local",
+            ? GEMINI_MODEL
 
-        pdf: {
+            : "pdf-parse + deterministic FinSight extractor",
 
-          pages:
-            pdfData.pages,
+        cached:
+          false,
 
-          extractedCharacters:
-            pdfData.text.length,
+        cacheVersion:
+          FINANCIAL_EXTRACTION_CACHE_VERSION,
 
-          sizeBytes:
-            req.file.buffer.length
-
-        }
+        geminiFallbackUsed:
+          extractionProvider ===
+          "local-fallback"
 
       });
 
     }
 
-
-    /* ========================================================
-       LOCAL EXTRACTION ERROR HANDLER
-       ======================================================== */
-
-    catch (
-      error
-    ) {
+    catch (error) {
 
       console.error(
-        "Local financial extraction error:",
+        "Financial extraction failed:",
         error
       );
 
 
-      const upstreamStatus =
+      let status =
         Number(
           error?.status
         );
 
 
-      let status =
-        500;
-
-
-      let code =
-        "LOCAL_EXTRACTION_FAILED";
-
-
-      let message =
-        error?.message ||
-        "FinSight could not extract financial statements from this annual report.";
-
-
-      /* ------------------------------------------------------
-         INVALID PDF
-         ------------------------------------------------------ */
-
       if (
-        upstreamStatus === 400
+        !Number.isInteger(
+          status
+        ) ||
+        status < 400 ||
+        status > 599
       ) {
 
         status =
-          400;
+          500;
+      }
+
+
+      let code =
+        "FINANCIAL_EXTRACTION_FAILED";
+
+
+      if (
+        status ===
+        413
+      ) {
+
+        code =
+          "REPORT_TOO_LARGE";
+      }
+
+      else if (
+        status ===
+        400
+      ) {
 
         code =
           "INVALID_REPORT";
       }
 
-
-      /* ------------------------------------------------------
-         TOO LARGE
-         ------------------------------------------------------ */
-
       else if (
-        upstreamStatus === 413
+        status ===
+        422
       ) {
-
-        status =
-          413;
-
-        code =
-          "REPORT_TOO_LARGE";
-
-        message =
-          "The annual-report PDF exceeds FinSight's 45 MB upload limit.";
-      }
-
-
-      /* ------------------------------------------------------
-         PDF READABLE, STATEMENTS NOT RELIABLY LOCATED
-         ------------------------------------------------------ */
-
-      else if (
-        upstreamStatus === 422
-      ) {
-
-        status =
-          422;
 
         code =
           "FINANCIAL_STATEMENTS_NOT_LOCATED";
@@ -7126,17 +9089,16 @@ app.post(
             false,
 
           error:
-            message,
+            error?.message ||
+            "FinSight could not extract reliable financial statements from this annual report.",
 
           code,
 
           provider:
-            "local",
+            "hybrid"
 
-          model:
-            null
-
-        });
+     
+      });
 
     }
 
@@ -7145,11 +9107,12 @@ app.post(
 
 
 /* ============================================================
-   END SECTION 14
-   SECTION 15 CONTINUES BELOW
+   END BLOCK 1
+   SECTIONS 1–14 COMPLETE
+
+   NEXT:
+   SECTION 15 — ANNUAL REPORT AI
    ============================================================ */
-
-
 /* ============================================================
    15. ANNUAL REPORT AI
    ============================================================ */
@@ -7158,21 +9121,478 @@ app.post(
  * Architecture:
  *
  * PDF
- * ↓
+ *  ↓
  * local pdf-parse
- * ↓
- * extracted text
- * ↓
+ *  ↓
+ * selected annual-report text
+ *  ↓
  * Gemini text analysis
  *
- * IMPORTANT:
+ * IMPORTANT
  *
- * The PDF itself is NEVER sent to Gemini.
+ * The PDF itself is NOT sent to Gemini here.
  *
- * Financial extraction has already been performed locally
- * by /api/ai/extract-financials.
+ * Financial extraction was already handled by Section 14:
+ *
+ * cache -> Gemini once -> local fallback
+ *
+ * This endpoint is for qualitative investor analysis only.
  */
 
+
+/* ============================================================
+   15A. BUILD COMPACT REPORT CONTEXT
+   ============================================================ */
+
+/*
+ * Sending an entire 400+ page report to Gemini again wastes
+ * tokens.
+ *
+ * This helper selects useful text windows locally.
+ *
+ * It tries to preserve:
+ *
+ * - business / management discussion
+ * - risk disclosures
+ * - auditor material
+ * - governance
+ * - financial statement context
+ *
+ * The output is deliberately bounded.
+ */
+
+function findTextWindow(
+  text,
+  terms,
+  {
+    before = 4000,
+    after = 18000
+  } = {}
+) {
+
+  const source =
+    String(
+      text ||
+      ""
+    );
+
+
+  const lower =
+    source.toLowerCase();
+
+
+  let bestIndex =
+    -1;
+
+
+  for (
+    const term
+    of terms
+  ) {
+
+    const index =
+      lower.indexOf(
+        String(
+          term
+        ).toLowerCase()
+      );
+
+
+    if (
+      index >= 0 &&
+      (
+        bestIndex < 0 ||
+        index < bestIndex
+      )
+    ) {
+
+      bestIndex =
+        index;
+    }
+
+  }
+
+
+  if (
+    bestIndex < 0
+  ) {
+
+    return "";
+  }
+
+
+  return source.slice(
+
+    Math.max(
+      0,
+      bestIndex -
+      before
+    ),
+
+    Math.min(
+      source.length,
+      bestIndex +
+      after
+    )
+
+  );
+}
+
+
+/* ============================================================
+   DEDUPLICATE REPORT CONTEXT
+   ============================================================ */
+
+function deduplicateTextBlocks(
+  blocks
+) {
+
+  const seen =
+    new Set();
+
+
+  const output =
+    [];
+
+
+  for (
+    const block
+    of blocks
+  ) {
+
+    const text =
+      String(
+        block ||
+        ""
+      ).trim();
+
+
+    if (
+      text.length <
+      100
+    ) {
+
+      continue;
+    }
+
+
+    /*
+     * Lightweight fingerprint.
+     */
+
+    const key =
+      text
+        .slice(
+          0,
+          500
+        )
+        .replace(
+          /\s+/g,
+          " "
+        )
+        .toLowerCase();
+
+
+    if (
+      seen.has(
+        key
+      )
+    ) {
+
+      continue;
+    }
+
+
+    seen.add(
+      key
+    );
+
+
+    output.push(
+      text
+    );
+
+  }
+
+
+  return output;
+}
+
+
+/* ============================================================
+   SELECT QUALITATIVE REPORT TEXT
+   ============================================================ */
+
+function buildQualitativeReportContext(
+  fullText
+) {
+
+  const text =
+    normalizeReportText(
+      fullText
+    );
+
+
+  if (!text) {
+
+    return "";
+  }
+
+
+  const blocks =
+    [];
+
+
+  /*
+   * Beginning of report.
+   *
+   * Usually contains company overview, management commentary,
+   * strategy and operating information.
+   */
+
+  blocks.push(
+    text.slice(
+      0,
+      70000
+    )
+  );
+
+
+  /*
+   * Business / management.
+   */
+
+  blocks.push(
+    findTextWindow(
+      text,
+      [
+        "management discussion and analysis",
+        "management discussion",
+        "business overview",
+        "our business",
+        "company overview",
+        "strategic priorities"
+      ],
+      {
+        before:
+          5000,
+
+        after:
+          40000
+      }
+    )
+  );
+
+
+  /*
+   * Risks.
+   */
+
+  blocks.push(
+    findTextWindow(
+      text,
+      [
+        "risk management",
+        "risk factors",
+        "principal risks",
+        "enterprise risk management",
+        "material risks"
+      ],
+      {
+        before:
+          4000,
+
+        after:
+          35000
+      }
+    )
+  );
+
+
+  /*
+   * Governance.
+   */
+
+  blocks.push(
+    findTextWindow(
+      text,
+      [
+        "corporate governance",
+        "governance report",
+        "related party transactions",
+        "related-party transactions"
+      ],
+      {
+        before:
+          4000,
+
+        after:
+          30000
+      }
+    )
+  );
+
+
+  /*
+   * Auditor.
+   */
+
+  blocks.push(
+    findTextWindow(
+      text,
+      [
+        "independent auditor's report",
+        "independent auditors' report",
+        "independent auditor report",
+        "key audit matters"
+      ],
+      {
+        before:
+          3000,
+
+        after:
+          45000
+      }
+    )
+  );
+
+
+  /*
+   * Consolidated financial statement context.
+   *
+   * We do NOT need to send all notes.
+   */
+
+  blocks.push(
+    findTextWindow(
+      text,
+      PROFIT_STATEMENT_HEADINGS,
+      {
+        before:
+          2000,
+
+        after:
+          22000
+      }
+    )
+  );
+
+
+  blocks.push(
+    findTextWindow(
+      text,
+      BALANCE_SHEET_HEADINGS,
+      {
+        before:
+          2000,
+
+        after:
+          22000
+      }
+    )
+  );
+
+
+  blocks.push(
+    findTextWindow(
+      text,
+      CASH_FLOW_HEADINGS,
+      {
+        before:
+          2000,
+
+        after:
+          22000
+      }
+    )
+  );
+
+
+  /*
+   * End of report can contain important financial/auditor
+   * material missed by heading detection.
+   */
+
+  blocks.push(
+    text.slice(
+      Math.max(
+        0,
+        text.length -
+        40000
+      )
+    )
+  );
+
+
+  const unique =
+    deduplicateTextBlocks(
+      blocks
+    );
+
+
+  /*
+   * Hard character limit.
+   *
+   * This is significantly smaller than sending 500k–700k
+   * characters on every analysis request.
+   */
+
+  const MAX_CONTEXT_CHARACTERS =
+    260000;
+
+
+  let output =
+    "";
+
+
+  for (
+    const block
+    of unique
+  ) {
+
+    if (
+      output.length >=
+      MAX_CONTEXT_CHARACTERS
+    ) {
+
+      break;
+    }
+
+
+    const remaining =
+      MAX_CONTEXT_CHARACTERS -
+      output.length;
+
+
+    const selected =
+      block.slice(
+        0,
+        remaining
+      );
+
+
+    output +=
+
+      `
+
+============================================================
+REPORT EVIDENCE SECTION
+============================================================
+
+${selected}
+
+`;
+
+  }
+
+
+  return output.trim();
+}
+
+
+/* ============================================================
+   15B. ANALYZE REPORT
+   ============================================================ */
 
 app.post(
   "/api/ai/analyze-report",
@@ -7201,12 +9621,16 @@ app.post(
               "Upload an annual-report PDF."
 
           });
-
       }
 
 
+      validatePdfFile(
+        req.file
+      );
+
+
       /* ------------------------------------------------------
-         LOCAL PDF TEXT EXTRACTION
+         LOCAL PDF TEXT
          ------------------------------------------------------ */
 
       const pdfData =
@@ -7228,294 +9652,98 @@ app.post(
 
 
       /*
-       * Do not send unlimited report text to Gemini.
-       *
-       * Financial extraction itself remains completely local.
-       *
-       * Gemini receives text only for qualitative analysis.
+       * Only selected evidence is sent to Gemini.
        */
 
-      const MAX_REPORT_TEXT =
-        700000;
-
-
-      let reportText =
-        pdfData.text;
+      const reportText =
+        buildQualitativeReportContext(
+          pdfData.text
+        );
 
 
       if (
-        reportText.length >
-        MAX_REPORT_TEXT
+        reportText.length <
+        500
       ) {
 
-        /*
-         * Preserve both the beginning and end of a long report.
-         *
-         * The beginning often contains:
-         * - company/business information
-         * - management commentary
-         *
-         * The latter portion often contains:
-         * - financial statements
-         * - auditor report
-         * - notes
-         */
-
-        const firstPart =
-          reportText.slice(
-            0,
-            350000
+        const error =
+          new Error(
+            "FinSight could not prepare enough annual-report text for qualitative analysis."
           );
 
 
-        const lastPart =
-          reportText.slice(
-            -350000
-          );
+        error.status =
+          422;
 
 
-        reportText =
-          `${firstPart}
-
-============================================================
-[LONG REPORT MIDDLE SECTION OMITTED FROM AI CONTEXT]
-============================================================
-
-${lastPart}`;
-
+        throw error;
       }
 
 
-      const prompt = `
+      console.log(
+        "Annual-report qualitative AI context:",
+        {
+          originalCharacters:
+            pdfData.text.length,
 
-Analyze the following annual-report evidence as an
-evidence-first long-term investor.
+          selectedCharacters:
+            reportText.length,
 
-IMPORTANT:
-
-The annual-report PDF was processed locally by FinSight.
-
-You are receiving extracted TEXT only.
-
-Use ONLY:
-
-1. the supplied annual-report text,
-2. the structured FinSight financial extraction,
-3. the supplied local PDF context.
-
-Never invent missing information.
-
-Do not replace missing annual-report evidence with general
-knowledge about the company or industry.
+          pages:
+            pdfData.pages
+        }
+      );
 
 
-============================================================
-STRUCTURED FINANCIAL CONTEXT
-============================================================
+      const prompt = `Analyze this annual report for a long-term investor.
 
+Use ONLY supplied evidence.
+Do not invent missing facts or numbers.
+
+STRUCTURED FINANCIALS
 ${JSON.stringify(
   metrics || {},
   null,
   2
 )}
 
-
-============================================================
 LOCAL PDF CONTEXT
-============================================================
-
 ${JSON.stringify(
   pdfContext || {},
   null,
   2
 )}
 
-
-============================================================
-ANNUAL REPORT TEXT
-============================================================
-
+SELECTED REPORT EVIDENCE
 ${reportText}
 
-
-============================================================
-BUSINESS ANALYSIS
-============================================================
-
-Analyze:
-
-- business model
-- major products and services
-- operating segments
-- revenue drivers
-- geographic exposure
-- competitive position
-- customer concentration where disclosed
+ANALYZE
+- business model, segments, revenue drivers, competitive position
 - growth drivers
-- material business changes
-
-
-============================================================
-FINANCIAL QUALITY
-============================================================
-
-Use the structured financial context where available.
-
-Analyze:
-
-- revenue trend
-- EBITDA
-- EBITDA margin
-- operating profitability
-- net profit
-- profit margins
-- operating cash flow
-- cash conversion
-- working capital
-- receivables
-- inventory
-- payables
-- debt
-- finance cost
-- liquidity
-- balance-sheet strength
-- capital expenditure
-- return characteristics
-
-Do not invent a financial number that is absent from the
-structured financial context or annual-report evidence.
-
-
-============================================================
-MANAGEMENT
-============================================================
-
-Analyze:
-
-- management strategy
-- stated priorities
-- guidance
-- targets
-- commitments
-- execution
+- profitability and cash quality
+- working capital, leverage and liquidity
+- management strategy and execution
 - capital allocation
-- acquisitions
-- disposals
-- dividends
-- debt decisions
-- major investments
+- governance and related parties
+- auditor opinion, qualifications and key audit matters
+- material risks
+- management commitments and later evidence where available
 
+RULES
+- Structured financials are authoritative where supplied.
+- Missing evidence = say it is unavailable.
+- Do not invent page references.
+- Do not convert an anomaly into an allegation.
+- Do not provide personalized buy/sell advice.
+- Keep the output concise.
+- Return JSON only.
 
-============================================================
-GOVERNANCE
-============================================================
-
-Analyze where disclosed:
-
-- board observations
-- promoter relationships
-- parent relationships
-- related-party transactions
-- governance concerns
-- conflicts of interest
-- material governance changes
-
-
-============================================================
-AUDITOR
-============================================================
-
-Analyze:
-
-- audit opinion
-- qualifications
-- emphasis of matter
-- key audit matters
-- internal-control observations
-- material auditor concerns
-
-Do not describe a normal audit disclosure as a red flag
-without evidence.
-
-
-============================================================
-RISKS
-============================================================
-
-Identify material disclosed risks involving:
-
-- regulation
-- competition
-- technology
-- leverage
-- liquidity
-- litigation
-- contingent liabilities
-- customer concentration
-- supplier concentration
-- cybersecurity
-- execution
-- foreign exchange
-- commodity exposure
-- working capital
-- governance
-
-
-============================================================
-MANAGEMENT PROMISE TRACKER
-============================================================
-
-Where earlier commitments and later evidence are available,
-classify each promise using ONLY:
-
-"Achieved"
-"Partially achieved"
-"Pending"
-"Changed"
-"Not verifiable"
-
-
-============================================================
-EVIDENCE DISCIPLINE
-============================================================
-
-Distinguish:
-
-REPORTED FACT
-
-CALCULATED METRIC
-
-MANAGEMENT CLAIM
-
-AI INTERPRETATION
-
-A financial anomaly is an investigation prompt,
-not proof of misconduct.
-
-If evidence is insufficient, say so.
-
-Do not invent page references.
-
-Do not issue personalized buy/sell instructions.
-
-
-============================================================
-OUTPUT
-============================================================
-
-Return VALID JSON ONLY.
-
-Use this structure:
-
+JSON
 {
   "company": "",
-
   "report_type": "single|multi",
-
   "financial_years": [],
-
   "overall_view": "",
-
   "confidence": "High|Medium|Low",
 
   "yearly_analysis": [
@@ -7573,54 +9801,20 @@ Use this structure:
   },
 
   "good": [],
-
   "bad": [],
-
   "watch": [],
-
   "red_flags": [],
-
   "growth_drivers": [],
 
   "management_assessment": "",
-
   "governance_assessment": "",
-
   "auditor_assessment": "",
-
   "cash_quality_assessment": "",
 
   "investor_questions": [],
-
   "missing_information": []
-}
+}`;
 
-
-For:
-
-- good
-- bad
-- watch
-- red_flags
-- growth_drivers
-
-use objects shaped like:
-
-{
-  "title": "",
-  "explanation": "",
-  "evidence": [],
-  "priority": "High|Medium|Low"
-}
-
-Do not invent evidence.
-
-`;
-
-
-      /* ------------------------------------------------------
-         GEMINI TEXT-ONLY ANALYSIS
-         ------------------------------------------------------ */
 
       const text =
         await geminiGenerate(
@@ -7654,7 +9848,6 @@ Do not invent evidence.
         throw new Error(
           "Gemini returned an unreadable annual-report analysis."
         );
-
       }
 
 
@@ -7662,89 +9855,48 @@ Do not invent evidence.
          DEFENSIVE STRUCTURE
          ------------------------------------------------------ */
 
-      analysis.financial_years =
-        Array.isArray(
-          analysis.financial_years
-        )
-          ? analysis.financial_years
-          : [];
+      const arrayFields = [
+
+        "financial_years",
+        "yearly_analysis",
+        "management_promise_tracker",
+        "good",
+        "bad",
+        "watch",
+        "red_flags",
+        "growth_drivers",
+        "investor_questions",
+        "missing_information"
+
+      ];
 
 
-      analysis.yearly_analysis =
-        Array.isArray(
-          analysis.yearly_analysis
-        )
-          ? analysis.yearly_analysis
-          : [];
+      for (
+        const field
+        of arrayFields
+      ) {
 
+        if (
+          !Array.isArray(
+            analysis[field]
+          )
+        ) {
 
-      analysis.management_promise_tracker =
-        Array.isArray(
-          analysis.management_promise_tracker
-        )
-          ? analysis.management_promise_tracker
-          : [];
+          analysis[field] =
+            [];
+        }
 
-
-      analysis.good =
-        Array.isArray(
-          analysis.good
-        )
-          ? analysis.good
-          : [];
-
-
-      analysis.bad =
-        Array.isArray(
-          analysis.bad
-        )
-          ? analysis.bad
-          : [];
-
-
-      analysis.watch =
-        Array.isArray(
-          analysis.watch
-        )
-          ? analysis.watch
-          : [];
-
-
-      analysis.red_flags =
-        Array.isArray(
-          analysis.red_flags
-        )
-          ? analysis.red_flags
-          : [];
-
-
-      analysis.growth_drivers =
-        Array.isArray(
-          analysis.growth_drivers
-        )
-          ? analysis.growth_drivers
-          : [];
-
-
-      analysis.investor_questions =
-        Array.isArray(
-          analysis.investor_questions
-        )
-          ? analysis.investor_questions
-          : [];
-
-
-      analysis.missing_information =
-        Array.isArray(
-          analysis.missing_information
-        )
-          ? analysis.missing_information
-          : [];
+      }
 
 
       analysis.trend_analysis =
+
         analysis.trend_analysis &&
-        typeof analysis.trend_analysis === "object"
+        typeof analysis.trend_analysis ===
+          "object" &&
+        !Array.isArray(
+          analysis.trend_analysis
+        )
 
           ? analysis.trend_analysis
 
@@ -7752,8 +9904,13 @@ Do not invent evidence.
 
 
       analysis.changes =
+
         analysis.changes &&
-        typeof analysis.changes === "object"
+        typeof analysis.changes ===
+          "object" &&
+        !Array.isArray(
+          analysis.changes
+        )
 
           ? analysis.changes
 
@@ -7774,7 +9931,7 @@ Do not invent evidence.
           "gemini",
 
         pdfProcessing:
-          "local",
+          "local-text-selection",
 
         pdf: {
 
@@ -7817,7 +9974,6 @@ Do not invent evidence.
 
         status =
           400;
-
       }
 
       else if (
@@ -7826,7 +9982,14 @@ Do not invent evidence.
 
         status =
           413;
+      }
 
+      else if (
+        upstreamStatus === 422
+      ) {
+
+        status =
+          422;
       }
 
       else if (
@@ -7835,7 +9998,6 @@ Do not invent evidence.
 
         status =
           429;
-
       }
 
       else if (
@@ -7845,7 +10007,6 @@ Do not invent evidence.
 
         status =
           503;
-
       }
 
       else if (
@@ -7854,12 +10015,13 @@ Do not invent evidence.
 
         status =
           503;
-
       }
 
 
       return res
-        .status(status)
+        .status(
+          status
+        )
         .json({
 
           ok:
@@ -7885,20 +10047,13 @@ Do not invent evidence.
    ============================================================ */
 
 /*
- * Ask FinSight does NOT receive the PDF.
+ * No PDF is sent here.
  *
- * It works from:
+ * Ask FinSight works from already prepared structured data.
  *
- * - local financial extraction
- * - annual-report analysis
- * - market data
- * - valuation
- * - local PDF context supplied by frontend
- *
- * This keeps questions fast and avoids repeatedly
- * processing the annual report.
+ * Therefore every question is much cheaper than sending the
+ * annual report again.
  */
-
 
 app.post(
   "/api/ai/ask",
@@ -7927,15 +10082,18 @@ app.post(
         pdfContext
 
       } =
-        req.body || {};
+        req.body ||
+        {};
 
 
-      if (
-        !question ||
-        !String(
-          question
-        ).trim()
-      ) {
+      const cleanQuestion =
+        String(
+          question ||
+          ""
+        ).trim();
+
+
+      if (!cleanQuestion) {
 
         return res
           .status(400)
@@ -7948,13 +10106,13 @@ app.post(
               "Question is required."
 
           });
-
       }
 
 
       if (
         !company ||
-        typeof company !== "object"
+        typeof company !==
+          "object"
       ) {
 
         return res
@@ -7968,171 +10126,73 @@ app.post(
               "Company evidence is required. Upload an annual report first."
 
           });
-
       }
 
 
-      const prompt = `
+      /*
+       * Keep Ask FinSight context bounded.
+       *
+       * reportAnalysis should already be compact JSON.
+       */
 
-Answer the investor's question about the loaded company.
+      const prompt = `Answer the investor's question using ONLY supplied FinSight evidence.
 
-Use ONLY the supplied FinSight evidence.
-
-Do not use unsourced general knowledge to fill missing
-annual-report information.
-
-
-============================================================
 QUESTION
-============================================================
+${cleanQuestion}
 
-${String(
-  question
-).trim()}
-
-
-============================================================
-COMPANY IDENTITY
-============================================================
-
+COMPANY
 ${JSON.stringify(
   company || {},
   null,
   2
 )}
 
-
-============================================================
-EXTRACTED FINANCIAL HISTORY
-============================================================
-
+FINANCIALS
 ${JSON.stringify(
   financials || [],
   null,
   2
 )}
 
-
-============================================================
-MARKET DATA
-============================================================
-
+MARKET
 ${JSON.stringify(
   market || null,
   null,
   2
 )}
 
-
-============================================================
 VALUATION
-============================================================
-
 ${JSON.stringify(
   valuation || null,
   null,
   2
 )}
 
-
-============================================================
-ANNUAL-REPORT ANALYSIS
-============================================================
-
+REPORT ANALYSIS
 ${JSON.stringify(
   reportAnalysis || null,
   null,
   2
 )}
 
-
-============================================================
-LOCAL PDF CONTEXT
-============================================================
-
+PDF CONTEXT
 ${JSON.stringify(
   pdfContext || null,
   null,
   2
 )}
 
+RULES
+- Answer the question directly.
+- Use only supplied evidence.
+- Missing evidence = "Not established from the loaded annual-report evidence."
+- Never invent numbers, ticker, market price, page references, auditor findings or management claims.
+- Distinguish reported fact, calculated metric, management claim and interpretation.
+- No personalized buy/sell advice.
+- Keep the answer concise.
+- Return JSON only.
 
-============================================================
-ANSWER RULES
-============================================================
-
-Answer the actual question directly.
-
-You may answer questions concerning:
-
-- business model
-- how the company makes money
-- products
-- services
-- operating segments
-- strategy
-- competitive position
-- revenue
-- profitability
-- EBITDA
-- margins
-- cash flow
-- debt
-- working capital
-- receivables
-- inventory
-- management
-- governance
-- auditor
-- related parties
-- contingent liabilities
-- risks
-- growth drivers
-- capital allocation
-- listing status
-- market valuation
-- annual-report disclosures
-- multi-year changes
-
-
-If the supplied evidence cannot support an answer, state:
-
-"Not established from the loaded annual-report evidence."
-
-
-Do NOT fill missing evidence using generic knowledge.
-
-Do NOT invent:
-
-- numbers
-- page references
-- management statements
-- market prices
-- ticker symbols
-- valuation multiples
-- auditor findings
-
-
-Separate the evidence where relevant into:
-
-REPORTED FACT
-
-CALCULATED METRIC
-
-MANAGEMENT CLAIM
-
-AI INTERPRETATION
-
-
-Do not issue personalized buy/sell instructions.
-
-
-============================================================
-OUTPUT
-============================================================
-
-Return VALID JSON ONLY:
-
+JSON
 {
   "answer": "",
   "reported_facts": [],
@@ -8142,9 +10202,7 @@ Return VALID JSON ONLY:
   "evidence": [],
   "risks": [],
   "what_to_investigate_next": []
-}
-
-`;
+}`;
 
 
       const text =
@@ -8170,7 +10228,8 @@ Return VALID JSON ONLY:
 
       if (
         !answer ||
-        typeof answer !== "object" ||
+        typeof answer !==
+          "object" ||
         Array.isArray(
           answer
         )
@@ -8179,64 +10238,38 @@ Return VALID JSON ONLY:
         throw new Error(
           "Gemini returned an unreadable answer."
         );
-
       }
 
 
-      answer.reported_facts =
-        Array.isArray(
-          answer.reported_facts
-        )
-          ? answer.reported_facts
-          : [];
+      const arrayFields = [
+
+        "reported_facts",
+        "calculated_metrics",
+        "management_claims",
+        "ai_interpretation",
+        "evidence",
+        "risks",
+        "what_to_investigate_next"
+
+      ];
 
 
-      answer.calculated_metrics =
-        Array.isArray(
-          answer.calculated_metrics
-        )
-          ? answer.calculated_metrics
-          : [];
+      for (
+        const field
+        of arrayFields
+      ) {
 
+        if (
+          !Array.isArray(
+            answer[field]
+          )
+        ) {
 
-      answer.management_claims =
-        Array.isArray(
-          answer.management_claims
-        )
-          ? answer.management_claims
-          : [];
+          answer[field] =
+            [];
+        }
 
-
-      answer.ai_interpretation =
-        Array.isArray(
-          answer.ai_interpretation
-        )
-          ? answer.ai_interpretation
-          : [];
-
-
-      answer.evidence =
-        Array.isArray(
-          answer.evidence
-        )
-          ? answer.evidence
-          : [];
-
-
-      answer.risks =
-        Array.isArray(
-          answer.risks
-        )
-          ? answer.risks
-          : [];
-
-
-      answer.what_to_investigate_next =
-        Array.isArray(
-          answer.what_to_investigate_next
-        )
-          ? answer.what_to_investigate_next
-          : [];
+      }
 
 
       return res.json({
@@ -8280,7 +10313,6 @@ Return VALID JSON ONLY:
 
         status =
           400;
-
       }
 
       else if (
@@ -8289,7 +10321,6 @@ Return VALID JSON ONLY:
 
         status =
           429;
-
       }
 
       else if (
@@ -8299,7 +10330,6 @@ Return VALID JSON ONLY:
 
         status =
           503;
-
       }
 
       else if (
@@ -8308,12 +10338,13 @@ Return VALID JSON ONLY:
 
         status =
           503;
-
       }
 
 
       return res
-        .status(status)
+        .status(
+          status
+        )
         .json({
 
           ok:
@@ -8335,45 +10366,39 @@ Return VALID JSON ONLY:
 
 
 /* ============================================================
-   17. COMPETITOR ANNUAL-REPORT COMPARISON
+   17. COMPETITOR COMPARISON
    ============================================================ */
 
 /*
- * NEW ARCHITECTURE
+ * Credit-efficient architecture:
  *
  * Company A PDF
- *      ↓
- * LOCAL pdf-parse
- *      ↓
- * LOCAL financial extraction
- *      ↓
- * Gemini receives TEXT + local financial JSON
- *      ↓
- * compact Company A profile
+ *       ↓
+ * local pdf-parse
+ *       ↓
+ * local deterministic financial extraction
+ *       ↓
+ * selected qualitative text
+ *       ↓
+ * ONE Gemini compact-profile call
  *
  *
  * Company B PDF
- *      ↓
- * LOCAL pdf-parse
- *      ↓
- * LOCAL financial extraction
- *      ↓
- * Gemini receives TEXT + local financial JSON
- *      ↓
- * compact Company B profile
+ *       ↓
+ * same process
  *
  *
- * Profile A + Profile B
- *      ↓
- * Gemini text comparison
+ * Compact profile A + B
+ *       ↓
+ * ONE small Gemini comparison call
  *
  *
- * PDFs are NEVER sent to Gemini.
+ * The PDFs themselves are NOT sent to Gemini in this section.
  */
 
 
 /* ============================================================
-   17A. PREPARE ONE COMPANY REPORT
+   17A. PREPARE COMPARISON REPORT
    ============================================================ */
 
 app.post(
@@ -8398,7 +10423,12 @@ app.post(
         String(
           req.body?.label ||
           "Company"
-        ).trim();
+        )
+          .trim()
+          .slice(
+            0,
+            200
+          );
 
 
       if (!report) {
@@ -8414,24 +10444,35 @@ app.post(
               "Annual-report PDF is required."
 
           });
-
       }
 
 
-      /* ------------------------------------------------------
-         LOCAL PDF EXTRACTION
-         ------------------------------------------------------ */
-
-      console.log(
-        `Preparing local comparison research for ${label}:`,
-        report.originalname,
-        `(${(
-          report.buffer.length /
-          1024 /
-          1024
-        ).toFixed(1)} MB)`
+      validatePdfFile(
+        report
       );
 
+
+      console.log(
+        "Preparing comparison report:",
+        {
+          label,
+
+          file:
+            report.originalname,
+
+          sizeMB:
+            roundFinancial(
+              report.buffer.length /
+              1024 /
+              1024
+            )
+        }
+      );
+
+
+      /* ------------------------------------------------------
+         LOCAL PDF
+         ------------------------------------------------------ */
 
       const pdfData =
         await extractPdfTextLocally(
@@ -8439,13 +10480,9 @@ app.post(
         );
 
 
-      /*
-       * Try deterministic financial extraction.
-       *
-       * Comparison should still be able to proceed with
-       * qualitative report evidence if some structured
-       * financial fields cannot be located.
-       */
+      /* ------------------------------------------------------
+         LOCAL FINANCIALS
+         ------------------------------------------------------ */
 
       let localFinancials =
         null;
@@ -8458,243 +10495,69 @@ app.post(
             pdfData
           );
 
+
+        localFinancials =
+          validateFinancialExtractionResult(
+            localFinancials
+          );
+
       }
 
       catch (
         extractionError
       ) {
 
+        /*
+         * Comparison can still continue qualitatively.
+         *
+         * Do not fabricate financial values.
+         */
+
         console.warn(
           `Local comparison financial extraction incomplete for ${label}:`,
           extractionError?.message
         );
 
+
+        localFinancials =
+          null;
+
       }
 
 
       /* ------------------------------------------------------
-         REPORT TEXT WINDOW
+         COMPACT QUALITATIVE CONTEXT
          ------------------------------------------------------ */
 
-      const MAX_COMPARISON_TEXT =
-        500000;
+      const reportText =
+        buildQualitativeReportContext(
+          pdfData.text
+        );
 
 
-      let reportText =
-        pdfData.text;
+      const prompt = `Create a compact investor profile for ${label} using ONLY supplied annual-report evidence.
 
-
-      if (
-        reportText.length >
-        MAX_COMPARISON_TEXT
-      ) {
-
-        reportText =
-
-          reportText.slice(
-            0,
-            250000
-          )
-
-          +
-
-          `
-
-============================================================
-[LONG REPORT MIDDLE SECTION OMITTED FROM AI CONTEXT]
-============================================================
-
-`
-
-          +
-
-          reportText.slice(
-            -250000
-          );
-
-      }
-
-
-      const prompt = `
-
-You are FinSight AI.
-
-Create a COMPACT evidence-first investor profile for:
-
-${label}
-
-The annual-report PDF was processed LOCALLY.
-
-You are receiving:
-
-1. locally extracted annual-report text
-2. deterministic FinSight financial extraction where available
-
-The PDF itself has NOT been sent to you.
-
-
-============================================================
-LOCAL FINANCIAL EXTRACTION
-============================================================
-
+LOCAL FINANCIALS
 ${JSON.stringify(
   localFinancials || null,
   null,
   2
 )}
 
-
-============================================================
-ANNUAL REPORT TEXT
-============================================================
-
+SELECTED REPORT EVIDENCE
 ${reportText}
 
+RULES
+- Prefer consolidated evidence.
+- Local financial values are authoritative where supplied.
+- Missing financial value = null.
+- Never guess ticker, exchange, market price or valuation.
+- Do not treat missing information as zero.
+- Do not invent risks or auditor findings.
+- Keep descriptions concise.
+- Return JSON only.
 
-============================================================
-SOURCE RULES
-============================================================
-
-1. The supplied annual-report evidence is the source of truth.
-
-2. Prefer consolidated evidence for group-level analysis.
-
-3. Do not mix standalone and consolidated figures.
-
-4. Do not invent missing information.
-
-5. Do not guess ticker symbols or exchanges.
-
-6. Do not invent market prices.
-
-7. Do not treat missing information as zero.
-
-8. Do not issue personalized buy/sell advice.
-
-9. Use the locally extracted financial values as authoritative
-   where they are supplied.
-
-10. If a financial value is unavailable, return null.
-
-
-============================================================
-FINANCIAL ANALYSIS
-============================================================
-
-Analyze where supported:
-
-- revenue
-- revenue growth
-- EBITDA
-- EBITDA margin
-- operating profit
-- net profit
-- net margin
-- operating cash flow
-- cash conversion
-- free cash flow
-- total assets
-- total equity
-- total debt
-- cash
-- net debt
-- debt/equity
-- current assets
-- current liabilities
-- current ratio
-- receivables
-- inventory
-- finance cost
-- ROE
-- ROCE
-
-
-============================================================
-BUSINESS
-============================================================
-
-Analyze:
-
-- business model
-- major operating segments
-- revenue drivers
-- competitive strengths
-- growth drivers
-
-
-============================================================
-CASH QUALITY
-============================================================
-
-Analyze:
-
-- operating cash generation
-- profit-to-cash conversion
-- working-capital effects
-- important cash-flow concerns
-
-
-============================================================
-BALANCE SHEET
-============================================================
-
-Analyze:
-
-- leverage
-- liquidity
-- debt
-- cash
-- financial flexibility
-
-
-============================================================
-MANAGEMENT
-============================================================
-
-Analyze:
-
-- strategy
-- execution
-- capital allocation
-
-
-============================================================
-GOVERNANCE
-============================================================
-
-Analyze:
-
-- governance observations
-- related-party issues
-- material concerns
-
-
-============================================================
-AUDITOR
-============================================================
-
-Analyze:
-
-- audit opinion
-- qualifications
-- key audit matters
-
-
-============================================================
-RISKS
-============================================================
-
-Identify material supported risks.
-
-Do not invent risks simply to fill the array.
-
-
-============================================================
-OUTPUT
-============================================================
-
-Return VALID JSON ONLY:
-
+JSON
 {
   "company": {
     "name": "",
@@ -8739,7 +10602,6 @@ Return VALID JSON ONLY:
   },
 
   "cash_quality": "",
-
   "balance_sheet_assessment": "",
 
   "management": {
@@ -8760,22 +10622,12 @@ Return VALID JSON ONLY:
   },
 
   "risks": [],
-
   "strengths": [],
-
   "weaknesses": [],
-
   "investor_questions": [],
-
   "confidence": "High|Medium|Low"
-}
+}`;
 
-`;
-
-
-      /* ------------------------------------------------------
-         GEMINI GETS TEXT ONLY
-         ------------------------------------------------------ */
 
       const resultText =
         await geminiGenerate(
@@ -8800,7 +10652,8 @@ Return VALID JSON ONLY:
 
       if (
         !research ||
-        typeof research !== "object" ||
+        typeof research !==
+          "object" ||
         Array.isArray(
           research
         )
@@ -8809,103 +10662,76 @@ Return VALID JSON ONLY:
         throw new Error(
           "Gemini returned unusable structured comparison data."
         );
-
       }
 
 
       /* ------------------------------------------------------
-         DEFENSIVE STRUCTURE
+         DEFENSIVE OBJECTS
          ------------------------------------------------------ */
 
-      research.company =
-        research.company &&
-        typeof research.company === "object"
+      const objectFields = [
 
-          ? research.company
+        "company",
+        "financials",
+        "business",
+        "management",
+        "governance",
+        "auditor"
 
-          : {};
-
-
-      research.financials =
-        research.financials &&
-        typeof research.financials === "object"
-
-          ? research.financials
-
-          : {};
+      ];
 
 
-      research.business =
-        research.business &&
-        typeof research.business === "object"
+      for (
+        const field
+        of objectFields
+      ) {
 
-          ? research.business
+        if (
+          !research[field] ||
+          typeof research[field] !==
+            "object" ||
+          Array.isArray(
+            research[field]
+          )
+        ) {
 
-          : {};
+          research[field] =
+            {};
+        }
 
-
-      research.management =
-        research.management &&
-        typeof research.management === "object"
-
-          ? research.management
-
-          : {};
-
-
-      research.governance =
-        research.governance &&
-        typeof research.governance === "object"
-
-          ? research.governance
-
-          : {};
+      }
 
 
-      research.auditor =
-        research.auditor &&
-        typeof research.auditor === "object"
+      const arrayFields = [
 
-          ? research.auditor
+        "risks",
+        "strengths",
+        "weaknesses",
+        "investor_questions"
 
-          : {};
-
-
-      research.risks =
-        Array.isArray(
-          research.risks
-        )
-          ? research.risks
-          : [];
+      ];
 
 
-      research.strengths =
-        Array.isArray(
-          research.strengths
-        )
-          ? research.strengths
-          : [];
+      for (
+        const field
+        of arrayFields
+      ) {
 
+        if (
+          !Array.isArray(
+            research[field]
+          )
+        ) {
 
-      research.weaknesses =
-        Array.isArray(
-          research.weaknesses
-        )
-          ? research.weaknesses
-          : [];
+          research[field] =
+            [];
+        }
 
-
-      research.investor_questions =
-        Array.isArray(
-          research.investor_questions
-        )
-          ? research.investor_questions
-          : [];
+      }
 
 
       /*
-       * If Gemini omitted the company name but local extraction
-       * found it, preserve the locally extracted identity.
+       * Preserve locally detected identity if Gemini omitted it.
        */
 
       if (
@@ -8915,14 +10741,35 @@ Return VALID JSON ONLY:
 
         research.company.name =
           localFinancials.company.name;
+      }
 
+
+      /*
+       * Preserve latest locally extracted year.
+       */
+
+      if (
+        !research.company.financial_year &&
+        localFinancials?.financials?.[0]
+          ?.financial_year
+      ) {
+
+        research.company.financial_year =
+          localFinancials
+            .financials[0]
+            .financial_year;
       }
 
 
       console.log(
-        `${label} comparison research ready:`,
-        research.company?.name ||
-        report.originalname
+        "Comparison profile ready:",
+        {
+          label,
+
+          company:
+            research.company?.name ||
+            report.originalname
+        }
       );
 
 
@@ -8955,7 +10802,10 @@ Return VALID JSON ONLY:
             pdfData.pages,
 
           extractedCharacters:
-            pdfData.text.length
+            pdfData.text.length,
+
+          aiContextCharacters:
+            reportText.length
 
         }
 
@@ -8987,7 +10837,6 @@ Return VALID JSON ONLY:
 
         status =
           400;
-
       }
 
       else if (
@@ -8996,7 +10845,14 @@ Return VALID JSON ONLY:
 
         status =
           413;
+      }
 
+      else if (
+        upstreamStatus === 422
+      ) {
+
+        status =
+          422;
       }
 
       else if (
@@ -9005,7 +10861,6 @@ Return VALID JSON ONLY:
 
         status =
           429;
-
       }
 
       else if (
@@ -9015,7 +10870,6 @@ Return VALID JSON ONLY:
 
         status =
           503;
-
       }
 
       else if (
@@ -9024,12 +10878,13 @@ Return VALID JSON ONLY:
 
         status =
           503;
-
       }
 
 
       return res
-        .status(status)
+        .status(
+          status
+        )
         .json({
 
           ok:
@@ -9051,18 +10906,17 @@ Return VALID JSON ONLY:
 
 
 /* ============================================================
-   17B. COMPARE PREPARED COMPANY PROFILES
+   17B. COMPARE PREPARED PROFILES
    ============================================================ */
 
 /*
- * This endpoint receives JSON only.
+ * JSON only.
  *
  * No PDF.
- * No pdf-parse.
+ * No local parsing.
  *
- * Therefore the final comparison request is lightweight.
+ * This makes the final comparison relatively inexpensive.
  */
-
 
 app.post(
   "/api/ai/compare",
@@ -9084,7 +10938,8 @@ app.post(
 
       if (
         !companyA ||
-        typeof companyA !== "object" ||
+        typeof companyA !==
+          "object" ||
         Array.isArray(
           companyA
         )
@@ -9101,13 +10956,13 @@ app.post(
               "Prepared Company A research is required."
 
           });
-
       }
 
 
       if (
         !companyB ||
-        typeof companyB !== "object" ||
+        typeof companyB !==
+          "object" ||
         Array.isArray(
           companyB
         )
@@ -9124,7 +10979,6 @@ app.post(
               "Prepared Company B research is required."
 
           });
-
       }
 
 
@@ -9140,16 +10994,18 @@ app.post(
         );
 
 
+      /*
+       * Prevent accidentally sending enormous frontend state
+       * into Gemini.
+       */
+
       const MAX_PROFILE_SIZE =
-        250000;
+        180000;
 
 
       if (
         serializedA.length >
-          MAX_PROFILE_SIZE
-
-        ||
-
+          MAX_PROFILE_SIZE ||
         serializedB.length >
           MAX_PROFILE_SIZE
       ) {
@@ -9165,7 +11021,6 @@ app.post(
               "Prepared company research is unexpectedly large. Re-process the annual reports before comparing them."
 
           });
-
       }
 
 
@@ -9199,134 +11054,48 @@ app.post(
       );
 
 
-      const prompt = `
+      const prompt = `Compare these two companies using ONLY supplied annual-report research.
 
-You are FinSight AI.
-
-Compare two companies using ONLY the structured annual-report
-research supplied below.
-
-The underlying PDFs were processed locally by FinSight.
-
-Do not invent missing information.
-
-Do not supplement the supplied evidence with unsourced
-general knowledge.
-
-Do not automatically declare one company the winner.
-
-Do not provide personalized buy/sell advice.
-
-Your job is to explain investor trade-offs.
-
-
-============================================================
 COMPANY A
-============================================================
+${serializedA}
 
-${JSON.stringify(
-  companyA,
-  null,
-  2
-)}
-
-
-============================================================
 COMPANY B
-============================================================
-
-${JSON.stringify(
-  companyB,
-  null,
-  2
-)}
-
-
-============================================================
-COMPARISON FRAMEWORK
-============================================================
+${serializedB}
 
 Compare:
+- business quality
+- growth
+- profitability
+- cash generation
+- balance sheet
+- capital allocation
+- management
+- governance
+- auditor
+- risks
+- valuation only if supplied evidence supports it
 
-1. Business model
-2. Business quality
-3. Growth
-4. Revenue durability
-5. Profitability
-6. EBITDA and operating margins
-7. Operating cash generation
-8. Earnings quality
-9. Working capital
-10. Balance-sheet strength
-11. Debt and leverage
-12. Liquidity
-13. ROE / ROCE where supported
-14. Capital allocation
-15. Management strategy
-16. Management execution
-17. Governance
-18. Auditor observations
-19. Key audit matters
-20. Major risks
-21. Growth opportunities
-
-
-============================================================
-EDGE RULE
-============================================================
-
-For every comparison category, edge MUST be one of:
-
+EDGE must be exactly one of:
 "Company A"
-
 "Company B"
-
 "Mixed"
-
 "Similar"
-
 "Insufficient evidence"
 
+RULES
+- Missing data is not a negative result.
+- Never treat null as zero.
+- Do not invent market prices or valuation multiples.
+- Do not use outside company knowledge.
+- Explain trade-offs rather than automatically declaring a winner.
+- No personalized buy/sell advice.
+- Keep the output concise.
+- Return JSON only.
 
-Do not award an edge merely because one company has
-more disclosure.
-
-Missing information is NOT a negative financial result.
-
-Never treat null as zero.
-
-
-============================================================
-VALUATION
-============================================================
-
-These profiles are primarily annual-report based.
-
-If sufficient public-market valuation evidence is not
-present, use:
-
-"Insufficient evidence"
-
-Do not invent:
-
-- market prices
-- market capitalization
-- P/E
-- EV/EBITDA
-- P/B
-- valuation multiples
-
-
-============================================================
-OUTPUT
-============================================================
-
-Return VALID JSON ONLY:
-
+JSON
 {
   "company_a": "",
   "company_b": "",
-
   "summary": "",
 
   "business_quality": {
@@ -9396,23 +11165,14 @@ Return VALID JSON ONLY:
   },
 
   "company_a_strengths": [],
-
   "company_a_weaknesses": [],
-
   "company_b_strengths": [],
-
   "company_b_weaknesses": [],
-
   "important_tradeoffs": [],
-
   "questions_before_choosing_a": [],
-
   "questions_before_choosing_b": [],
-
   "overall_interpretation": ""
-}
-
-`;
+}`;
 
 
       const comparisonText =
@@ -9438,7 +11198,8 @@ Return VALID JSON ONLY:
 
       if (
         !comparison ||
-        typeof comparison !== "object" ||
+        typeof comparison !==
+          "object" ||
         Array.isArray(
           comparison
         )
@@ -9447,7 +11208,6 @@ Return VALID JSON ONLY:
         throw new Error(
           "Gemini returned an unusable company comparison."
         );
-
       }
 
 
@@ -9457,7 +11217,6 @@ Return VALID JSON ONLY:
 
         comparison.company_a =
           companyAName;
-
       }
 
 
@@ -9467,7 +11226,6 @@ Return VALID JSON ONLY:
 
         comparison.company_b =
           companyBName;
-
       }
 
 
@@ -9497,7 +11255,6 @@ Return VALID JSON ONLY:
 
           comparison[field] =
             [];
-
         }
 
       }
@@ -9552,7 +11309,6 @@ Return VALID JSON ONLY:
 
         status =
           400;
-
       }
 
       else if (
@@ -9561,7 +11317,6 @@ Return VALID JSON ONLY:
 
         status =
           413;
-
       }
 
       else if (
@@ -9570,7 +11325,6 @@ Return VALID JSON ONLY:
 
         status =
           429;
-
       }
 
       else if (
@@ -9580,7 +11334,6 @@ Return VALID JSON ONLY:
 
         status =
           503;
-
       }
 
       else if (
@@ -9589,12 +11342,13 @@ Return VALID JSON ONLY:
 
         status =
           503;
-
       }
 
 
       return res
-        .status(status)
+        .status(
+          status
+        )
         .json({
 
           ok:
@@ -9611,19 +11365,7 @@ Return VALID JSON ONLY:
 
     }
 
-  }
-);
-
-
-/* ============================================================
-   BLOCK 2 ENDS HERE
-
-   NEXT:
-   SECTION 18 — ALPHA VANTAGE
-   THROUGH
-   SECTION 29 — START
-   ============================================================ */
-/* ============================================================
+  }/* ============================================================
    18. ALPHA VANTAGE MARKET QUOTE
    ONE API REQUEST PER BUTTON PRESS
    ============================================================ */
@@ -9631,7 +11373,10 @@ Return VALID JSON ONLY:
 app.get(
   "/api/market/:identifier",
 
-  async (req, res) => {
+  async (
+    req,
+    res
+  ) => {
 
     try {
 
@@ -9640,9 +11385,13 @@ app.get(
         return res
           .status(503)
           .json({
-            ok: false,
+
+            ok:
+              false,
+
             error:
               "Alpha Vantage API key is not configured."
+
           });
 
       }
@@ -9650,7 +11399,8 @@ app.get(
 
       const identifier =
         String(
-          req.params.identifier || ""
+          req.params.identifier ||
+          ""
         )
           .trim()
           .toUpperCase();
@@ -9658,7 +11408,8 @@ app.get(
 
       const ticker =
         String(
-          req.query.ticker || ""
+          req.query.ticker ||
+          ""
         )
           .trim()
           .toUpperCase();
@@ -9666,7 +11417,8 @@ app.get(
 
       const nseCode =
         String(
-          req.query.nseCode || ""
+          req.query.nseCode ||
+          ""
         )
           .trim()
           .toUpperCase();
@@ -9674,7 +11426,8 @@ app.get(
 
       const bseCode =
         String(
-          req.query.bseCode || ""
+          req.query.bseCode ||
+          ""
         )
           .trim()
           .toUpperCase();
@@ -9682,7 +11435,8 @@ app.get(
 
       const exchange =
         String(
-          req.query.exchange || ""
+          req.query.exchange ||
+          ""
         )
           .trim()
           .toUpperCase();
@@ -9690,12 +11444,18 @@ app.get(
 
       const companyName =
         String(
-          req.query.company || ""
-        ).trim();
+          req.query.company ||
+          ""
+        )
+          .trim()
+          .slice(
+            0,
+            300
+          );
 
 
       /* ------------------------------------------------------
-         RESOLVE MARKET SYMBOL
+         RESOLVE ONE MARKET SYMBOL
          ------------------------------------------------------ */
 
       let symbol =
@@ -9706,14 +11466,13 @@ app.get(
         null;
 
 
-      /*
-       * BSE security code is preferred where available.
-       */
-
       if (bseCode) {
 
         symbol =
-          bseCode.endsWith(".BSE")
+
+          bseCode.endsWith(
+            ".BSE"
+          )
 
             ? bseCode
 
@@ -9725,16 +11484,13 @@ app.get(
 
       }
 
-
-      /*
-       * Otherwise use verified ticker.
-       */
-
       else if (ticker) {
 
         if (
           exchange === "BSE" &&
-          !ticker.endsWith(".BSE")
+          !ticker.endsWith(
+            ".BSE"
+          )
         ) {
 
           symbol =
@@ -9755,11 +11511,6 @@ app.get(
 
       }
 
-
-      /*
-       * NSE code fallback.
-       */
-
       else if (nseCode) {
 
         symbol =
@@ -9770,11 +11521,6 @@ app.get(
           "NSE code";
 
       }
-
-
-      /*
-       * Final fallback to frontend identifier.
-       */
 
       else if (identifier) {
 
@@ -9805,6 +11551,21 @@ app.get(
       }
 
 
+      /*
+       * Defensive symbol length.
+       */
+
+      symbol =
+        String(
+          symbol
+        )
+          .trim()
+          .slice(
+            0,
+            100
+          );
+
+
       console.log(
         "Alpha Vantage quote request:",
         {
@@ -9819,7 +11580,7 @@ app.get(
 
 
       /* ------------------------------------------------------
-         ONE ALPHA VANTAGE REQUEST
+         EXACTLY ONE ALPHA VANTAGE REQUEST
          ------------------------------------------------------ */
 
       const url =
@@ -9848,7 +11609,13 @@ app.get(
 
       const response =
         await fetch(
-          url
+          url,
+          {
+            signal:
+              AbortSignal.timeout(
+                30000
+              )
+          }
         );
 
 
@@ -9866,8 +11633,7 @@ app.get(
 
 
       /*
-       * Alpha Vantage commonly returns HTTP 200
-       * even when provider limits are reached.
+       * Alpha Vantage can return HTTP 200 for provider limits.
        */
 
       if (
@@ -9909,7 +11675,9 @@ app.get(
 
 
       if (
-        data["Error Message"]
+        data[
+          "Error Message"
+        ]
       ) {
 
         return res
@@ -9920,7 +11688,9 @@ app.get(
               false,
 
             error:
-              data["Error Message"],
+              data[
+                "Error Message"
+              ],
 
             provider:
               "Alpha Vantage",
@@ -9935,18 +11705,22 @@ app.get(
 
 
       const quote =
-        data["Global Quote"] ||
+        data[
+          "Global Quote"
+        ] ||
         {};
 
 
       const price =
-        Number(
-          quote["05. price"]
+        finiteFinancialNumber(
+          quote[
+            "05. price"
+          ]
         );
 
 
       if (
-        !Number.isFinite(price) ||
+        price === null ||
         price <= 0
       ) {
 
@@ -9972,34 +11746,13 @@ app.get(
       }
 
 
-      function numberValue(key) {
+      function numberValue(
+        key
+      ) {
 
-        const raw =
-          quote[key];
-
-
-        if (
-          raw === null ||
-          raw === undefined ||
-          raw === ""
-        ) {
-
-          return null;
-
-        }
-
-
-        const value =
-          Number(
-            raw
-          );
-
-
-        return Number.isFinite(
-          value
-        )
-          ? value
-          : null;
+        return finiteFinancialNumber(
+          quote[key]
+        );
 
       }
 
@@ -10015,7 +11768,9 @@ app.get(
       if (
         exchange === "NSE" ||
         exchange === "BSE" ||
-        symbol.endsWith(".BSE")
+        symbol.endsWith(
+          ".BSE"
+        )
       ) {
 
         currency =
@@ -10233,7 +11988,9 @@ app.get(
       const symbol =
 
         exchange === "BSE" &&
-        !ticker.endsWith(".BSE")
+        !ticker.endsWith(
+          ".BSE"
+        )
 
           ? `${ticker}.BSE`
 
@@ -10272,7 +12029,13 @@ app.get(
 
       const response =
         await fetch(
-          url
+          url,
+          {
+            signal:
+              AbortSignal.timeout(
+                30000
+              )
+          }
         );
 
 
@@ -10314,7 +12077,9 @@ app.get(
 
 
       if (
-        data["Error Message"]
+        data[
+          "Error Message"
+        ]
       ) {
 
         return res
@@ -10325,7 +12090,9 @@ app.get(
               false,
 
             error:
-              data["Error Message"],
+              data[
+                "Error Message"
+              ],
 
             provider:
               "Alpha Vantage"
@@ -10377,35 +12144,35 @@ app.get(
               date,
 
               open:
-                Number(
+                finiteFinancialNumber(
                   values[
                     "1. open"
                   ]
                 ),
 
               high:
-                Number(
+                finiteFinancialNumber(
                   values[
                     "2. high"
                   ]
                 ),
 
               low:
-                Number(
+                finiteFinancialNumber(
                   values[
                     "3. low"
                   ]
                 ),
 
               close:
-                Number(
+                finiteFinancialNumber(
                   values[
                     "4. close"
                   ]
                 ),
 
               volume:
-                Number(
+                finiteFinancialNumber(
                   values[
                     "5. volume"
                   ]
@@ -10416,13 +12183,15 @@ app.get(
 
           .filter(
             row =>
-              Number.isFinite(
-                row.close
-              )
+              row.close !==
+              null
           )
 
           .sort(
-            (a, b) =>
+            (
+              a,
+              b
+            ) =>
               a.date.localeCompare(
                 b.date
               )
@@ -10484,16 +12253,10 @@ app.get(
    ============================================================ */
 
 /*
- * No PDF is used here.
+ * No PDF.
  *
- * Gemini receives only:
- *
- * - locally extracted financial history
- * - market data
- * - deterministic valuation metrics
- * - annual-report analysis
+ * Gemini receives structured data only.
  */
-
 
 app.post(
   "/api/ai/valuation",
@@ -10522,8 +12285,15 @@ app.post(
         {};
 
 
+      const marketPrice =
+        finiteFinancialNumber(
+          market?.price
+        );
+
+
       if (
-        !market?.price
+        marketPrice === null ||
+        marketPrice <= 0
       ) {
 
         return res
@@ -10541,159 +12311,67 @@ app.post(
       }
 
 
-      const prompt = `
+      const prompt = `Interpret this valuation using ONLY supplied FinSight evidence.
 
-Interpret the following company valuation for an investor.
-
-Use ONLY the supplied FinSight evidence.
-
-Do not invent missing values.
-
-
-============================================================
 COMPANY
-============================================================
-
 ${JSON.stringify(
   company || {},
   null,
   2
 )}
 
-
-============================================================
 MARKET
-============================================================
-
 ${JSON.stringify(
   market || {},
   null,
   2
 )}
 
-
-============================================================
-FINANCIAL HISTORY
-============================================================
-
+FINANCIALS
 ${JSON.stringify(
   fundamentals || [],
   null,
   2
 )}
 
-
-============================================================
-VALUATION METRICS
-============================================================
-
+VALUATION
 ${JSON.stringify(
   valuation || {},
   null,
   2
 )}
 
-
-============================================================
-ANNUAL REPORT ANALYSIS
-============================================================
-
+REPORT ANALYSIS
 ${JSON.stringify(
   reportAnalysis || null,
   null,
   2
 )}
 
-
-============================================================
-STRICT GROUNDING RULES
-============================================================
-
-Treat FINANCIAL HISTORY and VALUATION METRICS as
-authoritative structured inputs.
-
-Do not recalculate a supplied metric and substitute a
-different definition.
-
-A reported fact must come directly from:
-
-- FINANCIAL HISTORY
-- ANNUAL REPORT ANALYSIS
-
-A calculated metric must come directly from:
-
-- VALUATION METRICS
-
-Never call earnings quality strong merely because
-margins or accounting earnings are strong.
-
-Earnings quality must primarily consider:
-
-- operating cash flow
-- free cash flow
-- cash conversion
-- working capital
-
-If operating cash flow or free cash flow is weak
-relative to profit, explicitly describe earnings
-cash conversion as weak or mixed.
-
-Do not describe a manually entered share price as a
-live market quote.
-
-Do not infer:
-
-- sector norms
-- industry cyclicality
-- project pipelines
-- market-share claims
-- industry growth rates
-
-unless supported by supplied annual-report evidence.
-
-Preserve the distinction between reported EBITDA and
-adjusted/non-GAAP EBITDA.
-
-If a metric is unavailable, state that it is unavailable.
-
-Do not estimate missing values.
-
-
-============================================================
-ASSESS
-============================================================
+RULES
+- Structured financials and valuation metrics are authoritative.
+- Do not invent or estimate missing metrics.
+- Do not replace supplied metric definitions with different calculations.
+- Earnings quality must consider operating cash flow, free cash flow, cash conversion and working capital.
+- Do not infer sector norms or industry facts unless supplied.
+- Preserve reported vs adjusted/non-GAAP distinctions.
+- Do not call manually entered price a live quote.
+- No personalized buy/sell advice.
+- Keep the answer concise.
+- Return JSON only.
 
 Assess:
-
 - business quality
 - earnings quality
 - balance-sheet quality
 - valuation multiples
 - earnings yield
-- free-cash-flow yield where available
+- FCF yield where available
 - leverage
 - expectations implied by valuation
-- assumptions that could invalidate the valuation conclusion
+- assumptions that could invalidate the conclusion
 
-
-You may use:
-
-"Attractive"
-"Fair"
-"Premium"
-"Expensive"
-
-only as evidence-supported valuation descriptions.
-
-Do not issue personalized buy/sell advice.
-
-
-============================================================
-OUTPUT
-============================================================
-
-Return VALID JSON ONLY:
-
+JSON
 {
   "answer": "",
   "reported_facts": [],
@@ -10703,9 +12381,7 @@ Return VALID JSON ONLY:
   "evidence": [],
   "risks": [],
   "what_to_investigate_next": []
-}
-
-`;
+}`;
 
 
       const text =
@@ -10731,7 +12407,8 @@ Return VALID JSON ONLY:
 
       if (
         !assessment ||
-        typeof assessment !== "object" ||
+        typeof assessment !==
+          "object" ||
         Array.isArray(
           assessment
         )
@@ -10815,8 +12492,7 @@ Return VALID JSON ONLY:
         upstreamStatus === 400
       ) {
 
-        status =
-          400;
+        status = 400;
 
       }
 
@@ -10824,8 +12500,7 @@ Return VALID JSON ONLY:
         upstreamStatus === 429
       ) {
 
-        status =
-          429;
+        status = 429;
 
       }
 
@@ -10834,8 +12509,7 @@ Return VALID JSON ONLY:
         upstreamStatus === 403
       ) {
 
-        status =
-          503;
+        status = 503;
 
       }
 
@@ -10843,8 +12517,7 @@ Return VALID JSON ONLY:
         upstreamStatus >= 500
       ) {
 
-        status =
-          503;
+        status = 503;
 
       }
 
@@ -11045,7 +12718,21 @@ app.post(
         {};
 
 
-      if (!company) {
+      const cleanCompany =
+        String(
+          company ||
+          ""
+        ).trim();
+
+
+      const cleanThesis =
+        String(
+          thesis ||
+          ""
+        ).trim();
+
+
+      if (!cleanCompany) {
 
         return res
           .status(400)
@@ -11062,12 +12749,7 @@ app.post(
       }
 
 
-      if (
-        !thesis ||
-        !String(
-          thesis
-        ).trim()
-      ) {
+      if (!cleanThesis) {
 
         return res
           .status(400)
@@ -11088,7 +12770,7 @@ app.post(
         await upsertCompany({
 
           name:
-            company,
+            cleanCompany,
 
           ticker,
 
@@ -11126,9 +12808,7 @@ app.post(
               companyRow.id
             ),
 
-            String(
-              thesis
-            ).trim(),
+            cleanThesis,
 
             bullCase ||
             null,
@@ -11139,7 +12819,9 @@ app.post(
             Array.isArray(
               thesisBreakers
             )
+
               ? thesisBreakers
+
               : []
 
           ]
@@ -11189,7 +12871,125 @@ app.post(
 
 
 /* ============================================================
-   24. LOAD RESEARCH MEMORY
+   24. RESEARCH MEMORY HELPERS
+   ============================================================ */
+
+async function loadCompanyResearch(
+  company
+) {
+
+  const [
+
+    reports,
+
+    theses,
+
+    valuations,
+
+    promises,
+
+    events
+
+  ] =
+    await Promise.all(
+      [
+
+        dbQuery(
+          `
+          SELECT *
+          FROM reports
+          WHERE company_id = $1
+          ORDER BY created_at DESC
+          LIMIT 20
+          `,
+          [
+            company.id
+          ]
+        ),
+
+        dbQuery(
+          `
+          SELECT *
+          FROM research_theses
+          WHERE company_id = $1
+          ORDER BY updated_at DESC
+          LIMIT 20
+          `,
+          [
+            String(
+              company.id
+            )
+          ]
+        ),
+
+        dbQuery(
+          `
+          SELECT *
+          FROM valuation_snapshots
+          WHERE company_id = $1
+          ORDER BY created_at DESC
+          LIMIT 20
+          `,
+          [
+            company.id
+          ]
+        ),
+
+        dbQuery(
+          `
+          SELECT *
+          FROM management_promises
+          WHERE company_id = $1
+          ORDER BY updated_at DESC
+          LIMIT 50
+          `,
+          [
+            company.id
+          ]
+        ),
+
+        dbQuery(
+          `
+          SELECT *
+          FROM monitoring_events
+          WHERE company_id = $1
+          ORDER BY created_at DESC
+          LIMIT 100
+          `,
+          [
+            company.id
+          ]
+        )
+
+      ]
+    );
+
+
+  return {
+
+    company,
+
+    reports:
+      reports.rows,
+
+    theses:
+      theses.rows,
+
+    valuations:
+      valuations.rows,
+
+    promises:
+      promises.rows,
+
+    events:
+      events.rows
+
+  };
+}
+
+
+/* ============================================================
+   24A. LOAD RESEARCH MEMORY
    ============================================================ */
 
 app.get(
@@ -11354,105 +13154,9 @@ app.get(
       }
 
 
-      const [
-
-        reports,
-
-        theses,
-
-        valuations,
-
-        promises,
-
-        events
-
-      ] =
-        await Promise.all(
-          [
-
-            dbQuery(
-              `
-              SELECT *
-              FROM reports
-
-              WHERE company_id = $1
-
-              ORDER BY created_at DESC
-
-              LIMIT 20
-              `,
-              [
-                company.id
-              ]
-            ),
-
-            dbQuery(
-              `
-              SELECT *
-              FROM research_theses
-
-              WHERE company_id = $1
-
-              ORDER BY updated_at DESC
-
-              LIMIT 20
-              `,
-              [
-                String(
-                  company.id
-                )
-              ]
-            ),
-
-            dbQuery(
-              `
-              SELECT *
-              FROM valuation_snapshots
-
-              WHERE company_id = $1
-
-              ORDER BY created_at DESC
-
-              LIMIT 20
-              `,
-              [
-                company.id
-              ]
-            ),
-
-            dbQuery(
-              `
-              SELECT *
-              FROM management_promises
-
-              WHERE company_id = $1
-
-              ORDER BY updated_at DESC
-
-              LIMIT 50
-              `,
-              [
-                company.id
-              ]
-            ),
-
-            dbQuery(
-              `
-              SELECT *
-              FROM monitoring_events
-
-              WHERE company_id = $1
-
-              ORDER BY created_at DESC
-
-              LIMIT 100
-              `,
-              [
-                company.id
-              ]
-            )
-
-          ]
+      const research =
+        await loadCompanyResearch(
+          company
         );
 
 
@@ -11461,22 +13165,7 @@ app.get(
         ok:
           true,
 
-        company,
-
-        reports:
-          reports.rows,
-
-        theses:
-          theses.rows,
-
-        valuations:
-          valuations.rows,
-
-        promises:
-          promises.rows,
-
-        events:
-          events.rows
+        ...research
 
       });
 
@@ -11623,105 +13312,9 @@ app.get(
       }
 
 
-      const [
-
-        reports,
-
-        theses,
-
-        valuations,
-
-        promises,
-
-        events
-
-      ] =
-        await Promise.all(
-          [
-
-            dbQuery(
-              `
-              SELECT *
-              FROM reports
-
-              WHERE company_id = $1
-
-              ORDER BY created_at DESC
-
-              LIMIT 20
-              `,
-              [
-                company.id
-              ]
-            ),
-
-            dbQuery(
-              `
-              SELECT *
-              FROM research_theses
-
-              WHERE company_id = $1
-
-              ORDER BY updated_at DESC
-
-              LIMIT 20
-              `,
-              [
-                String(
-                  company.id
-                )
-              ]
-            ),
-
-            dbQuery(
-              `
-              SELECT *
-              FROM valuation_snapshots
-
-              WHERE company_id = $1
-
-              ORDER BY created_at DESC
-
-              LIMIT 20
-              `,
-              [
-                company.id
-              ]
-            ),
-
-            dbQuery(
-              `
-              SELECT *
-              FROM management_promises
-
-              WHERE company_id = $1
-
-              ORDER BY updated_at DESC
-
-              LIMIT 50
-              `,
-              [
-                company.id
-              ]
-            ),
-
-            dbQuery(
-              `
-              SELECT *
-              FROM monitoring_events
-
-              WHERE company_id = $1
-
-              ORDER BY created_at DESC
-
-              LIMIT 100
-              `,
-              [
-                company.id
-              ]
-            )
-
-          ]
+      const research =
+        await loadCompanyResearch(
+          company
         );
 
 
@@ -11730,22 +13323,7 @@ app.get(
         ok:
           true,
 
-        company,
-
-        reports:
-          reports.rows,
-
-        theses:
-          theses.rows,
-
-        valuations:
-          valuations.rows,
-
-        promises:
-          promises.rows,
-
-        events:
-          events.rows
+        ...research
 
       });
 
@@ -12131,6 +13709,7 @@ app.use(
 
 
     const status =
+
       Number.isInteger(
         errorStatus
       ) &&
@@ -12182,10 +13761,8 @@ async function boot() {
   catch (error) {
 
     /*
-     * Database failure should not stop the complete FinSight
-     * application from starting.
-     *
-     * PDF extraction and investor analysis can still operate.
+     * Database failure must not prevent the application
+     * itself from starting.
      */
 
     console.error(
@@ -12203,6 +13780,7 @@ async function boot() {
   app.listen(
     PORT,
     "0.0.0.0",
+
     () => {
 
       console.log(
@@ -12225,17 +13803,65 @@ async function boot() {
 
 
       console.log(
-        "Financial extraction provider: LOCAL PDF PARSER"
+        `Gemini text fallback model: ${
+          GEMINI_FALLBACK_MODEL ||
+          "DISABLED"
+        }`
       );
 
 
       console.log(
-        "Annual-report PDF sent to Gemini: NO"
+        "OpenAI: REMOVED"
       );
 
 
       console.log(
-        "OpenAI fallback: REMOVED"
+        "Financial extraction architecture:"
+      );
+
+
+      console.log(
+        "CACHE -> GEMINI ONCE -> LOCAL FALLBACK"
+      );
+
+
+      console.log(
+        `Financial extraction cache version: ${FINANCIAL_EXTRACTION_CACHE_VERSION}`
+      );
+
+
+      console.log(
+        "Gemini financial extraction attempts per new report: MAXIMUM 1"
+      );
+
+
+      console.log(
+        `Gemini extraction PDF threshold: ${GEMINI_EXTRACTION_MAX_PDF_MB} MB`
+      );
+
+
+      console.log(
+        `Gemini extraction timeout: ${GEMINI_EXTRACTION_TIMEOUT_MS} ms`
+      );
+
+
+      console.log(
+        "If Gemini extraction fails: LOCAL PARSER AUTOMATICALLY RUNS"
+      );
+
+
+      console.log(
+        "If Gemini returns invalid financial JSON: LOCAL PARSER AUTOMATICALLY RUNS"
+      );
+
+
+      console.log(
+        "If Gemini financial result fails reliability validation: LOCAL PARSER AUTOMATICALLY RUNS"
+      );
+
+
+      console.log(
+        "Same successfully cached PDF uploaded again: ZERO GEMINI EXTRACTION CALLS"
       );
 
 
@@ -12258,27 +13884,22 @@ async function boot() {
 
 
       console.log(
-        "Annual-report financial extraction: LOCAL"
+        "Annual-report qualitative analysis: LOCAL TEXT -> GEMINI"
       );
 
 
       console.log(
-        "Annual-report qualitative analysis: GEMINI TEXT"
+        "Ask FinSight: STRUCTURED CONTEXT -> GEMINI"
       );
 
 
       console.log(
-        "Report-grounded Q&A: GEMINI TEXT"
+        "Competitor report preparation: LOCAL PDF -> COMPACT GEMINI PROFILE"
       );
 
 
       console.log(
-        "Competitor report extraction: LOCAL + GEMINI TEXT"
-      );
-
-
-      console.log(
-        "Competitor comparison: GEMINI TEXT"
+        "Competitor final comparison: COMPACT JSON -> GEMINI"
       );
 
 
@@ -12299,5 +13920,17 @@ async function boot() {
 
 
 boot();
+);
+
+
+/* ============================================================
+   END BLOCK 2
+   SECTIONS 15–17 COMPLETE
+
+   NEXT:
+   SECTION 18 — ALPHA VANTAGE
+   THROUGH
+   SECTION 29 — SERVER START
+   ============================================================ */
 
 
