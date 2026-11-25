@@ -153,7 +153,7 @@ function environmentInteger(
 const GEMINI_TEXT_TIMEOUT_MS =
   environmentInteger(
     "GEMINI_TEXT_TIMEOUT_MS",
-    60000,
+    300000,
     15000,
     300000
   );
@@ -169,9 +169,9 @@ const GEMINI_TEXT_TIMEOUT_MS =
 const GEMINI_EXTRACTION_TIMEOUT_MS =
   environmentInteger(
     "GEMINI_EXTRACTION_TIMEOUT_MS",
-    75000,
+    300000,
     15000,
-    180000
+    300000
   );
 
 
