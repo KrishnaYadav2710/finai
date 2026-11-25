@@ -14263,47 +14263,109 @@ app.post(
       /* ------------------------------------------------------
          LOCAL FINANCIALS
          ------------------------------------------------------ */
-
-      let localFinancials =
-        null;
-
-
-      try {
-
-        localFinancials =
-          extractFinancialsLocally(
-            pdfData
-          );
+let localFinancials =
+  null;
 
 
-        localFinancials =
-          validateFinancialExtractionResult(
-            localFinancials
-          );
+try {
 
-      }
+  /*
+   * FIRST:
+   * Try the free/local deterministic parser.
+   */
 
-      catch (
-        extractionError
-      ) {
+  localFinancials =
+    extractFinancialsLocally(
+      pdfData
+    );
 
-        /*
-         * Comparison can still continue qualitatively.
-         *
-         * Do not fabricate financial values.
-         */
 
-        console.warn(
-          `Local comparison financial extraction incomplete for ${label}:`,
-          extractionError?.message
+  localFinancials =
+    validateFinancialExtractionResult(
+      localFinancials
+    );
+
+
+  console.log(
+    `Comparison local financials ready for ${label}.`
+  );
+
+}
+
+catch (
+  localError
+) {
+
+  console.warn(
+    `Local comparison extraction incomplete for ${label}:`,
+    localError?.message
+  );
+
+
+  /*
+   * SECOND:
+   * If local extraction failed, allow ONE Gemini attempt.
+   *
+   * No retry loop.
+   * No second Gemini model.
+   */
+
+  if (
+    GEMINI_API_KEY &&
+    report.buffer.length <=
+      GEMINI_EXTRACTION_MAX_PDF_SIZE
+  ) {
+
+    try {
+
+      console.log(
+        `Trying one Gemini comparison extraction for ${label}.`
+      );
+
+
+      const rawGemini =
+        await extractFinancialsWithGemini(
+          report
         );
 
 
-        localFinancials =
-          null;
+      localFinancials =
+        normalizeGeminiFinancialExtraction(
+          rawGemini
+        );
 
-      }
 
+      localFinancials =
+        validateFinancialExtractionResult(
+          localFinancials
+        );
+
+
+      console.log(
+        `Comparison Gemini financial extraction ready for ${label}.`
+      );
+
+    }
+
+    catch (
+      geminiError
+    ) {
+
+      console.warn(
+        `Comparison Gemini extraction unavailable for ${label}:`,
+        geminiError?.message
+      );
+
+
+      localFinancials =
+        null;
+
+    }
+
+  }
+
+}
+      
 
       /* ------------------------------------------------------
          COMPACT QUALITATIVE CONTEXT
