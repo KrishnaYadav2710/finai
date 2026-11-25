@@ -2720,7 +2720,7 @@ console.log(
 
 
 return result;
-
+}
 
 /* ============================================================
    13. LOCAL PDF EXTRACTION
