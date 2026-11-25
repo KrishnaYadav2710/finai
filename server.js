@@ -2629,38 +2629,97 @@ console.log(
   text.slice(0, 12000)
 );
 
-  const result =
-    safeJSON(
-      text
-    );
-
-
-  if (
-    !result ||
-    typeof result !== "object" ||
-    Array.isArray(result)
-  ) {
-
-    const error =
-      new Error(
-        "Gemini returned invalid financial JSON."
-      );
-
-
-    error.status = 502;
-
-
-    throw error;
-  }
-
-
-  console.log(
-    "Gemini financial extraction response received."
+  let result =
+  safeJSON(
+    text
   );
 
 
-  return result;
+/*
+ * Gemini Flash Lite may occasionally wrap the requested
+ * root JSON object inside a one-element array:
+ *
+ * [
+ *   {
+ *     company: {...},
+ *     financials: [...]
+ *   }
+ * ]
+ *
+ * Accept that harmless wrapper instead of unnecessarily
+ * activating the local fallback.
+ */
+
+if (
+  Array.isArray(result) &&
+  result.length === 1 &&
+  result[0] &&
+  typeof result[0] === "object" &&
+  !Array.isArray(result[0])
+) {
+
+  console.log(
+    "Gemini financial response was wrapped in an array. Unwrapping."
+  );
+
+  result =
+    result[0];
 }
+
+
+if (
+  !result ||
+  typeof result !== "object" ||
+  Array.isArray(result)
+) {
+
+  const error =
+    new Error(
+      "Gemini returned invalid financial JSON."
+    );
+
+
+  error.status =
+    502;
+
+
+  throw error;
+}
+
+
+/*
+ * Make sure Gemini actually returned the financial structure
+ * FinSight expects.
+ */
+
+if (
+  !result.company ||
+  !Array.isArray(
+    result.financials
+  ) ||
+  !result.financials.length
+) {
+
+  const error =
+    new Error(
+      "Gemini returned JSON but no usable financial rows."
+    );
+
+
+  error.status =
+    502;
+
+
+  throw error;
+}
+
+
+console.log(
+  "Gemini financial extraction response received."
+);
+
+
+return result;
 
 
 /* ============================================================
