@@ -13370,18 +13370,470 @@ function compareMetricLocal(a,b,label,higherIsBetter=true) {
   const aWins=higherIsBetter ? av>bv : av<bv;
   return {company_a:`${label}: ${av}`,company_b:`${label}: ${bv}`,edge:aWins?'Company A':'Company B'};
 }
+function buildLocalComparison(
+  a,
+  b,
+  reason = null
+) {
 
-function buildLocalComparison(a,b,reason=null) {
-  const af=a?.financials||{}, bf=b?.financials||{};
-  const an=a?.company?.name||'Company A', bn=b?.company?.name||'Company B';
-  return {company_a:an,company_b:bn,summary:`Deterministic comparison from extracted annual-report financials. ${reason?'Gemini was unavailable; qualitative synthesis was skipped.':''}`.trim(),
-    business_quality:{company_a:'Requires qualitative evidence.',company_b:'Requires qualitative evidence.',edge:'Insufficient evidence'},
-    growth:compareMetricLocal(af.revenue_growth,bf.revenue_growth,'Revenue growth',true),
-    profitability:compareMetricLocal(af.ebitda_margin,bf.ebitda_margin,'EBITDA margin',true),
-    cash_generation:compareMetricLocal(af.cash_conversion,bf.cash_conversion,'OCF / net income',true),
-    balance_sheet:compareMetricLocal(af.debt_equity,bf.debt_equity,'Debt/equity',false),
-    capital_allocation:{company_a:'Requires qualitative evidence.',company_b:'Requires qualitative evidence.',edge:'Insufficient evidence'},management:{company_a:'Requires qualitative evidence.',company_b:'Requires qualitative evidence.',edge:'Insufficient evidence'},governance:{company_a:'Requires qualitative evidence.',company_b:'Requires qualitative evidence.',edge:'Insufficient evidence'},auditor:{company_a:'Requires qualitative evidence.',company_b:'Requires qualitative evidence.',edge:'Insufficient evidence'},risk:compareMetricLocal(af.debt_equity,bf.debt_equity,'Debt/equity',false),valuation:{company_a:'No comparable valuation supplied.',company_b:'No comparable valuation supplied.',edge:'Insufficient evidence'},
-    company_a_strengths:[],company_a_weaknesses:[],company_b_strengths:[],company_b_weaknesses:[],important_tradeoffs:['Local mode compares reported/calculated financial metrics and does not invent qualitative conclusions.'],questions_before_choosing_a:['Review business quality, management, governance and auditor disclosures.'],questions_before_choosing_b:['Review business quality, management, governance and auditor disclosures.'],overall_interpretation:`${an} vs ${bn}: financial comparison is available locally; retry Gemini later for qualitative synthesis.`,fallback:true};
+  const af =
+    a?.financials || {};
+
+  const bf =
+    b?.financials || {};
+
+
+  const an =
+    a?.company?.name ||
+    "Company A";
+
+  const bn =
+    b?.company?.name ||
+    "Company B";
+
+
+  function financialSummary(
+    f
+  ) {
+
+    const parts =
+      [];
+
+
+    if (
+      localMetric(
+        f.revenue
+      ) !== null
+    ) {
+
+      parts.push(
+        `Revenue ₹${roundFinancial(
+          f.revenue
+        )} Cr`
+      );
+
+    }
+
+
+    if (
+      localMetric(
+        f.ebitda
+      ) !== null
+    ) {
+
+      parts.push(
+        `EBITDA ₹${roundFinancial(
+          f.ebitda
+        )} Cr`
+      );
+
+    }
+
+
+    if (
+      localMetric(
+        f.ebitda_margin
+      ) !== null
+    ) {
+
+      parts.push(
+        `EBITDA margin ${localPercent(
+          f.ebitda_margin
+        )}`
+      );
+
+    }
+
+
+    if (
+      localMetric(
+        f.net_profit
+      ) !== null
+    ) {
+
+      parts.push(
+        `Net profit ₹${roundFinancial(
+          f.net_profit
+        )} Cr`
+      );
+
+    }
+
+
+    return parts.length
+      ? parts.join(" · ")
+      : "Financial data unavailable.";
+
+  }
+
+
+  function cashSummary(
+    f
+  ) {
+
+    const parts =
+      [];
+
+
+    if (
+      localMetric(
+        f.operating_cash_flow
+      ) !== null
+    ) {
+
+      parts.push(
+        `Operating cash flow ₹${roundFinancial(
+          f.operating_cash_flow
+        )} Cr`
+      );
+
+    }
+
+
+    if (
+      localMetric(
+        f.cash_conversion
+      ) !== null
+    ) {
+
+      parts.push(
+        `OCF / net income ${localMultiple(
+          f.cash_conversion
+        )}`
+      );
+
+    }
+
+
+    return parts.length
+      ? parts.join(" · ")
+      : "Cash-generation data unavailable.";
+
+  }
+
+
+  function balanceSummary(
+    f
+  ) {
+
+    const parts =
+      [];
+
+
+    if (
+      localMetric(
+        f.total_debt
+      ) !== null
+    ) {
+
+      parts.push(
+        `Debt ₹${roundFinancial(
+          f.total_debt
+        )} Cr`
+      );
+
+    }
+
+
+    if (
+      localMetric(
+        f.net_debt
+      ) !== null
+    ) {
+
+      parts.push(
+        `Net debt ₹${roundFinancial(
+          f.net_debt
+        )} Cr`
+      );
+
+    }
+
+
+    if (
+      localMetric(
+        f.debt_equity
+      ) !== null
+    ) {
+
+      parts.push(
+        `Debt/equity ${localMultiple(
+          f.debt_equity
+        )}`
+      );
+
+    }
+
+
+    if (
+      localMetric(
+        f.current_ratio
+      ) !== null
+    ) {
+
+      parts.push(
+        `Current ratio ${localMultiple(
+          f.current_ratio
+        )}`
+      );
+
+    }
+
+
+    return parts.length
+      ? parts.join(" · ")
+      : "Balance-sheet data unavailable.";
+
+  }
+
+
+  return {
+
+    company_a:
+      an,
+
+    company_b:
+      bn,
+
+
+    summary:
+
+      reason
+
+        ? "Gemini was unavailable, so FinSight generated this comparison locally from extracted annual-report financials."
+
+        : "Comparison generated from extracted annual-report financials.",
+
+
+    business_quality: {
+
+      company_a:
+        financialSummary(af),
+
+      company_b:
+        financialSummary(bf),
+
+      edge:
+        "Insufficient evidence"
+
+    },
+
+
+    growth:
+      compareMetricLocal(
+        af.revenue_growth,
+        bf.revenue_growth,
+        "Revenue growth",
+        true
+      ),
+
+
+    profitability:
+      compareMetricLocal(
+        af.ebitda_margin,
+        bf.ebitda_margin,
+        "EBITDA margin",
+        true
+      ),
+
+
+    cash_generation: {
+
+      company_a:
+        cashSummary(af),
+
+      company_b:
+        cashSummary(bf),
+
+      edge:
+        compareMetricLocal(
+          af.cash_conversion,
+          bf.cash_conversion,
+          "Cash conversion",
+          true
+        ).edge
+
+    },
+
+
+    balance_sheet: {
+
+      company_a:
+        balanceSummary(af),
+
+      company_b:
+        balanceSummary(bf),
+
+      edge:
+        compareMetricLocal(
+          af.debt_equity,
+          bf.debt_equity,
+          "Debt/equity",
+          false
+        ).edge
+
+    },
+
+
+    capital_allocation: {
+
+      company_a:
+
+        localMetric(
+          af.free_cash_flow
+        ) !== null
+
+          ? `Simplified FCF ₹${roundFinancial(
+              af.free_cash_flow
+            )} Cr`
+
+          : "FCF unavailable.",
+
+
+      company_b:
+
+        localMetric(
+          bf.free_cash_flow
+        ) !== null
+
+          ? `Simplified FCF ₹${roundFinancial(
+              bf.free_cash_flow
+            )} Cr`
+
+          : "FCF unavailable.",
+
+
+      edge:
+        compareMetricLocal(
+          af.free_cash_flow,
+          bf.free_cash_flow,
+          "Simplified FCF",
+          true
+        ).edge
+
+    },
+
+
+    management: {
+
+      company_a:
+        "Requires qualitative annual-report interpretation.",
+
+      company_b:
+        "Requires qualitative annual-report interpretation.",
+
+      edge:
+        "Insufficient evidence"
+
+    },
+
+
+    governance: {
+
+      company_a:
+        "Requires qualitative annual-report interpretation.",
+
+      company_b:
+        "Requires qualitative annual-report interpretation.",
+
+      edge:
+        "Insufficient evidence"
+
+    },
+
+
+    auditor: {
+
+      company_a:
+        "Requires qualitative annual-report interpretation.",
+
+      company_b:
+        "Requires qualitative annual-report interpretation.",
+
+      edge:
+        "Insufficient evidence"
+
+    },
+
+
+    risk: {
+
+      company_a:
+        balanceSummary(af),
+
+      company_b:
+        balanceSummary(bf),
+
+      edge:
+        compareMetricLocal(
+          af.debt_equity,
+          bf.debt_equity,
+          "Debt/equity",
+          false
+        ).edge
+
+    },
+
+
+    valuation: {
+
+      company_a:
+        "Comparable valuation not supplied.",
+
+      company_b:
+        "Comparable valuation not supplied.",
+
+      edge:
+        "Insufficient evidence"
+
+    },
+
+
+    company_a_strengths:
+      [],
+
+    company_a_weaknesses:
+      [],
+
+    company_b_strengths:
+      [],
+
+    company_b_weaknesses:
+      [],
+
+
+    important_tradeoffs: [
+
+      "Financial comparison is based on extracted annual-report values.",
+
+      "Management, governance and auditor comparisons require qualitative evidence."
+
+    ],
+
+
+    questions_before_choosing_a: [
+
+      `Review ${an}'s management execution, governance and auditor disclosures.`
+
+    ],
+
+
+    questions_before_choosing_b: [
+
+      `Review ${bn}'s management execution, governance and auditor disclosures.`
+
+    ],
+
+
+    overall_interpretation:
+      `${an} and ${bn} were compared using available annual-report financial data. Qualitative Gemini analysis can supplement this comparison when AI quota is available.`,
+
+
+    fallback:
+      true
+
+  };
+
 }
 
 /* ============================================================
