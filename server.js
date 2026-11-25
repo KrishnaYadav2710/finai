@@ -89,7 +89,7 @@ const PORT =
 const GEMINI_MODEL =
   String(
     process.env.GEMINI_MODEL ||
-    "gemini-3.8-flash"
+    "gemini-3.1-flash-lite"
   ).trim();
 
 
