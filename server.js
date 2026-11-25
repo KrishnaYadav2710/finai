@@ -2623,7 +2623,11 @@ async function extractFinancialsWithGemini(
 
     throw error;
   }
-
+   
+console.log(
+  "Gemini financial raw response:",
+  text.slice(0, 12000)
+);
 
   const result =
     safeJSON(
