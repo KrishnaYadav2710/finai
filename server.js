@@ -11242,6 +11242,7 @@ JSON
         "company_a_weaknesses",
         "company_b_strengths",
         "company_b_weaknesses",
+         
         "important_tradeoffs",
         "questions_before_choosing_a",
         "questions_before_choosing_b"
@@ -13930,9 +13931,8 @@ async function boot() {
 
 
 boot();
-);
 
-
+ 
 /* ============================================================
    END BLOCK 2
    SECTIONS 15–17 COMPLETE
