@@ -190,7 +190,7 @@ const GEMINI_EXTRACTION_TIMEOUT_MS =
  */
 
 const FINANCIAL_EXTRACTION_CACHE_VERSION =
-  "hybrid-v2";
+  "hybrid-v4";
 
 
 /* ============================================================
@@ -8678,31 +8678,95 @@ function extractProfitAndLoss(
     null;
 
 
-  /*
-   * EBIT fallback. If the statement does not print an EBIT / operating
-   * profit line, profit before tax + finance cost is a transparent EBIT
-   * derivation. We only do this when both printed vectors exist.
-   */
-  if (
-    !result.operating_income &&
-    result.profit_before_tax &&
-    result.finance_cost
-  ) {
-    result.operating_income =
-      result.profit_before_tax.map(
-        (value, index) => {
-          const pbt = finiteFinancialNumber(value);
-          const financeCost = finiteFinancialNumber(result.finance_cost[index]);
-          return pbt === null || financeCost === null
-            ? null
-            : pbt + Math.abs(financeCost);
-        }
-      );
+ /*
+ * EBIT / OPERATING PROFIT FALLBACK
+ *
+ * Priority:
+ * 1. Explicit EBIT / operating profit
+ * 2. EBITDA - depreciation & amortisation
+ * 3. Profit before tax + finance cost
+ *
+ * Never invent missing values.
+ */
 
-    notes.push(
-      "EBIT / operating profit derived as profit before tax plus finance cost because no explicit EBIT line was found."
+if (
+  !result.operating_income &&
+  result.ebitda &&
+  depreciation
+) {
+
+  result.operating_income =
+    result.ebitda.map(
+      (value, index) => {
+
+        const ebitda =
+          finiteFinancialNumber(value);
+
+        const da =
+          finiteFinancialNumber(
+            depreciation[index]
+          );
+
+        if (
+          ebitda === null ||
+          da === null
+        ) {
+          return null;
+        }
+
+        return roundFinancial(
+          ebitda -
+          Math.abs(da)
+        );
+
+      }
     );
-  }
+
+  notes.push(
+    "EBIT / operating profit derived as EBITDA minus depreciation and amortisation."
+  );
+
+}
+
+
+if (
+  !result.operating_income &&
+  result.profit_before_tax &&
+  result.finance_cost
+) {
+
+  result.operating_income =
+    result.profit_before_tax.map(
+      (value, index) => {
+
+        const pbt =
+          finiteFinancialNumber(value);
+
+        const financeCost =
+          finiteFinancialNumber(
+            result.finance_cost[index]
+          );
+
+        if (
+          pbt === null ||
+          financeCost === null
+        ) {
+          return null;
+        }
+
+        return roundFinancial(
+          pbt +
+          Math.abs(financeCost)
+        );
+
+      }
+    );
+
+  notes.push(
+    "EBIT / operating profit derived as profit before tax plus finance cost because no explicit EBIT line was found."
+  );
+
+}
 
 
   /* ---- derived EBITDA from the expense block ---- */
