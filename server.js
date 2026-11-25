@@ -3087,10 +3087,6 @@ function extractAccountingNumbers(text) {
 
 }
 
-function extractAccountingNumbers(
-  line
-) {
-
   return extractAccountingNumberTokens(
     line
   )
